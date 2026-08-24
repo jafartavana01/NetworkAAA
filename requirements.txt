@@ -1,0 +1,57 @@
+# Installed directly into the system Python (no venv -- spec section 7)
+# via `pip3 install --break-system-packages -r requirements.txt` when
+# Ubuntu's externally-managed-environment marker is present.
+#
+# Ranges, not exact pins: several of these ship C-extension wheels
+# (psycopg[binary], bcrypt, cryptography, pydantic-core, uvicorn's
+# optional accelerators), and an exact pin can simply have no wheel
+# built for whatever Python version is on the target machine -- which
+# is exactly what happened testing this against Python 3.14 (no wheel
+# for psycopg-binary==3.2.3; 3.2.10+ was required). Minimum-version
+# ranges let pip resolve to whatever the newest compatible build is,
+# at the cost of exact reproducibility across installs -- a reasonable
+# trade for an installer meant to run on "whatever the admin has now."
+#
+# pydantic's floor is deliberately higher than the others (2.12.1, not
+# just "some 2.x"): pydantic-core -- pydantic's Rust extension -- only
+# gained real Python 3.14 wheel support around the 2.12 release line
+# (2.12.0 added initial 3.14 support; 2.12.1 fixed early regressions).
+# A lower floor lets pip's resolver land on an older pydantic-core with
+# no 3.14 wheel at all, which then tries to compile from source and
+# fails outright because the Rust PyO3 version it bundles doesn't
+# support 3.14 either -- confirmed by hitting exactly that failure.
+#
+# sqlalchemy's floor is similarly raised to 2.0.44: SQLAlchemy's 2.0.x
+# line has been receiving a steady stream of Python 3.14-specific
+# compatibility patches (e.g. how registry.type_annotation_map/Mapped
+# handle `X | None` unions), landing in different patch releases.
+# 2.0.44 is the earliest confirmed to include the union-handling fix;
+# without it, `Mapped[str | None]` columns combined with
+# `from __future__ import annotations` hit a real CPython 3.14 typing
+# regression (https://github.com/python/cpython/issues/140348) at
+# class-definition time. The model files also avoid the stringified-
+# annotation code path entirely now (see app/models/admin.py) as a
+# second, more direct line of defense against that same bug.
+#
+# bcrypt and cryptography's upper bounds are deliberately generous
+# (<6.0, <48.0) rather than capped near whatever their latest release
+# was when this was written. A tight-but-"safe-looking" upper bound
+# that a target machine's already-installed version (via apt, pulling
+# in a dependency for unrelated OS tooling) has since exceeded forces
+# pip to try *downgrading* a perfectly good existing install on every
+# run -- which is what triggered the apt/no-RECORD-file conflict in
+# the first place, not just an unlucky coincidence. Where there's no
+# specific known breaking change to guard against, a wide floor-only-
+# ish range causes far less friction than a falsely-precise cap.
+
+fastapi>=0.115.6,<1.0
+uvicorn[standard]>=0.32.1,<1.0
+sqlalchemy>=2.0.44,<3.0
+psycopg[binary]>=3.2.10,<4.0
+pydantic>=2.12.1,<3.0
+pydantic-settings>=2.7.0,<3.0
+bcrypt>=4.2.1,<6.0
+cryptography>=44.0.0,<48.0
+itsdangerous>=2.2.0,<3.0
+jinja2>=3.1.4,<4.0
+python-multipart>=0.0.19,<1.0

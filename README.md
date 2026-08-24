@@ -1,179 +1,56 @@
-# AAA Management Platform
+# AAA Management Platform (Phase 7 + Platform Self-Management)
 
-A native Ubuntu Server platform for managing TACACS+ AAA (Authentication,
-Authorization, and Accounting) infrastructure — built around the real
-upstream [`tac_plus-ng`](https://github.com/MarcJHuber/event-driven-servers)
-daemon as the data plane, with a Python (FastAPI + PostgreSQL) management
-plane and web GUI on top.
+A modular TACACS+ AAA management platform for Ubuntu Server, built
+around the upstream [tac_plus-ng](https://github.com/MarcJHuber/event-driven-servers)
+daemon as the data plane, with a Python (FastAPI + PostgreSQL)
+management plane on top.
 
-The TACACS+ engine itself is never modified — this project only ever
-*configures* it. The management plane is a separate control layer that
-compiles database state into validated `tac_plus-ng` configuration,
-applies it safely, and gives you a real GUI for devices, users, groups,
-authorization policies, accounting, and diagnostics.
+**Phases 1-7 of an 8-phase build are complete.** Phase 1 delivered the
+installer, tac_plus-ng build/install pipeline, Web GUI shell,
+authentication, and a live system dashboard. Phase 2 added Network
+Devices end-to-end and the configuration compiler. Phase 3 added
+TACACS+ Users, tested end-to-end through to a real authentication
+response. Phase 4 added TACACS+ Groups and Device Groups. Phase 5
+added Authorization Policies. Phase 6 added Accounting. Phase 7 added
+Diagnostics. Module Management (Phase 8) is the last one remaining --
+see `docs/ARCHITECTURE.md` for the full plan and what's confirmed vs.
+reasoned-but-unverified at each phase.
 
-## Why this exists
-
-`tac_plus-ng` is a capable, actively maintained TACACS+ daemon — but it's
-configured by hand-editing a text file with its own scripting language.
-This project puts a real management plane in front of it: a database as
-the single source of truth, a compiler that turns that state into
-`tac_plus-ng` config, a diff-before-you-apply workflow with automatic
-rollback on failure, and a proper GUI so day-to-day changes (add a
-device, create a user, adjust who can run `configure terminal`) don't
-require touching the config file directly.
-
-## Features
-
-- **Network Devices** — full CRUD, encrypted shared secrets, device
-  groups, config compiler with candidate/diff/apply/rollback
-- **TACACS+ Users & Groups** — bcrypt-hashed passwords, native
-  `tac_plus-ng` group support
-- **Authorization Policies** — privilege levels, permit/deny command
-  rules with deny-overrides semantics, Cisco IOS starter templates
-  (Admin / Network-Manager / Auditor)
-- **Accounting** — search, filter, and CSV export over a self-defined,
-  reliably-parseable accounting log format
-- **Diagnostics** — on-demand config validation, configuration audit
-  trail, service logs, auth/authz log tails
-- **Platform self-management** — two-tier RBAC, per-admin trusted-host
-  IP restriction, HTTPS (self-signed by default, custom certificate
-  upload supported), all configurable from the GUI
-- **Single-window GUI** — persistent shell with client-side view
-  transitions; every page still works as a plain server-rendered HTML
-  page too, with zero JavaScript required
-
-## Requirements
-
-- Ubuntu Server 22.04, 24.04, or 26.04 LTS
-- Root/sudo access
-- Outbound internet access during installation only (to build
-  `tac_plus-ng` from source and install packages) — no internet
-  required at runtime
+**Also built, outside the phase plan (user-requested):** the platform
+can now manage itself. Admin accounts have real two-tier RBAC
+(superadmin vs standard) with per-account trusted-host IP
+restrictions, and HTTPS is fully supported -- self-signed by default
+(generated at install time), with GUI-driven regeneration and custom
+certificate upload, all under **Platform → Admin Users** /
+**Platform → Settings** (superadmin-only). See `docs/ARCHITECTURE.md`'s
+"Platform self-management" section for how it's built and
+`docs/INSTALL.md`'s "Platform Settings" section for how to use it.
 
 ## Quick start
 
-```bash
-git clone <this-repo-url>
-cd aaa-platform
+```
 sudo python3 setup.py
 ```
 
-The installer detects your environment, builds `tac_plus-ng` from
-upstream source, sets up PostgreSQL, installs the management app, and
-walks you through creating the first administrator account. See
-[`docs/INSTALL.md`](docs/INSTALL.md) for the full walkthrough.
-
-## Architecture
-
-```
-Browser
-   |
-Web GUI (server-rendered, single-window shell)
-   |
-Management API (FastAPI)
-   |
-PostgreSQL  ---->  Configuration Compiler  ---->  Candidate config
-(source of truth)                                       |
-                                                     Validation
-                                                          |
-                                                    Diff + Apply
-                                                          |
-                                                     tac_plus-ng  (TCP/49)
-                                                          |
-                                                  Network Devices
-```
-
-The database is always the source of truth. The generated
-`tac_plus-ng.conf` is a derived artifact — never hand-edited, always
-regenerated from what's actually stored, validated before being
-applied, and automatically rolled back if the daemon doesn't come back
-healthy after a change.
-
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full design,
-including the module system, privilege model, and directory layout.
-
-## A note on how `tac_plus-ng` behavior is verified
-
-`tac_plus-ng`'s configuration language is not fully documented in one
-place. Every claim this project makes about its syntax is explicitly
-tagged as one of:
-
-- **Confirmed** — verified against a real, working configuration (the
-  official upstream sample, a real deployment example, or a live test)
-- **Reasoned, not verified** — a defensible extension of confirmed
-  language mechanics, called out clearly rather than presented as fact
-
-This distinction is documented throughout `docs/ARCHITECTURE.md` and in
-code comments at every point it matters (e.g. `app/services/config_compiler.py`).
-The project does not silently guess at protocol or config behavior.
-
-## Project status
-
-The core 8-phase build plan is in progress:
-
-| Phase | Area | Status |
-|---|---|---|
-| 1 | Installer, GUI shell, dashboard | Done |
-| 2 | Network Devices, configuration compiler | Done |
-| 3 | TACACS+ Users | Done |
-| 4 | Groups & Device Groups | Done |
-| 5 | Authorization Policies | Done |
-| 6 | Accounting | Done |
-| 7 | Diagnostics | Done |
-| 8 | Module Management | Not started |
-
-Also built, beyond the original plan: platform self-management (admin
-RBAC, trusted-host restriction, HTTPS), and an in-progress single-window
-GUI redesign.
-
-**Not yet implemented:** a CLI, an automated test suite, and
-RADIUS/LDAP/Active Directory support (the architecture is designed to
-accommodate these without a redesign, but none are built yet). See
-`docs/ARCHITECTURE.md` and `docs/PAM_EXPANSION_PLAN.md` for what's
-planned.
+See `docs/INSTALL.md` for the full walkthrough and `docs/ARCHITECTURE.md`
+for how the pieces fit together.
 
 ## Stack
 
-- **Data plane:** `tac_plus-ng` (upstream C, unmodified)
-- **Management plane:** FastAPI, SQLAlchemy, PostgreSQL
-- **Frontend:** server-rendered Jinja2, vanilla JavaScript (no build
-  step, no frontend framework)
-- **OS target:** Ubuntu Server, native install — no containers, no
-  Python virtual environment
+- **Data plane:** tac_plus-ng (upstream C, unmodified)
+- **Management plane:** FastAPI, PostgreSQL, server-rendered Jinja2 GUI
+- **OS:** Ubuntu Server 22.04 / 24.04 / 26.04, native install, no
+  containers, no virtualenv
 
-## Documentation
+## Project layout
 
-- [`docs/INSTALL.md`](docs/INSTALL.md) — installation walkthrough,
-  known verification items, upgrade notes
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — full system design
-- [`docs/PAM_EXPANSION_PLAN.md`](docs/PAM_EXPANSION_PLAN.md) — the plan
-  for evolving this into a broader AAA/privileged-access-management
-  platform
+```
+setup.py              installer entrypoint -- sudo python3 setup.py
+installer/             installer implementation (imported by setup.py)
+app/                   the management application (installed to /opt/aaa-platform/app)
+  run.py                fixed systemd entrypoint -- reads platform_settings.py at startup
+  platform_settings.py  boot-time host/port/TLS settings (JSON, not DB -- see its docstring)
+docs/                  INSTALL.md, ARCHITECTURE.md
+requirements.txt       Python dependencies (installed system-wide, no venv)
+```
 
-## Security
-
-- Device shared secrets are encrypted at rest (Fernet) and never
-  logged
-- Admin passwords are bcrypt-hashed; never stored or logged in
-  plaintext
-- CSRF protection on every state-changing request
-- Least-privilege service account with a narrowly-scoped `sudo` grant
-  (not root) for the two systemd units it's allowed to control
-- Config-injection defenses: identifiers are restricted to a safe
-  charset at input time rather than escaped
-
-If you find a security issue, please open an issue (or, for anything
-sensitive, reach out privately before disclosing details publicly).
-
-## Acknowledgments
-
-Built on top of [`tac_plus-ng`](https://github.com/MarcJHuber/event-driven-servers)
-by Marc Huber and contributors — the actual TACACS+ engine doing the
-protocol work underneath this platform.
-
-## License
-
-No license has been chosen for this project yet. Until a `LICENSE`
-file is added, all rights are reserved by default — add one before
-relying on this project in a context that requires a specific license.
