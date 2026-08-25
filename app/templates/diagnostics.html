@@ -1,0 +1,245 @@
+{% extends "app_shell.html" %}
+{% block title %}Diagnostics — AAA Management Platform{% endblock %}
+{% block breadcrumb %}TACACS+ / Diagnostics{% endblock %}
+
+{% block view_content %}
+<main class="content">
+      <div class="content-head">
+        <h1>Diagnostics</h1>
+        <p class="content-sub">Everything on this page reuses data the platform already tracks — nothing here is a separate source of truth from the Dashboard, Configuration, or Accounting pages.</p>
+      </div>
+
+      <section class="panel-grid" id="status-grid">
+        <div class="panel"><div class="panel-loading">Loading…</div></div>
+        <div class="panel"><div class="panel-loading">Loading…</div></div>
+      </section>
+
+      <div class="content-head">
+        <h2>Configuration Validation</h2>
+        <p class="content-sub">Compiles the current database state into a candidate and runs the same syntax check the real Apply flow uses — without touching the live daemon.</p>
+      </div>
+      <div class="panel panel-wide">
+        <div class="panel-body">
+          <button class="btn-primary btn-small" id="validate-btn" style="width:auto;">Validate now</button>
+          <div id="validate-result" style="margin-top:14px;"></div>
+        </div>
+      </div>
+
+      <div class="content-head">
+        <h2>Recent Configuration Events</h2>
+        <p class="content-sub">Every apply, validation, and automatic rollback this platform has recorded.</p>
+      </div>
+      <div id="audit-events-wrap">
+        <div class="empty-state">Loading…</div>
+      </div>
+
+      <div class="content-head">
+        <h2>Service Logs</h2>
+        <p class="content-sub">Raw journal output for either service this platform manages.</p>
+      </div>
+      <div class="panel panel-wide">
+        <div class="panel-body">
+          <div class="field-row" style="align-items:flex-end;">
+            <label class="field" style="flex:0 0 220px;">
+              <span class="field-label">Service</span>
+              <select id="service-log-select">
+                <option value="aaa-platform.service">Management API</option>
+                <option value="tac-plus-ng.service">tac_plus-ng</option>
+              </select>
+            </label>
+            <button class="btn-secondary btn-small" id="refresh-service-log-btn" style="width:auto;">Refresh</button>
+          </div>
+          <div class="diff-view" id="service-log-view" style="margin-top:12px;">Loading…</div>
+        </div>
+      </div>
+
+      <div class="content-head">
+        <h2>Authentication Log</h2>
+        <p class="content-sub">Raw tail of tac_plus-ng's access log. Type a term below to filter it yourself — this platform doesn't claim to know what "failure" looks like in an unconfirmed log format.</p>
+      </div>
+      <div class="panel panel-wide">
+        <div class="panel-body">
+          <div class="field-row" style="align-items:flex-end;">
+            <label class="field">
+              <span class="field-label">Filter</span>
+              <input type="text" id="access-log-search" placeholder="e.g. fail, denied, a username">
+            </label>
+            <button class="btn-secondary btn-small" id="refresh-access-log-btn" style="width:auto;">Refresh</button>
+          </div>
+          <div class="diff-view" id="access-log-view" style="margin-top:12px;">Loading…</div>
+        </div>
+      </div>
+
+      <div class="content-head">
+        <h2>Authorization Log</h2>
+        <p class="content-sub">Raw tail of tac_plus-ng's authorization log — permit/deny decisions from the policy engine.</p>
+      </div>
+      <div class="panel panel-wide">
+        <div class="panel-body">
+          <div class="field-row" style="align-items:flex-end;">
+            <label class="field">
+              <span class="field-label">Filter</span>
+              <input type="text" id="authz-log-search" placeholder="e.g. deny, a device name">
+            </label>
+            <button class="btn-secondary btn-small" id="refresh-authz-log-btn" style="width:auto;">Refresh</button>
+          </div>
+          <div class="diff-view" id="authz-log-view" style="margin-top:12px;">Loading…</div>
+        </div>
+      </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function statusColor(state) {
+    if (state === 'active' || state === 'connected') return 'signal';
+    if (state === 'activating' || state === 'reloading') return 'amber';
+    return 'red';
+  }
+
+  function renderReadout(label, value) {
+    return `<div class="readout"><span class="readout-k">${label}</span><span class="readout-v">${value}</span></div>`;
+  }
+
+  async function loadOverview() {
+    const grid = document.getElementById('status-grid');
+    try {
+      const res = await AAAPlatform.authedFetch('/api/diagnostics/overview');
+      if (res.status === 401) { window.location.href = '/login'; return; }
+      const data = await res.json();
+
+      const mgmt = data.services['aaa-platform.service'] || {};
+      const tac = data.services['tac-plus-ng.service'] || {};
+      const b = data.build_info || {};
+
+      grid.innerHTML = `
+        <div class="panel">
+          <div class="panel-head"><span class="rail rail-${statusColor(mgmt.active_state)}"></span>Management API</div>
+          <div class="panel-body mono">
+            ${renderReadout('state', mgmt.active_state || 'unknown')}
+            ${renderReadout('enabled', mgmt.enabled ?? 'unknown')}
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span class="rail rail-${statusColor(tac.active_state)}"></span>tac_plus-ng</div>
+          <div class="panel-body mono">
+            ${renderReadout('state', tac.active_state || 'unknown')}
+            ${renderReadout('enabled', tac.enabled ?? 'unknown')}
+          </div>
+        </div>
+        <div class="panel panel-wide" style="grid-column: 1 / -1;">
+          <div class="panel-head"><span class="rail rail-dim"></span>Build Information</div>
+          <div class="panel-body mono build-grid">
+            ${renderReadout('tac_plus-ng version', b.tac_plus_ng_version_string || 'unknown')}
+            ${renderReadout('commit', (b.commit || '').slice(0, 12) || 'unknown')}
+            ${renderReadout('build profile', b.build_profile || 'unknown')}
+            ${renderReadout('ubuntu', b.ubuntu_version || 'unknown')}
+          </div>
+        </div>
+      `;
+    } catch (err) {
+      grid.innerHTML = '<div class="panel"><div class="panel-body">Could not reach the management API.</div></div>';
+    }
+  }
+
+  document.getElementById('validate-btn').addEventListener('click', async () => {
+    const box = document.getElementById('validate-result');
+    box.innerHTML = '<div class="content-sub">Validating…</div>';
+
+    const res = await AAAPlatform.authedFetch('/api/diagnostics/validate-config', { method: 'POST' });
+    if (!res.ok) {
+      box.innerHTML = '<div class="form-error">Could not run validation.</div>';
+      return;
+    }
+    const data = await res.json();
+    const badge = data.validated
+      ? '<span class="badge badge-on">Syntax check passed</span>'
+      : data.definitively_failed
+        ? '<span class="badge badge-off">FAILED — would not be applied</span>'
+        : '<span class="badge badge-off">Inconclusive — see output below</span>';
+    const changeNote = data.would_change
+      ? '<p class="content-sub" style="margin-top:8px;">This candidate differs from what\'s currently deployed — visit Configuration to review and apply it.</p>'
+      : '<p class="content-sub" style="margin-top:8px;">This matches what\'s currently deployed. Nothing pending.</p>';
+    box.innerHTML = `${badge}${changeNote}<div class="diff-view" style="margin-top:10px;">${escapeHtml(data.output) || '(no output)'}</div>`;
+  });
+
+  async function loadAuditEvents() {
+    const wrap = document.getElementById('audit-events-wrap');
+    const res = await AAAPlatform.authedFetch('/api/diagnostics/audit-events?limit=50');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) {
+      wrap.innerHTML = '<div class="empty-state">Could not load configuration events.</div>';
+      return;
+    }
+    const data = await res.json();
+    if (data.events.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No configuration events recorded yet.</div>';
+      return;
+    }
+
+    const badgeFor = (type) => {
+      if (type.includes('rollback')) return 'badge-off';
+      if (type.includes('succeeded') || type === 'initial_install') return 'badge-on';
+      return '';
+    };
+
+    wrap.innerHTML = `<div class="version-list">${data.events.map(e => `
+      <div class="version-row">
+        <div>
+          <span class="badge ${badgeFor(e.event_type)}">${escapeHtml(e.event_type)}</span>
+          <div class="version-meta">${new Date(e.occurred_at).toLocaleString()}${e.detail ? ' · ' + escapeHtml(e.detail.slice(0, 160)) : ''}</div>
+        </div>
+      </div>
+    `).join('')}</div>`;
+  }
+
+  async function loadServiceLog() {
+    const view = document.getElementById('service-log-view');
+    const unit = document.getElementById('service-log-select').value;
+    view.textContent = 'Loading…';
+    const res = await AAAPlatform.authedFetch(`/api/diagnostics/service-log/${unit}`);
+    if (!res.ok) { view.textContent = 'Could not load service log.'; return; }
+    const data = await res.json();
+    view.textContent = data.content || '(empty)';
+  }
+
+  async function loadAccessLog() {
+    const view = document.getElementById('access-log-view');
+    const search = document.getElementById('access-log-search').value.trim();
+    view.textContent = 'Loading…';
+    const url = '/api/tacacs-logs/access' + (search ? `?search=${encodeURIComponent(search)}` : '');
+    const res = await AAAPlatform.authedFetch(url);
+    if (!res.ok) { view.textContent = 'Could not load access log.'; return; }
+    const data = await res.json();
+    view.textContent = data.content || data.note || '(empty)';
+  }
+
+  async function loadAuthzLog() {
+    const view = document.getElementById('authz-log-view');
+    const search = document.getElementById('authz-log-search').value.trim();
+    view.textContent = 'Loading…';
+    const url = '/api/tacacs-logs/authorization' + (search ? `?search=${encodeURIComponent(search)}` : '');
+    const res = await AAAPlatform.authedFetch(url);
+    if (!res.ok) { view.textContent = 'Could not load authorization log.'; return; }
+    const data = await res.json();
+    view.textContent = data.content || data.note || '(empty)';
+  }
+
+  document.getElementById('service-log-select').addEventListener('change', loadServiceLog);
+  document.getElementById('refresh-service-log-btn').addEventListener('click', loadServiceLog);
+  document.getElementById('refresh-access-log-btn').addEventListener('click', loadAccessLog);
+  document.getElementById('refresh-authz-log-btn').addEventListener('click', loadAuthzLog);
+
+  loadOverview();
+  loadAuditEvents();
+  loadServiceLog();
+  loadAccessLog();
+  loadAuthzLog();
+</script>
+{% endblock %}

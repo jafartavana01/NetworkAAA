@@ -1,0 +1,147 @@
+{% extends "app_shell.html" %}
+{% block title %}AAA Health — AAA Management Platform{% endblock %}
+{% block breadcrumb %}TACACS+ / AAA Health{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>AAA Health &amp; Failure Analysis</h1>
+    <p class="content-sub">Computed from the same parsed accounting log every other accounting view reads — nothing here is a separate, independently-tracked metric.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">
+      Authentication success/failure rates aren't shown here — the access log's exact line format was never independently confirmed the way the accounting format is (this platform defines the accounting format itself), so it stays raw/searchable on the Diagnostics page rather than parsed into statistics that could be wrong. Only what's backed by genuinely parsed, structured data appears below.
+    </div>
+  </div>
+
+  <section class="panel-grid" id="status-grid">
+    <div class="panel"><div class="panel-loading">Loading…</div></div>
+  </section>
+
+  <div class="content-head"><h2>Accounting Activity</h2></div>
+  <section class="panel-grid" id="activity-grid">
+    <div class="panel"><div class="panel-loading">Loading…</div></div>
+  </section>
+
+  <div class="content-head">
+    <h2>Failure Analysis</h2>
+    <p class="content-sub">A record counts as "non-permit" when its result field is non-empty and not exactly "permit" — data-driven, not assuming a fixed vocabulary.</p>
+  </div>
+  <section class="panel-grid" id="failure-grid">
+    <div class="panel"><div class="panel-loading">Loading…</div></div>
+  </section>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function statusColor(state) {
+    if (state === 'active') return 'signal';
+    if (state === 'activating' || state === 'reloading') return 'amber';
+    return 'red';
+  }
+
+  function renderReadout(label, value) {
+    return `<div class="readout"><span class="readout-k">${label}</span><span class="readout-v">${value}</span></div>`;
+  }
+
+  function renderTopList(items, emptyLabel) {
+    if (!items.length) return `<div class="content-sub">${emptyLabel}</div>`;
+    return items.map(i => renderReadout(escapeHtml(i.name), i.count)).join('');
+  }
+
+  async function loadStatus() {
+    const grid = document.getElementById('status-grid');
+    try {
+      const res = await AAAPlatform.authedFetch('/api/diagnostics/overview');
+      if (res.status === 401) { window.location.href = '/login'; return; }
+      const data = await res.json();
+      const tac = data.services['tac-plus-ng.service'] || {};
+      const mgmt = data.services['aaa-platform.service'] || {};
+      grid.innerHTML = `
+        <div class="panel">
+          <div class="panel-head"><span class="rail rail-${statusColor(tac.active_state)}"></span>TACACS+ Service</div>
+          <div class="panel-body mono">${renderReadout('state', tac.active_state || 'unknown')}</div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span class="rail rail-${statusColor(mgmt.active_state)}"></span>Management API</div>
+          <div class="panel-body mono">${renderReadout('state', mgmt.active_state || 'unknown')}</div>
+        </div>
+      `;
+    } catch (err) {
+      grid.innerHTML = '<div class="panel"><div class="panel-body">Could not reach the management API.</div></div>';
+    }
+  }
+
+  async function loadHealthStats() {
+    const activityGrid = document.getElementById('activity-grid');
+    const failureGrid = document.getElementById('failure-grid');
+
+    const res = await AAAPlatform.authedFetch('/api/tacacs-accounting/health');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) {
+      activityGrid.innerHTML = '<div class="panel"><div class="panel-body">Could not load accounting statistics.</div></div>';
+      failureGrid.innerHTML = '';
+      return;
+    }
+    const data = await res.json();
+
+    const accttypeRows = Object.entries(data.by_accttype).map(([k, v]) => renderReadout(escapeHtml(k), v)).join('') || '<div class="content-sub">none</div>';
+
+    activityGrid.innerHTML = `
+      <div class="panel">
+        <div class="panel-head"><span class="rail rail-dim"></span>Volume (current log tail)</div>
+        <div class="panel-body mono">
+          ${renderReadout('total records', data.total_records_in_tail)}
+          ${renderReadout('parsed', data.parsed_records)}
+          ${renderReadout('unparsed', data.unparsed_records)}
+          ${renderReadout('last hour', data.events_last_hour)}
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span class="rail rail-dim"></span>Reach</div>
+        <div class="panel-body mono">
+          ${renderReadout('distinct devices', data.distinct_devices)}
+          ${renderReadout('distinct users', data.distinct_users)}
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span class="rail rail-signal"></span>Authorization Results</div>
+        <div class="panel-body mono">
+          ${renderReadout('permit', data.permit_count)}
+          ${renderReadout('non-permit', data.non_permit_count)}
+        </div>
+      </div>
+      <div class="panel panel-wide" style="grid-column: 1 / -1;">
+        <div class="panel-head"><span class="rail rail-dim"></span>By Accounting Type</div>
+        <div class="panel-body mono">${accttypeRows}</div>
+      </div>
+    `;
+
+    failureGrid.innerHTML = `
+      <div class="panel">
+        <div class="panel-head"><span class="rail rail-red"></span>Top Non-Permit Devices</div>
+        <div class="panel-body mono">${renderTopList(data.top_non_permit_devices, 'None observed.')}</div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><span class="rail rail-red"></span>Top Non-Permit Users</div>
+        <div class="panel-body mono">${renderTopList(data.top_non_permit_users, 'None observed.')}</div>
+      </div>
+      <div class="panel panel-wide" style="grid-column: 1 / -1;">
+        <div class="panel-head"><span class="rail rail-dim"></span>Result Value Breakdown</div>
+        <div class="panel-body mono">${renderTopList(Object.entries(data.result_counts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count), 'No result values recorded.')}</div>
+      </div>
+    `;
+  }
+
+  loadStatus();
+  loadHealthStats();
+</script>
+{% endblock %}

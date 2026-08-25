@@ -1,0 +1,226 @@
+{% extends "app_shell.html" %}
+{% block title %}Admin Users — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Platform / Admin Users{% endblock %}
+
+{% block view_content %}
+<main class="content">
+      <div class="content-head">
+        <h1>Admin Users</h1>
+        <p class="content-sub">Who can log into this GUI, and with what privileges. Superadmins can manage other admin accounts and platform network/TLS settings; standard admins can do everything else.</p>
+      </div>
+
+      <div class="panel panel-wide" style="margin-bottom:20px;">
+        <div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">
+          <strong style="color:var(--text-primary);">Built-in safeguards:</strong> you can't delete or deactivate your own account, and the last remaining active superadmin can never be removed or demoted — both would risk locking everyone out of platform management. Restricting an account's trusted hosts is checked against your own current address if you're editing yourself, so you can't accidentally lock yourself out either.
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <span class="content-sub" id="admin-count"></span>
+        <button class="btn-primary btn-small" id="add-admin-btn" style="width:auto;">+ Add admin</button>
+      </div>
+
+      <div id="admins-table-wrap">
+        <div class="empty-state">Loading admin users…</div>
+      </div>
+</main>
+
+<div class="modal-backdrop" id="admin-modal-backdrop" hidden>
+  <div class="modal">
+    <h2 id="admin-modal-title">Add admin</h2>
+    <form id="admin-form">
+      <input type="hidden" id="admin-id">
+      <label class="field">
+        <span class="field-label">Username</span>
+        <input type="text" id="admin-username" required>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Password</span>
+        <input type="password" id="admin-password" placeholder="">
+      </label>
+      <div class="field-hint" id="admin-password-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new admins (8+ characters). Leave blank when editing to keep the current password.</div>
+
+      <div class="field-row">
+        <label class="checkbox-field field">
+          <input type="checkbox" id="admin-is-active" checked>
+          <span>Active</span>
+        </label>
+        <label class="checkbox-field field">
+          <input type="checkbox" id="admin-is-superadmin">
+          <span>Superadmin</span>
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Trusted hosts (optional)</span>
+        <input type="text" id="admin-allowed-ips" placeholder="10.0.0.5, 192.168.1.0/24">
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Comma-separated IPs or CIDR ranges this account may log in from. Leave blank to allow from anywhere (the default).</div>
+
+      <div id="admin-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="admin-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Save admin</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  let admins = [];
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function renderTable() {
+    const wrap = document.getElementById('admins-table-wrap');
+    document.getElementById('admin-count').textContent = admins.length + (admins.length === 1 ? ' admin' : ' admins');
+
+    if (admins.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No admin users found.</div>';
+      return;
+    }
+
+    const rows = admins.map(a => `
+      <tr>
+        <td>${escapeHtml(a.username)}${a.is_self ? ' <span class="content-sub">(you)</span>' : ''}</td>
+        <td>${a.is_superadmin ? '<span class="badge badge-on">Superadmin</span>' : '<span class="badge">Standard</span>'}</td>
+        <td>${a.is_active ? '<span class="badge badge-on">Active</span>' : '<span class="badge badge-off">Disabled</span>'}</td>
+        <td class="cell-mono">${escapeHtml(a.allowed_source_ips || 'anywhere')}</td>
+        <td class="cell-mono">${a.last_login_at ? new Date(a.last_login_at).toLocaleString() : 'never'}</td>
+        <td class="cell-actions">
+          <button class="btn-secondary btn-small" data-edit="${a.id}">Edit</button>
+          <button class="btn-danger btn-small" data-delete="${a.id}" ${a.is_self ? 'disabled title="You cannot delete your own account."' : ''}>Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th>Username</th><th>Role</th><th>Status</th><th>Trusted hosts</th><th>Last login</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.addEventListener('click', () => openModal(admins.find(a => a.id === btn.dataset.edit)));
+    });
+    wrap.querySelectorAll('[data-delete]:not([disabled])').forEach(btn => {
+      btn.addEventListener('click', () => deleteAdmin(btn.dataset.delete));
+    });
+  }
+
+  async function loadAdmins() {
+    const res = await AAAPlatform.authedFetch('/api/admin-users');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (res.status === 403) {
+      document.getElementById('admins-table-wrap').innerHTML = '<div class="empty-state">Superadmin privileges required.</div>';
+      return;
+    }
+    admins = await res.json();
+    renderTable();
+  }
+
+  function openModal(admin) {
+    document.getElementById('admin-form-error').hidden = true;
+    document.getElementById('admin-form').reset();
+    document.getElementById('admin-is-active').checked = true;
+
+    if (admin) {
+      document.getElementById('admin-modal-title').textContent = 'Edit admin';
+      document.getElementById('admin-id').value = admin.id;
+      document.getElementById('admin-username').value = admin.username;
+      document.getElementById('admin-is-active').checked = admin.is_active;
+      document.getElementById('admin-is-superadmin').checked = admin.is_superadmin;
+      document.getElementById('admin-allowed-ips').value = admin.allowed_source_ips || '';
+      document.getElementById('admin-password-hint').textContent = 'Leave blank to keep the current password.';
+      document.getElementById('admin-is-active').disabled = admin.is_self;
+    } else {
+      document.getElementById('admin-modal-title').textContent = 'Add admin';
+      document.getElementById('admin-id').value = '';
+      document.getElementById('admin-password-hint').textContent = 'Required for new admins (8+ characters).';
+      document.getElementById('admin-is-active').disabled = false;
+    }
+    document.getElementById('admin-modal-backdrop').hidden = false;
+  }
+
+  function closeModal() {
+    document.getElementById('admin-modal-backdrop').hidden = true;
+  }
+
+  document.getElementById('add-admin-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('admin-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('admin-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'admin-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('admin-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('admin-form-error');
+    errorBox.hidden = true;
+
+    const id = document.getElementById('admin-id').value;
+    const password = document.getElementById('admin-password').value;
+
+    const payload = {
+      username: document.getElementById('admin-username').value,
+      is_active: document.getElementById('admin-is-active').checked,
+      is_superadmin: document.getElementById('admin-is-superadmin').checked,
+      allowed_source_ips: document.getElementById('admin-allowed-ips').value.trim() || null,
+    };
+    if (password) payload.password = password;
+    if (!id && !password) {
+      errorBox.textContent = 'A password is required for new admins.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const url = id ? `/api/admin-users/${id}` : '/api/admin-users';
+    const method = id ? 'PUT' : 'POST';
+
+    const res = await AAAPlatform.authedFetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Could not save admin.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+
+    closeModal();
+    AAAPlatform.toast(id ? 'Admin updated.' : 'Admin added.');
+    loadAdmins();
+  });
+
+  async function deleteAdmin(id) {
+    const admin = admins.find(a => a.id === id);
+    if (!confirm(`Delete admin "${admin ? admin.username : id}"? This cannot be undone.`)) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/admin-users/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const msg = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not delete admin.';
+      AAAPlatform.toast(msg, 'error');
+      return;
+    }
+    AAAPlatform.toast('Admin deleted.');
+    loadAdmins();
+  }
+
+  loadAdmins();
+</script>
+{% endblock %}

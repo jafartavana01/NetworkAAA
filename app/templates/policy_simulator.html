@@ -1,0 +1,154 @@
+{% extends "app_shell.html" %}
+{% block title %}Policy Simulator — AAA Management Platform{% endblock %}
+{% block breadcrumb %}TACACS+ / Policy Simulator{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Policy Simulator</h1>
+    <p class="content-sub">Evaluates a hypothetical request through the exact same policy engine that generates the real tac_plus-ng configuration — never connects to any device.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">
+      Source IP, protocol, and service are accepted below but <strong style="color:var(--text-primary);">not yet evaluated</strong> against any policy condition — only Group, Device, and Device Group conditions are implemented so far. They're shown in the result for forward compatibility, not silently dropped.
+    </div>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body">
+      <form id="sim-form">
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Username</span>
+            <input type="text" id="sim-username" required>
+          </label>
+          <label class="field">
+            <span class="field-label">Password (optional)</span>
+            <input type="password" id="sim-password" placeholder="leave blank to skip authentication check">
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Device (optional)</span>
+            <input type="text" id="sim-device" placeholder="device name">
+          </label>
+          <label class="field">
+            <span class="field-label">Source IP (optional)</span>
+            <input type="text" id="sim-source-ip">
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Protocol</span>
+            <input type="text" id="sim-protocol" value="tacacs+">
+          </label>
+          <label class="field">
+            <span class="field-label">Service</span>
+            <input type="text" id="sim-service" value="shell">
+          </label>
+        </div>
+        <label class="field">
+          <span class="field-label">Command (optional)</span>
+          <input type="text" id="sim-command" placeholder="e.g. show running-config — leave blank to test login only">
+        </label>
+
+        <div id="sim-form-error" class="form-error" role="alert" hidden></div>
+        <button type="submit" class="btn-primary btn-small" style="width:auto;margin-top:8px;">Run simulation</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="sim-result"></div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function badgeFor(value, positive) {
+    return value === positive
+      ? `<span class="badge badge-on">${escapeHtml(value)}</span>`
+      : `<span class="badge badge-off">${escapeHtml(value)}</span>`;
+  }
+
+  function renderResult(data) {
+    const box = document.getElementById('sim-result');
+
+    const traceRows = data.trace.map(t => {
+      const icon = t.matched === true ? '✓' : t.matched === false ? '✗' : '·';
+      const color = t.matched === true ? 'var(--signal)' : t.matched === false ? 'var(--red)' : 'var(--text-faint)';
+      return `<div class="version-row" style="padding:8px 16px;">
+        <span class="cell-mono" style="color:${color};width:20px;flex-shrink:0;">${icon}</span>
+        <span style="flex:1;font-size:12.5px;">${escapeHtml(t.description)}</span>
+      </div>`;
+    }).join('');
+
+    box.innerHTML = `
+      <div class="content-head"><h2>Result</h2></div>
+      <div class="panel-grid" style="margin-bottom:20px;">
+        <div class="panel">
+          <div class="panel-head"><span class="rail rail-dim"></span>Authentication</div>
+          <div class="panel-body">
+            ${badgeFor(data.authentication.result, 'SUCCESS')}
+            <div class="content-sub" style="margin-top:8px;">${escapeHtml(data.authentication.detail)}</div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span class="rail rail-dim"></span>Identity</div>
+          <div class="panel-body mono">
+            <div class="readout"><span class="readout-k">user</span><span class="readout-v">${escapeHtml(data.identity.username)}</span></div>
+            <div class="readout"><span class="readout-k">found</span><span class="readout-v">${data.identity.found}</span></div>
+            <div class="readout"><span class="readout-k">group</span><span class="readout-v">${escapeHtml(data.identity.group_name || '—')}</span></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><span class="rail rail-dim"></span>Authorization</div>
+          <div class="panel-body mono">
+            <div class="readout"><span class="readout-k">matched policy</span><span class="readout-v">${escapeHtml(data.authorization.matched_policy_name || 'none')}</span></div>
+            <div class="readout"><span class="readout-k">privilege</span><span class="readout-v">${data.authorization.priv_lvl ?? '—'}</span></div>
+            <div class="readout"><span class="readout-k">command decision</span><span class="readout-v">${escapeHtml(data.authorization.command_decision || '(none evaluated)')}</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="content-head"><h2>Evaluation Trace</h2></div>
+      <div class="version-list">${traceRows}</div>
+    `;
+  }
+
+  document.getElementById('sim-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('sim-form-error');
+    errorBox.hidden = true;
+
+    const payload = {
+      username: document.getElementById('sim-username').value,
+      password: document.getElementById('sim-password').value || null,
+      device_name: document.getElementById('sim-device').value || null,
+      source_ip: document.getElementById('sim-source-ip').value || null,
+      protocol: document.getElementById('sim-protocol').value || 'tacacs+',
+      service: document.getElementById('sim-service').value || 'shell',
+      command: document.getElementById('sim-command').value || null,
+    };
+
+    const res = await AAAPlatform.authedFetch('/api/policy-simulator/evaluate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not run simulation.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    renderResult(await res.json());
+  });
+</script>
+{% endblock %}

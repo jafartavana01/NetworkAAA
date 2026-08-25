@@ -39,6 +39,7 @@ from installer import (  # noqa: E402
     sudoers_setup,
     system_checks,
     systemd_setup,
+    uninstall,
     upstream_build,
     utils,
 )
@@ -77,7 +78,12 @@ def phase_system_detection() -> system_checks.SystemReport:
 
 def phase_dependencies() -> None:
     utils.header("Installing System Dependencies")
-    apt_deps.apt_update()
+    utils.info(
+        "Not running 'apt-get update' -- installing from whatever package "
+        "index already exists on this machine. If a package fails to be "
+        "located below, run 'sudo apt update' once yourself and re-run "
+        "this installer."
+    )
     apt_deps.ensure_packages(apt_deps.ALL_PACKAGES)
 
 
@@ -318,8 +324,51 @@ def main() -> None:
         sys.exit(1)
 
 
+def run_uninstall(*, force: bool, keep_logs: bool) -> None:
+    try:
+        uninstall.run_uninstall(force=force, keep_logs=keep_logs)
+    except utils.InstallError as exc:
+        utils.error(str(exc))
+        utils.info(f"See {utils.LOG_PATH} for the full command log.")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        utils.error("Uninstall cancelled by administrator.")
+        sys.exit(130)
+    except Exception:  # pragma: no cover - top-level safety net
+        utils.error("Unexpected uninstaller failure:")
+        traceback.print_exc()
+        utils.info(f"See {utils.LOG_PATH} for the full command log.")
+        sys.exit(1)
+
+
+def parse_args(argv: list[str]):
+    import argparse
+    parser = argparse.ArgumentParser(
+        description="AAA Management Platform installer. With no arguments, runs the full install."
+    )
+    parser.add_argument(
+        "-u", "--uninstall", action="store_true",
+        help="Remove this platform (and only this platform -- not Python, pip packages, "
+             "or apt-installed system software such as the PostgreSQL server itself).",
+    )
+    parser.add_argument(
+        "-y", "--force", action="store_true",
+        help="With --uninstall, skip the confirmation prompt. Ignored otherwise.",
+    )
+    parser.add_argument(
+        "--keep-logs", action="store_true",
+        help="With --uninstall, preserve /var/log/aaa-platform instead of deleting it. Ignored otherwise.",
+    )
+    return parser.parse_args(argv)
+
+
 if __name__ == "__main__":
     if sys.version_info[:2] < (3, 8):
         print("Python 3.8+ is required to run this installer.", file=sys.stderr)
         sys.exit(1)
-    main()
+
+    args = parse_args(sys.argv[1:])
+    if args.uninstall:
+        run_uninstall(force=args.force, keep_logs=args.keep_logs)
+    else:
+        main()

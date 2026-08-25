@@ -1,0 +1,330 @@
+{% extends "app_shell.html" %}
+{% block title %}Configuration — AAA Management Platform{% endblock %}
+{% block breadcrumb %}TACACS+ / Configuration{% endblock %}
+
+{% block view_content %}
+<main class="content">
+      <div class="content-head">
+        <h1>Pending Changes</h1>
+        <p class="content-sub">Compiled live from the database against what's actually deployed on disk.</p>
+      </div>
+
+      <div id="candidate-panel" class="panel panel-wide">
+        <div class="panel-loading">Compiling candidate configuration…</div>
+      </div>
+
+      <div class="content-head">
+        <h2>Configuration History</h2>
+        <p class="content-sub">Every applied version is kept. Restoring an old version applies it again as a new version.</p>
+      </div>
+
+      <div id="version-list" class="version-list">
+        <div class="empty-state">Loading…</div>
+      </div>
+
+      <div class="content-head">
+        <h2>Restore from File</h2>
+        <p class="content-sub">Upload a backup exported from this Configuration page — either the structured, versioned export (recommended) or the plain <code>.conf</code> download.</p>
+      </div>
+
+      <div class="panel panel-wide" style="margin-bottom:20px;">
+        <div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">
+          <strong style="color:var(--text-primary);">This does not update devices, users, groups, or policies.</strong> Applying an imported file makes it the live tac_plus-ng configuration immediately, but the underlying database is untouched — the next candidate compiled from the database will likely differ from it and can overwrite it again on the next Apply. Use this for emergency recovery or comparison, not as an ongoing way to manage configuration.
+        </div>
+      </div>
+
+      <div class="panel panel-wide">
+        <div class="panel-body">
+          <label class="field">
+            <span class="field-label">Backup file</span>
+            <input type="file" id="import-file-input" accept=".json,.conf,.txt">
+          </label>
+          <button class="btn-secondary btn-small" id="preview-import-btn" style="width:auto;margin-top:8px;">Preview</button>
+          <div id="import-preview-result" style="margin-top:16px;"></div>
+        </div>
+      </div>
+</main>
+
+<div class="modal-backdrop" id="diff-modal-backdrop" hidden>
+  <div class="modal" style="max-width: 720px;">
+    <h2 id="diff-modal-title">Diff</h2>
+    <div class="diff-view" id="diff-modal-body"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="diff-modal-close">Close</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function renderDiff(diffText) {
+    if (!diffText) return '<span class="diff-meta">No differences.</span>';
+    return diffText.split('\n').map(line => {
+      let cls = '';
+      if (line.startsWith('+') && !line.startsWith('+++')) cls = 'diff-add';
+      else if (line.startsWith('-') && !line.startsWith('---')) cls = 'diff-remove';
+      else if (line.startsWith('@@') || line.startsWith('---') || line.startsWith('+++')) cls = 'diff-meta';
+      return `<span class="${cls}">${escapeHtml(line)}</span>`;
+    }).join('\n');
+  }
+
+  async function loadCandidate() {
+    const panel = document.getElementById('candidate-panel');
+    const res = await AAAPlatform.authedFetch('/api/config/candidate');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    const data = await res.json();
+
+    if (!data.has_changes) {
+      panel.innerHTML = `<div class="panel-body">
+        <span class="badge badge-on" style="margin-bottom:12px;display:inline-flex;">Up to date</span>
+        <p class="content-sub">The compiled configuration matches what's currently deployed. No action needed.</p>
+      </div>`;
+      return;
+    }
+
+    panel.innerHTML = `
+      <div class="panel-body">
+        <div class="diff-view">${renderDiff(data.diff)}</div>
+        <div class="modal-actions" style="justify-content:flex-start;margin-top:16px;">
+          <button class="btn-primary" id="apply-btn" style="width:auto;">Apply configuration</button>
+        </div>
+      </div>
+    `;
+    document.getElementById('apply-btn').addEventListener('click', applyConfig);
+  }
+
+  async function applyConfig() {
+    if (!confirm('Apply this configuration to tac_plus-ng now? It will be validated, backed up, and reloaded.')) return;
+
+    const btn = document.getElementById('apply-btn');
+    btn.disabled = true;
+    btn.textContent = 'Applying…';
+
+    const res = await AAAPlatform.authedFetch('/api/config/apply', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const detail = body.detail;
+      const message = (detail && detail.message) ? detail.message : (typeof detail === 'string' ? detail : 'Apply failed.');
+      const journal = (detail && detail.journal) ? detail.journal : '';
+
+      AAAPlatform.toast(message, 'error');
+      btn.disabled = false;
+      btn.textContent = 'Apply configuration';
+
+      if (journal) {
+        document.getElementById('diff-modal-title').textContent = 'Apply failed — tac_plus-ng journal';
+        document.getElementById('diff-modal-body').innerHTML = renderDiff(journal);
+        document.getElementById('diff-modal-backdrop').hidden = false;
+      }
+      return;
+    }
+
+    AAAPlatform.toast('Configuration applied and tac_plus-ng reloaded.');
+    loadCandidate();
+    loadVersions();
+  }
+
+  async function loadVersions() {
+    const list = document.getElementById('version-list');
+    const res = await AAAPlatform.authedFetch('/api/config/versions');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    const versions = await res.json();
+
+    if (versions.length === 0) {
+      list.innerHTML = '<div class="empty-state">No applied versions yet.</div>';
+      return;
+    }
+
+    list.innerHTML = versions.map(v => `
+      <div class="version-row">
+        <div>
+          <strong>v${v.version_number}</strong>
+          <span class="badge ${v.status === 'restored' ? 'badge-on' : ''}" style="margin-left:8px;">${escapeHtml(v.status)}</span>
+          <div class="version-meta">${escapeHtml(v.created_by || 'unknown')} · ${new Date(v.created_at).toLocaleString()}${v.note ? ' · ' + escapeHtml(v.note) : ''}</div>
+        </div>
+        <div class="version-actions">
+          <button class="btn-secondary btn-small" data-diff="${v.version_number}">Diff</button>
+          <button class="btn-secondary btn-small" data-download="${v.version_number}">Download</button>
+          <button class="btn-secondary btn-small" data-export="${v.version_number}">Export (versioned)</button>
+          <button class="btn-secondary btn-small" data-restore="${v.version_number}">Restore</button>
+        </div>
+      </div>
+    `).join('');
+
+    list.querySelectorAll('[data-diff]').forEach(btn => btn.addEventListener('click', () => showVersionDiff(btn.dataset.diff)));
+    list.querySelectorAll('[data-download]').forEach(btn => btn.addEventListener('click', () => downloadVersion(btn.dataset.download)));
+    list.querySelectorAll('[data-export]').forEach(btn => btn.addEventListener('click', () => exportVersionBackup(btn.dataset.export)));
+    list.querySelectorAll('[data-restore]').forEach(btn => btn.addEventListener('click', () => restoreVersion(btn.dataset.restore)));
+  }
+
+  async function showVersionDiff(versionNumber) {
+    const res = await AAAPlatform.authedFetch(`/api/config/versions/${versionNumber}/diff`);
+    const data = await res.json();
+    document.getElementById('diff-modal-title').textContent = `v${versionNumber} vs currently deployed`;
+    document.getElementById('diff-modal-body').innerHTML = renderDiff(data.diff);
+    document.getElementById('diff-modal-backdrop').hidden = false;
+  }
+
+  document.getElementById('diff-modal-close').addEventListener('click', () => {
+    document.getElementById('diff-modal-backdrop').hidden = true;
+  });
+  document.getElementById('diff-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'diff-modal-backdrop') document.getElementById('diff-modal-backdrop').hidden = true;
+  });
+
+  async function downloadVersion(versionNumber) {
+    const res = await AAAPlatform.authedFetch(`/api/config/versions/${versionNumber}/content`);
+    const data = await res.json();
+    const blob = new Blob([data.content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `tac_plus-ng.conf.v${versionNumber}`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportVersionBackup(versionNumber) {
+    const res = await AAAPlatform.authedFetch(`/api/config/versions/${versionNumber}/export`);
+    if (!res.ok) { AAAPlatform.toast('Could not export.', 'error'); return; }
+    const data = await res.json();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `aaa-platform-backup-v${versionNumber}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function restoreVersion(versionNumber) {
+    if (!confirm(`Restore version ${versionNumber}? This applies it as a new version and reloads tac_plus-ng.`)) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/config/versions/${versionNumber}/restore`, { method: 'POST' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const detail = body.detail;
+      const message = (detail && detail.message) ? detail.message : 'Restore failed.';
+      const journal = (detail && detail.journal) ? detail.journal : '';
+
+      AAAPlatform.toast(message, 'error');
+
+      if (journal) {
+        document.getElementById('diff-modal-title').textContent = 'Restore failed — tac_plus-ng journal';
+        document.getElementById('diff-modal-body').innerHTML = renderDiff(journal);
+        document.getElementById('diff-modal-backdrop').hidden = false;
+      }
+      return;
+    }
+    AAAPlatform.toast(`Version ${versionNumber} restored.`);
+    loadCandidate();
+    loadVersions();
+  }
+
+  let pendingImportConfigText = null;
+
+  function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsText(file);
+    });
+  }
+
+  document.getElementById('preview-import-btn').addEventListener('click', async () => {
+    const resultBox = document.getElementById('import-preview-result');
+    const fileInput = document.getElementById('import-file-input');
+    const file = fileInput.files[0];
+    if (!file) {
+      resultBox.innerHTML = '<div class="form-error">Choose a file first.</div>';
+      return;
+    }
+
+    resultBox.innerHTML = '<div class="content-sub">Reading file…</div>';
+    let fileText;
+    try {
+      fileText = await readFileAsText(file);
+    } catch (err) {
+      resultBox.innerHTML = '<div class="form-error">Could not read that file.</div>';
+      return;
+    }
+
+    resultBox.innerHTML = '<div class="content-sub">Checking compatibility…</div>';
+    const res = await AAAPlatform.authedFetch('/api/config/import/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_text: fileText }),
+    });
+
+    if (!res.ok) {
+      resultBox.innerHTML = '<div class="form-error">Could not check this file.</div>';
+      return;
+    }
+    const data = await res.json();
+
+    if (!data.compatible) {
+      pendingImportConfigText = null;
+      resultBox.innerHTML = `<div class="form-error">${escapeHtml(data.message)}</div>`;
+      return;
+    }
+
+    pendingImportConfigText = data.config_text;
+    const warningBadge = data.is_legacy_plaintext
+      ? '<span class="badge badge-off">Unversioned file</span>'
+      : '<span class="badge badge-on">Version verified</span>';
+
+    resultBox.innerHTML = `
+      <div style="margin-bottom:10px;">${warningBadge} <span class="content-sub">${escapeHtml(data.message)}</span></div>
+      <div class="content-sub" style="margin-bottom:10px;">Diff against what's currently deployed:</div>
+      ${renderDiff(data.diff)}
+      <button class="btn-danger btn-small" id="apply-import-btn" style="width:auto;margin-top:14px;">Apply this import now</button>
+    `;
+
+    document.getElementById('apply-import-btn').addEventListener('click', applyPendingImport);
+  });
+
+  async function applyPendingImport() {
+    if (!pendingImportConfigText) return;
+    if (!confirm(
+      'Apply this imported configuration now? It becomes the live tac_plus-ng config immediately. ' +
+      'The database (devices, users, groups, policies) is NOT updated to match it, and the next ' +
+      'candidate compiled from the database can overwrite this again. Continue?'
+    )) return;
+
+    const res = await AAAPlatform.authedFetch('/api/config/import/apply', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ config_text: pendingImportConfigText }),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const detail = body.detail;
+      const message = (detail && typeof detail === 'object' && detail.message) ? detail.message : 'Import failed.';
+      AAAPlatform.toast(message, 'error');
+      return;
+    }
+
+    pendingImportConfigText = null;
+    document.getElementById('import-preview-result').innerHTML = '';
+    document.getElementById('import-file-input').value = '';
+    AAAPlatform.toast('Imported configuration applied.');
+    loadCandidate();
+    loadVersions();
+  }
+
+  loadCandidate();
+  loadVersions();
+</script>
+{% endblock %}

@@ -1,0 +1,32 @@
+<aside class="sidebar">
+  <div class="brand brand-compact">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-name">AAA Platform</span>
+  </div>
+
+  <nav class="nav">
+    {% for entry in nav %}
+      {% if not entry.requires_superadmin or is_superadmin %}
+        {% if entry.children %}
+        <div class="nav-group">
+          <span class="nav-group-label">{{ entry.label }}</span>
+          {% for child in entry.children %}
+          <a class="nav-item nav-item-child {{ 'active' if request.url.path == child.path else '' }}" href="{{ child.path }}">
+            <span class="nav-dot"></span>{{ child.label }}
+          </a>
+          {% endfor %}
+        </div>
+        {% else %}
+        <a class="nav-item {{ 'active' if request.url.path == entry.path else '' }}" href="{{ entry.path }}">
+          <span class="nav-dot"></span>{{ entry.label }}
+        </a>
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+  </nav>
+
+  <div class="sidebar-footer">
+    <span class="dot dot-signal" id="daemon-dot"></span>
+    <span id="daemon-label">tac_plus-ng — checking…</span>
+  </div>
+</aside>

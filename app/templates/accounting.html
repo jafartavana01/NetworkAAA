@@ -1,0 +1,376 @@
+{% extends "app_shell.html" %}
+{% block title %}Accounting — AAA Management Platform{% endblock %}
+{% block breadcrumb %}TACACS+ / Accounting{% endblock %}
+
+{% block view_content %}
+<main class="content">
+      <div class="content-head">
+        <h1>Accounting</h1>
+        <p class="content-sub">Parsed from tac_plus-ng's own accounting log, using a format this platform defines itself — see the note below on what that does and doesn't guarantee.</p>
+      </div>
+
+      <div class="panel panel-wide" style="margin-bottom:20px;">
+        <div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">
+          <strong style="color:var(--text-primary);">On timestamps:</strong> the eight data fields (user, device, command, etc.) come from a format string this platform controls, so they parse reliably. The leading timestamp on each line is tac_plus-ng's own addition and its exact format wasn't independently confirmed — it's parsed on a best-effort basis. Rows where it didn't parse still show in full; they're just excluded from date-range filtering rather than guessed at.
+        </div>
+      </div>
+
+      <div class="panel panel-wide" style="margin-bottom:20px;">
+        <div class="panel-body">
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">User</span>
+              <input type="text" id="filter-user" placeholder="username">
+            </label>
+            <label class="field">
+              <span class="field-label">Device</span>
+              <input type="text" id="filter-device" placeholder="device name">
+            </label>
+            <label class="field">
+              <span class="field-label">Result</span>
+              <input type="text" id="filter-result" placeholder="e.g. success">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">From</span>
+              <input type="datetime-local" id="filter-since">
+            </label>
+            <label class="field">
+              <span class="field-label">To</span>
+              <input type="datetime-local" id="filter-until">
+            </label>
+            <label class="field">
+              <span class="field-label">Search</span>
+              <input type="text" id="filter-search" placeholder="anywhere in the line">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">Source IP</span>
+              <input type="text" id="filter-source-ip" placeholder="e.g. 10.0.0.5">
+            </label>
+            <label class="field">
+              <span class="field-label">Device group</span>
+              <select id="filter-device-group"><option value="">— Any —</option></select>
+            </label>
+          </div>
+          <div class="modal-actions" style="justify-content:flex-start;margin-top:4px;">
+            <button class="btn-primary btn-small" id="apply-filters-btn" style="width:auto;">Apply filters</button>
+            <button class="btn-secondary btn-small" id="clear-filters-btn" style="width:auto;">Clear</button>
+            <button class="btn-secondary btn-small" id="export-btn" style="width:auto;">Export CSV</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="toolbar">
+        <span class="content-sub" id="record-count"></span>
+      </div>
+
+      <div id="accounting-table-wrap">
+        <div class="empty-state">Loading accounting records…</div>
+      </div>
+</main>
+
+<div class="modal-backdrop" id="promote-modal-backdrop" hidden>
+  <div class="modal" style="max-width: 560px;">
+    <h2>Promote to Command Set</h2>
+    <p class="content-sub" style="margin-top:-8px;margin-bottom:18px;">Observed command: <span class="cell-mono" id="promote-observed-command"></span></p>
+    <form id="promote-form">
+      <label class="field">
+        <span class="field-label">Command set</span>
+        <select id="promote-set-select" required></select>
+      </label>
+
+      <div class="field-row">
+        <label class="field" style="flex:0 0 130px;">
+          <span class="field-label">Match</span>
+          <select id="promote-match-mode">
+            <option value="exact" selected>Exact match</option>
+            <option value="starts_with">Starts with</option>
+            <option value="contains">Contains</option>
+            <option value="custom">Custom regex</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label" id="promote-value-label">Command text</span>
+          <input type="text" id="promote-value" required>
+        </label>
+      </div>
+      <div class="content-sub" style="margin:-10px 0 14px 4px;font-family:var(--font-mono);" id="promote-pattern-preview"></div>
+
+      <label class="field">
+        <span class="field-label">Action</span>
+        <select id="promote-action">
+          <option value="deny">Deny</option>
+          <option value="permit">Permit</option>
+        </select>
+      </label>
+
+      <div id="promote-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="promote-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Add to command set</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  let accountingRecords = [];
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function buildQuery() {
+    const params = new URLSearchParams();
+    const user = document.getElementById('filter-user').value.trim();
+    const device = document.getElementById('filter-device').value.trim();
+    const result = document.getElementById('filter-result').value.trim();
+    const search = document.getElementById('filter-search').value.trim();
+    const since = document.getElementById('filter-since').value;
+    const until = document.getElementById('filter-until').value;
+    const sourceIp = document.getElementById('filter-source-ip').value.trim();
+    const deviceGroupId = document.getElementById('filter-device-group').value;
+
+    if (user) params.set('user', user);
+    if (device) params.set('device', device);
+    if (result) params.set('result', result);
+    if (search) params.set('search', search);
+    if (since) params.set('since', since);
+    if (until) params.set('until', until);
+    if (sourceIp) params.set('source_ip', sourceIp);
+    if (deviceGroupId) params.set('device_group_id', deviceGroupId);
+    return params.toString();
+  }
+
+  async function loadDeviceGroupOptions() {
+    const res = await AAAPlatform.authedFetch('/api/device-groups');
+    if (!res.ok) return;
+    const groups = await res.json();
+    document.getElementById('filter-device-group').innerHTML =
+      '<option value="">— Any —</option>' + groups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  }
+
+  function renderTable(data) {
+    const wrap = document.getElementById('accounting-table-wrap');
+    document.getElementById('record-count').textContent =
+      `${data.matched} matching (of ${data.total_in_log} in log)`;
+
+    accountingRecords = data.records;
+
+    if (data.records.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No matching accounting records.</div>';
+      return;
+    }
+
+    const rows = data.records.map((r, i) => {
+      if (!r.parsed) {
+        return `<tr><td colspan="8" class="cell-mono" style="color:var(--text-faint);">${escapeHtml(r.raw_line)}</td></tr>`;
+      }
+      const ts = r.timestamp ? new Date(r.timestamp).toLocaleString() : (r.raw_prefix ? escapeHtml(r.raw_prefix) + ' (unparsed)' : '—');
+      const canPromote = r.cmd && r.cmd.trim();
+      return `
+        <tr>
+          <td class="cell-mono">${ts}</td>
+          <td>${escapeHtml(r.user || '—')}</td>
+          <td>${escapeHtml(r.nas || '—')}</td>
+          <td class="cell-mono">${escapeHtml(r.nac || '—')}</td>
+          <td>${escapeHtml(r.accttype || '—')}</td>
+          <td>${escapeHtml(r.result || '—')}</td>
+          <td class="cell-mono">${escapeHtml(r.cmd || r.service || '—')}</td>
+          <td class="cell-actions">${canPromote ? `<button class="btn-secondary btn-small" data-promote="${i}">Promote</button>` : ''}</td>
+        </tr>
+      `;
+    }).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th>Timestamp</th><th>User</th><th>Device</th><th>Source</th><th>State</th><th>Result</th><th>Command / Service</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-promote]').forEach(btn => {
+      btn.addEventListener('click', () => openPromoteModal(accountingRecords[parseInt(btn.dataset.promote, 10)]));
+    });
+  }
+
+  async function loadRecords() {
+    const wrap = document.getElementById('accounting-table-wrap');
+    wrap.innerHTML = '<div class="empty-state">Loading…</div>';
+
+    const query = buildQuery();
+    const res = await AAAPlatform.authedFetch('/api/tacacs-accounting' + (query ? '?' + query : ''));
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) {
+      wrap.innerHTML = '<div class="empty-state">Could not load accounting records.</div>';
+      return;
+    }
+    const data = await res.json();
+    renderTable(data);
+  }
+
+  document.getElementById('apply-filters-btn').addEventListener('click', loadRecords);
+  document.getElementById('clear-filters-btn').addEventListener('click', () => {
+    ['filter-user', 'filter-device', 'filter-result', 'filter-search', 'filter-since', 'filter-until', 'filter-source-ip'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    document.getElementById('filter-device-group').value = '';
+    loadRecords();
+  });
+  document.getElementById('export-btn').addEventListener('click', async () => {
+    const query = buildQuery();
+    const res = await AAAPlatform.authedFetch('/api/tacacs-accounting/export' + (query ? '?' + query : ''));
+    if (!res.ok) { AAAPlatform.toast('Could not export.', 'error'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'tacacs-accounting-export.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  loadDeviceGroupOptions();
+  loadRecords();
+
+  // ---------- Promote to Command Set ----------
+  // Same regex-escaping logic as command_sets.html's match-mode
+  // picker (duplicated rather than shared -- each page's inline
+  // script is independently IIFE-wrapped by spa.js, so there's no
+  // straightforward shared-scope mechanism between pages without
+  // introducing a separate loaded-on-demand JS file for what's a
+  // genuinely small amount of logic).
+  function escapeRegexLiteral(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  function modeAndValueToPattern(mode, value) {
+    const escaped = escapeRegexLiteral(value);
+    if (mode === 'starts_with') return '^' + escaped;
+    if (mode === 'contains') return escaped;
+    if (mode === 'exact') return '^' + escaped + '$';
+    return value; // custom
+  }
+
+  let promoteTargetCommand = '';
+
+  async function openPromoteModal(record) {
+    if (!record || !record.cmd) return;
+    promoteTargetCommand = record.cmd;
+
+    document.getElementById('promote-observed-command').textContent = record.cmd;
+    document.getElementById('promote-form-error').hidden = true;
+    document.getElementById('promote-match-mode').value = 'exact';
+    document.getElementById('promote-value').value = record.cmd;
+    document.getElementById('promote-action').value = 'deny';
+    updatePromotePreview();
+
+    const select = document.getElementById('promote-set-select');
+    select.innerHTML = '<option>Loading…</option>';
+    const res = await AAAPlatform.authedFetch('/api/command-sets');
+    if (res.ok) {
+      const sets = await res.json();
+      select.innerHTML = sets.length
+        ? sets.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('')
+        : '<option value="">— No command sets exist yet —</option>';
+    } else {
+      select.innerHTML = '<option value="">— Could not load command sets —</option>';
+    }
+
+    document.getElementById('promote-modal-backdrop').hidden = false;
+  }
+
+  function updatePromotePreview() {
+    const mode = document.getElementById('promote-match-mode').value;
+    const value = document.getElementById('promote-value').value;
+    document.getElementById('promote-value-label').textContent = mode === 'custom' ? 'Regex pattern' : 'Command text';
+    document.getElementById('promote-pattern-preview').textContent = '→ ' + (modeAndValueToPattern(mode, value) || '(empty)');
+  }
+  document.getElementById('promote-match-mode').addEventListener('change', updatePromotePreview);
+  document.getElementById('promote-value').addEventListener('input', updatePromotePreview);
+
+  document.getElementById('promote-cancel-btn').addEventListener('click', () => {
+    document.getElementById('promote-modal-backdrop').hidden = true;
+  });
+  document.getElementById('promote-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'promote-modal-backdrop') document.getElementById('promote-modal-backdrop').hidden = true;
+  });
+
+  document.getElementById('promote-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('promote-form-error');
+    errorBox.hidden = true;
+
+    const setId = document.getElementById('promote-set-select').value;
+    if (!setId) {
+      errorBox.textContent = 'Choose a command set — create one on the Command Sets page first if none exist.';
+      errorBox.hidden = false;
+      return;
+    }
+    const mode = document.getElementById('promote-match-mode').value;
+    const value = document.getElementById('promote-value').value.trim();
+    if (!value) {
+      errorBox.textContent = 'Enter a value.';
+      errorBox.hidden = false;
+      return;
+    }
+    const pattern = modeAndValueToPattern(mode, value);
+    try { new RegExp(pattern); } catch (err) {
+      errorBox.textContent = `"${value}" is not a valid regular expression.`;
+      errorBox.hidden = false;
+      return;
+    }
+    const action = document.getElementById('promote-action').value;
+
+    // Command Sets are replaced wholesale on save (no "add one rule"
+    // endpoint exists -- see app.api.routes_command_sets), so this
+    // fetches the target set's CURRENT full state, appends the new
+    // rule, and PUTs the whole thing back -- reusing the existing API
+    // exactly as command_sets.html itself does, no backend changes.
+    const getRes = await AAAPlatform.authedFetch(`/api/command-sets/${setId}`);
+    if (!getRes.ok) {
+      errorBox.textContent = 'Could not load that command set.';
+      errorBox.hidden = false;
+      return;
+    }
+    const commandSet = await getRes.json();
+
+    const existingRules = commandSet.rules.map((r, i) => ({
+      order: i, action: r.action, command_pattern: r.command_pattern,
+      description: r.description || null, category_id: r.category_id || null,
+    }));
+    existingRules.push({
+      order: existingRules.length, action, command_pattern: pattern,
+      description: `Promoted from accounting: "${promoteTargetCommand}"`, category_id: null,
+    });
+
+    const putRes = await AAAPlatform.authedFetch(`/api/command-sets/${setId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: commandSet.name, description: commandSet.description, vendor: commandSet.vendor,
+        enabled: commandSet.enabled, rules: existingRules,
+      }),
+    });
+
+    if (!putRes.ok) {
+      const body = await putRes.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not add this rule.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    document.getElementById('promote-modal-backdrop').hidden = true;
+    AAAPlatform.toast(`Added to "${commandSet.name}".`);
+  });
+</script>
+{% endblock %}

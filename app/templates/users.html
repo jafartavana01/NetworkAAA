@@ -1,0 +1,293 @@
+{% extends "app_shell.html" %}
+{% block title %}Users — AAA Management Platform{% endblock %}
+{% block breadcrumb %}TACACS+ / Users{% endblock %}
+
+{% block view_content %}
+<main class="content">
+      <div class="content-head">
+        <h1>TACACS+ Users</h1>
+        <p class="content-sub">Saved here first; nothing reaches tac_plus-ng until you apply it on the Configuration page.</p>
+      </div>
+
+      <div class="toolbar">
+        <span class="content-sub" id="user-count"></span>
+        <button class="btn-primary btn-small" id="add-user-btn" style="width:auto;">+ Add user</button>
+      </div>
+
+      <div id="users-table-wrap">
+        <div class="empty-state">Loading users…</div>
+      </div>
+
+      <div class="content-head">
+        <h2>Recent Authentication Activity</h2>
+        <p class="content-sub">Raw tail of tac_plus-ng's access log — shown unparsed since the exact line format for this build hasn't been independently confirmed.</p>
+      </div>
+
+      <div class="panel panel-wide">
+        <div class="panel-body">
+          <div class="diff-view" id="access-log-view">Loading…</div>
+          <div class="modal-actions" style="justify-content:flex-start;margin-top:12px;">
+            <button class="btn-secondary btn-small" id="refresh-log-btn">Refresh</button>
+          </div>
+        </div>
+      </div>
+</main>
+
+<div class="modal-backdrop" id="user-modal-backdrop" hidden>
+  <div class="modal">
+    <h2 id="user-modal-title">Add user</h2>
+    <form id="user-form">
+      <input type="hidden" id="user-id">
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Username</span>
+          <input type="text" id="user-username" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        </label>
+        <label class="field">
+          <span class="field-label">Enabled</span>
+          <div class="checkbox-field" style="padding-top:8px;">
+            <input type="checkbox" id="user-enabled" checked>
+            <span>Active in generated config</span>
+          </div>
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng user identifier.</div>
+
+      <label class="field">
+        <span class="field-label">Full name</span>
+        <input type="text" id="user-fullname">
+      </label>
+
+      <label class="field">
+        <span class="field-label">Group</span>
+        <select id="user-group-select">
+          <option value="">— No group —</option>
+        </select>
+      </label>
+      <button type="button" class="quickadd-toggle" id="user-group-quickadd-toggle">+ New group</button>
+      <div class="quickadd-panel" id="user-group-quickadd-panel" hidden>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">New group name</span>
+            <input type="text" id="user-group-quickadd-name" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+          </label>
+          <label class="field">
+            <span class="field-label">Description</span>
+            <input type="text" id="user-group-quickadd-desc">
+          </label>
+        </div>
+        <div id="user-group-quickadd-error" class="form-error" role="alert" hidden></div>
+        <div class="modal-actions" style="justify-content:flex-start;margin-top:0;">
+          <button type="button" class="btn-secondary btn-small" id="user-group-quickadd-create-btn" style="width:auto;">Create</button>
+          <button type="button" class="btn-ghost btn-small" id="user-group-quickadd-cancel-btn">Cancel</button>
+        </div>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Password</span>
+        <input type="password" id="user-password" placeholder="">
+      </label>
+      <div class="field-hint" id="user-secret-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new users. Never displayed once saved — leave blank when editing to keep the current password.</div>
+
+      <label class="field">
+        <span class="field-label">Description</span>
+        <input type="text" id="user-description">
+      </label>
+
+      <div id="user-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="user-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Save user</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  let tacacsUsers = [];
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  async function loadGroupOptions() {
+    const res = await AAAPlatform.authedFetch('/api/tacacs-groups');
+    if (!res.ok) return;
+    const groups = await res.json();
+    const select = document.getElementById('user-group-select');
+    select.innerHTML = '<option value="">— No group —</option>' +
+      groups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  }
+
+  function renderTable() {
+    const wrap = document.getElementById('users-table-wrap');
+    document.getElementById('user-count').textContent = tacacsUsers.length + (tacacsUsers.length === 1 ? ' user' : ' users');
+
+    if (tacacsUsers.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No users yet. Add one to get started.</div>';
+      return;
+    }
+
+    const rows = tacacsUsers.map(u => `
+      <tr>
+        <td>${escapeHtml(u.username)}</td>
+        <td>${escapeHtml(u.full_name || '—')}</td>
+        <td>${escapeHtml(u.group_name || '—')}</td>
+        <td>${u.enabled ? '<span class="badge badge-on">Enabled</span>' : '<span class="badge badge-off">Disabled</span>'}</td>
+        <td class="cell-actions">
+          <button class="btn-secondary btn-small" data-edit="${u.id}">Edit</button>
+          <button class="btn-danger btn-small" data-delete="${u.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th>Username</th><th>Full name</th><th>Group</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.addEventListener('click', () => openModal(tacacsUsers.find(u => u.id === btn.dataset.edit)));
+    });
+    wrap.querySelectorAll('[data-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deleteUser(btn.dataset.delete));
+    });
+  }
+
+  async function loadUsers() {
+    const res = await AAAPlatform.authedFetch('/api/tacacs-users');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    tacacsUsers = await res.json();
+    renderTable();
+  }
+
+  function openModal(user) {
+    document.getElementById('user-form-error').hidden = true;
+    document.getElementById('user-form').reset();
+    document.getElementById('user-enabled').checked = true;
+    document.getElementById('user-group-quickadd-panel').hidden = true;
+
+    if (user) {
+      document.getElementById('user-modal-title').textContent = 'Edit user';
+      document.getElementById('user-id').value = user.id;
+      document.getElementById('user-username').value = user.username;
+      document.getElementById('user-fullname').value = user.full_name || '';
+      document.getElementById('user-group-select').value = user.group_id || '';
+      document.getElementById('user-description').value = user.description || '';
+      document.getElementById('user-enabled').checked = user.enabled;
+      document.getElementById('user-secret-hint').textContent = 'Leave blank to keep the current password.';
+    } else {
+      document.getElementById('user-modal-title').textContent = 'Add user';
+      document.getElementById('user-id').value = '';
+      document.getElementById('user-secret-hint').textContent = 'Required for new users.';
+    }
+    document.getElementById('user-modal-backdrop').hidden = false;
+  }
+
+  function closeModal() {
+    document.getElementById('user-modal-backdrop').hidden = true;
+  }
+
+  document.getElementById('add-user-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('user-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('user-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'user-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('user-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('user-form-error');
+    errorBox.hidden = true;
+
+    const id = document.getElementById('user-id').value;
+    const password = document.getElementById('user-password').value;
+
+    const payload = {
+      username: document.getElementById('user-username').value,
+      full_name: document.getElementById('user-fullname').value || null,
+      group_id: document.getElementById('user-group-select').value || null,
+      description: document.getElementById('user-description').value || null,
+      enabled: document.getElementById('user-enabled').checked,
+    };
+    if (password) payload.password = password;
+    if (!id && !password) {
+      errorBox.textContent = 'A password is required for new users.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const url = id ? `/api/tacacs-users/${id}` : '/api/tacacs-users';
+    const method = id ? 'PUT' : 'POST';
+
+    const res = await AAAPlatform.authedFetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not save user.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    closeModal();
+    AAAPlatform.toast(id ? 'User updated.' : 'User added.');
+    loadUsers();
+  });
+
+  async function deleteUser(id) {
+    const user = tacacsUsers.find(u => u.id === id);
+    if (!confirm(`Delete user "${user ? user.username : id}"? This cannot be undone.`)) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/tacacs-users/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not delete user.', 'error');
+      return;
+    }
+    AAAPlatform.toast('User deleted.');
+    loadUsers();
+  }
+
+  async function loadAccessLog() {
+    const view = document.getElementById('access-log-view');
+    try {
+      const res = await AAAPlatform.authedFetch('/api/tacacs-logs/access');
+      if (res.status === 401) { window.location.href = '/login'; return; }
+      const data = await res.json();
+      view.textContent = data.content || data.note || '(empty)';
+    } catch (err) {
+      view.textContent = 'Could not load the access log.';
+    }
+  }
+
+  document.getElementById('refresh-log-btn').addEventListener('click', loadAccessLog);
+
+  loadGroupOptions();
+  loadUsers();
+  loadAccessLog();
+
+  AAAPlatform.setupQuickAdd(
+    {
+      toggleBtn: 'user-group-quickadd-toggle',
+      panel: 'user-group-quickadd-panel',
+      nameInput: 'user-group-quickadd-name',
+      descInput: 'user-group-quickadd-desc',
+      errorBox: 'user-group-quickadd-error',
+      createBtn: 'user-group-quickadd-create-btn',
+      cancelBtn: 'user-group-quickadd-cancel-btn',
+      select: 'user-group-select',
+    },
+    '/api/tacacs-groups',
+    loadGroupOptions
+  );
+</script>
+{% endblock %}

@@ -1,0 +1,125 @@
+{% extends "app_shell.html" %}
+{% block title %}Effective Access — AAA Management Platform{% endblock %}
+{% block breadcrumb %}TACACS+ / Effective Access{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Effective Access</h1>
+    <p class="content-sub">What can a user reach, or who can reach a device — computed by running every device (or user) through the same policy engine that generates the real configuration. Pure database analysis; nothing here contacts a device.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body">
+      <div class="field-row" style="align-items:flex-end;">
+        <label class="field" style="flex:0 0 160px;">
+          <span class="field-label">Look up</span>
+          <select id="lookup-mode">
+            <option value="user">By user</option>
+            <option value="device">By device</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label" id="lookup-label">Username</span>
+          <input type="text" id="lookup-name" placeholder="exact name">
+        </label>
+        <button class="btn-primary btn-small" id="lookup-btn" style="width:auto;">Look up</button>
+      </div>
+      <div id="lookup-error" class="form-error" role="alert" hidden></div>
+    </div>
+  </div>
+
+  <div id="access-result"></div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  document.getElementById('lookup-mode').addEventListener('change', (e) => {
+    document.getElementById('lookup-label').textContent = e.target.value === 'user' ? 'Username' : 'Device name';
+  });
+
+  async function findIdByName(kind, name) {
+    const endpoint = kind === 'user' ? '/api/tacacs-users' : '/api/devices';
+    const res = await AAAPlatform.authedFetch(endpoint);
+    if (!res.ok) return null;
+    const list = await res.json();
+    const field = kind === 'user' ? 'username' : 'name';
+    const match = list.find(item => item[field].toLowerCase() === name.toLowerCase());
+    return match ? match.id : null;
+  }
+
+  function renderResult(data) {
+    const box = document.getElementById('access-result');
+    const isUser = data.subject_type === 'user';
+    const items = isUser ? data.devices : data.users;
+    const itemLabel = isUser ? 'device_name' : 'username';
+
+    const byPrivRows = Object.entries(data.by_privilege)
+      .sort((a, b) => b[0] - a[0])
+      .map(([priv, count]) => `<div class="readout"><span class="readout-k">privilege ${escapeHtml(priv)}</span><span class="readout-v">${count} ${isUser ? 'device(s)' : 'user(s)'}</span></div>`)
+      .join('');
+
+    const rows = items.map(item => `
+      <tr>
+        <td>${escapeHtml(item[itemLabel])}</td>
+        <td class="cell-mono">${escapeHtml(item.matched_policy_name)}</td>
+        <td class="cell-mono">${item.priv_lvl}</td>
+        <td>${item.command_sets.length ? item.command_sets.map(escapeHtml).join(', ') : '<span class="content-sub">none</span>'}</td>
+      </tr>
+    `).join('');
+
+    box.innerHTML = `
+      <div class="content-head">
+        <h2>${isUser ? 'What can' : 'Who can access'} <span class="cell-mono">${escapeHtml(data.subject_name)}</span> ${isUser ? 'access?' : ''}</h2>
+        <p class="content-sub">${data.total_reachable} of ${isUser ? data.total_devices_checked + ' devices' : data.total_users_checked + ' users'} checked are reachable.</p>
+      </div>
+      <div class="panel panel-wide" style="margin-bottom:20px;">
+        <div class="panel-body mono">${byPrivRows || '<div class="content-sub">No access at any privilege level.</div>'}</div>
+      </div>
+      <table class="data-table">
+        <thead>
+          <tr><th>${isUser ? 'Device' : 'User'}</th><th>Matched policy</th><th>Privilege</th><th>Command sets</th></tr>
+        </thead>
+        <tbody>${rows || '<tr><td colspan="4" class="empty-state">No reachable ' + (isUser ? 'devices' : 'users') + '.</td></tr>'}</tbody>
+      </table>
+    `;
+  }
+
+  document.getElementById('lookup-btn').addEventListener('click', async () => {
+    const errorBox = document.getElementById('lookup-error');
+    errorBox.hidden = true;
+
+    const mode = document.getElementById('lookup-mode').value;
+    const name = document.getElementById('lookup-name').value.trim();
+    if (!name) {
+      errorBox.textContent = 'Enter a name to look up.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const id = await findIdByName(mode, name);
+    if (!id) {
+      errorBox.textContent = `No ${mode} named "${name}" found.`;
+      errorBox.hidden = false;
+      return;
+    }
+
+    const endpoint = mode === 'user' ? `/api/effective-access/user/${id}` : `/api/effective-access/device/${id}`;
+    const res = await AAAPlatform.authedFetch(endpoint);
+    if (!res.ok) {
+      errorBox.textContent = 'Could not compute effective access.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    renderResult(await res.json());
+  });
+</script>
+{% endblock %}

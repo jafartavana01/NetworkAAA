@@ -1,0 +1,272 @@
+{% extends "app_shell.html" %}
+{% block title %}Settings — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Platform / Settings{% endblock %}
+
+{% block view_content %}
+<main class="content">
+      <div class="content-head">
+        <h1>Network &amp; TLS Settings</h1>
+        <p class="content-sub">Changes here require a management service restart to take effect — nothing applies instantly.</p>
+      </div>
+
+      <div class="content-head">
+        <h2>Network</h2>
+      </div>
+      <div class="panel panel-wide">
+        <div class="panel-body">
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">Web GUI bind address</span>
+              <input type="text" id="net-web-host" placeholder="0.0.0.0">
+            </label>
+            <label class="field">
+              <span class="field-label">Web GUI port</span>
+              <input type="number" id="net-web-port" min="1" max="65535">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="checkbox-field field">
+              <input type="checkbox" id="net-https-enabled">
+              <span>Enable HTTPS</span>
+            </label>
+            <label class="field">
+              <span class="field-label">tac_plus-ng port</span>
+              <input type="number" id="net-tacacs-port" min="1" max="65535">
+            </label>
+          </div>
+          <div class="field-hint" style="margin-bottom:16px;">Enabling HTTPS requires a valid certificate below — the platform refuses to save this combination without one, rather than silently falling back to plain HTTP.</div>
+          <div id="network-form-error" class="form-error" role="alert" hidden></div>
+          <button class="btn-primary btn-small" id="save-network-btn" style="width:auto;">Save network settings</button>
+        </div>
+      </div>
+
+      <div class="content-head">
+        <h2>Active Certificate</h2>
+      </div>
+      <div class="panel panel-wide">
+        <div class="panel-body" id="cert-info-view">
+          <div class="panel-loading">Loading…</div>
+        </div>
+      </div>
+
+      <div class="content-head">
+        <h2>Regenerate Self-Signed Certificate</h2>
+        <p class="content-sub">Overwrites the active certificate immediately on disk — takes effect after a service restart.</p>
+      </div>
+      <div class="panel panel-wide">
+        <div class="panel-body">
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">Common Name (CN)</span>
+              <input type="text" id="cert-cn" placeholder="hostname or IP admins use to reach this GUI">
+            </label>
+            <label class="field">
+              <span class="field-label">Organization</span>
+              <input type="text" id="cert-org" placeholder="optional">
+            </label>
+          </div>
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">Validity (days)</span>
+              <input type="number" id="cert-validity" min="1" max="3650" value="825">
+            </label>
+            <label class="field">
+              <span class="field-label">Key size</span>
+              <select id="cert-keysize">
+                <option value="2048">2048</option>
+                <option value="3072">3072</option>
+                <option value="4096">4096</option>
+              </select>
+            </label>
+          </div>
+          <label class="field">
+            <span class="field-label">Additional names/IPs (optional)</span>
+            <input type="text" id="cert-sans" placeholder="comma-separated, e.g. 10.0.0.5, gui.internal">
+          </label>
+          <div id="regen-form-error" class="form-error" role="alert" hidden></div>
+          <button class="btn-secondary btn-small" id="regenerate-cert-btn" style="width:auto;margin-top:8px;">Regenerate self-signed certificate</button>
+        </div>
+      </div>
+
+      <div class="content-head">
+        <h2>Upload Custom Certificate</h2>
+        <p class="content-sub">Replaces the active certificate with one you provide (e.g. from your own internal CA). Validated for a matching key and non-expired dates before being accepted.</p>
+      </div>
+      <div class="panel panel-wide">
+        <div class="panel-body">
+          <label class="field">
+            <span class="field-label">Certificate (PEM)</span>
+            <textarea id="cert-upload-cert" rows="6" style="font-family: var(--font-mono); font-size: 12px; width: 100%; background: var(--bg-void); border: 1px solid var(--line); color: var(--text-primary); padding: 10px;" placeholder="-----BEGIN CERTIFICATE-----"></textarea>
+          </label>
+          <label class="field">
+            <span class="field-label">Private key (PEM, unencrypted)</span>
+            <textarea id="cert-upload-key" rows="6" style="font-family: var(--font-mono); font-size: 12px; width: 100%; background: var(--bg-void); border: 1px solid var(--line); color: var(--text-primary); padding: 10px;" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+          </label>
+          <div id="upload-form-error" class="form-error" role="alert" hidden></div>
+          <button class="btn-secondary btn-small" id="upload-cert-btn" style="width:auto;margin-top:8px;">Upload certificate</button>
+        </div>
+      </div>
+
+      <div class="content-head">
+        <h2>Apply Changes</h2>
+      </div>
+      <div class="panel panel-wide">
+        <div class="panel-body">
+          <p class="content-sub" style="margin-bottom:14px;">Restarting drops your current connection briefly. If you changed the port or enabled HTTPS, you'll need to navigate to the new address afterward — this page can't redirect you automatically since it doesn't know in advance whether the restart will succeed.</p>
+          <button class="btn-danger" id="restart-service-btn" style="width:auto;">Restart management service now</button>
+        </div>
+      </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function renderCertInfo(cert) {
+    const view = document.getElementById('cert-info-view');
+    if (!cert) {
+      view.innerHTML = '<div class="content-sub">No certificate installed yet.</div>';
+      return;
+    }
+    if (cert.error) {
+      view.innerHTML = `<div class="form-error">${escapeHtml(cert.error)}</div>`;
+      return;
+    }
+    view.innerHTML = `
+      <div class="mono">
+        ${cert.is_expired ? '<span class="badge badge-off" style="margin-bottom:10px;display:inline-flex;">Expired</span>' : '<span class="badge badge-on" style="margin-bottom:10px;display:inline-flex;">Valid</span>'}
+        <div class="readout"><span class="readout-k">common name</span><span class="readout-v">${escapeHtml(cert.common_name || '—')}</span></div>
+        <div class="readout"><span class="readout-k">organization</span><span class="readout-v">${escapeHtml(cert.organization || '—')}</span></div>
+        <div class="readout"><span class="readout-k">valid from</span><span class="readout-v">${new Date(cert.not_valid_before).toLocaleString()}</span></div>
+        <div class="readout"><span class="readout-k">valid until</span><span class="readout-v">${new Date(cert.not_valid_after).toLocaleString()}</span></div>
+        <div class="readout"><span class="readout-k">serial</span><span class="readout-v">${escapeHtml(cert.serial_number)}</span></div>
+      </div>
+    `;
+  }
+
+  async function loadSettings() {
+    const res = await AAAPlatform.authedFetch('/api/platform-settings');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (res.status === 403) {
+      document.getElementById('cert-info-view').innerHTML = '<div class="content-sub">Superadmin privileges required.</div>';
+      return;
+    }
+    const data = await res.json();
+    document.getElementById('net-web-host').value = data.web_host;
+    document.getElementById('net-web-port').value = data.web_port;
+    document.getElementById('net-https-enabled').checked = data.https_enabled;
+    document.getElementById('net-tacacs-port').value = data.tacacs_port;
+    document.getElementById('cert-cn').value = data.certificate ? (data.certificate.common_name || '') : '';
+    renderCertInfo(data.certificate);
+  }
+
+  document.getElementById('save-network-btn').addEventListener('click', async () => {
+    const errorBox = document.getElementById('network-form-error');
+    errorBox.hidden = true;
+
+    const payload = {
+      web_host: document.getElementById('net-web-host').value.trim(),
+      web_port: parseInt(document.getElementById('net-web-port').value, 10),
+      https_enabled: document.getElementById('net-https-enabled').checked,
+      tacacs_port: parseInt(document.getElementById('net-tacacs-port').value, 10),
+    };
+
+    const res = await AAAPlatform.authedFetch('/api/platform-settings/network', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not save network settings.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    AAAPlatform.toast('Network settings saved. Restart the service below to apply them.');
+  });
+
+  document.getElementById('regenerate-cert-btn').addEventListener('click', async () => {
+    const errorBox = document.getElementById('regen-form-error');
+    errorBox.hidden = true;
+
+    const cn = document.getElementById('cert-cn').value.trim();
+    if (!cn) {
+      errorBox.textContent = 'Common Name is required.';
+      errorBox.hidden = false;
+      return;
+    }
+    if (!confirm('Regenerate the self-signed certificate now? This overwrites the current one immediately.')) return;
+
+    const sansRaw = document.getElementById('cert-sans').value.trim();
+    const payload = {
+      common_name: cn,
+      organization: document.getElementById('cert-org').value.trim() || null,
+      validity_days: parseInt(document.getElementById('cert-validity').value, 10),
+      key_size: parseInt(document.getElementById('cert-keysize').value, 10),
+      subject_alt_names: sansRaw ? sansRaw.split(',').map(s => s.trim()).filter(Boolean) : [],
+    };
+
+    const res = await AAAPlatform.authedFetch('/api/platform-settings/tls/regenerate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not regenerate certificate.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const data = await res.json();
+    renderCertInfo(data.certificate);
+    AAAPlatform.toast('Certificate regenerated. Restart the service below to apply it.');
+  });
+
+  document.getElementById('upload-cert-btn').addEventListener('click', async () => {
+    const errorBox = document.getElementById('upload-form-error');
+    errorBox.hidden = true;
+
+    const certificate_pem = document.getElementById('cert-upload-cert').value.trim();
+    const private_key_pem = document.getElementById('cert-upload-key').value.trim();
+    if (!certificate_pem || !private_key_pem) {
+      errorBox.textContent = 'Both the certificate and private key are required.';
+      errorBox.hidden = false;
+      return;
+    }
+    if (!confirm('Upload this certificate as the active one now? This overwrites the current certificate immediately.')) return;
+
+    const res = await AAAPlatform.authedFetch('/api/platform-settings/tls/upload', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ certificate_pem, private_key_pem }),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not upload certificate.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const data = await res.json();
+    renderCertInfo(data.certificate);
+    AAAPlatform.toast('Certificate uploaded. Restart the service below to apply it.');
+  });
+
+  document.getElementById('restart-service-btn').addEventListener('click', async () => {
+    if (!confirm('Restart the management service now? Your connection will drop briefly, and you may need to navigate to a new address if the port or protocol changed.')) return;
+
+    try {
+      await AAAPlatform.authedFetch('/api/platform-settings/restart-management-service', { method: 'POST' });
+      AAAPlatform.toast('Restart triggered. Reconnect using your current or new address in a few seconds.');
+    } catch (err) {
+      AAAPlatform.toast('Restart triggered — connection dropped as expected.');
+    }
+  });
+
+  loadSettings();
+</script>
+{% endblock %}

@@ -1,0 +1,289 @@
+{% extends "app_shell.html" %}
+{% block title %}Devices — AAA Management Platform{% endblock %}
+{% block breadcrumb %}TACACS+ / Devices{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Network Devices</h1>
+    <p class="content-sub">Saved here first; nothing reaches tac_plus-ng until you apply it on the Configuration page.</p>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="device-count"></span>
+    <button class="btn-primary btn-small" id="add-device-btn" style="width:auto;">+ Add device</button>
+  </div>
+
+  <div id="devices-table-wrap">
+    <div class="empty-state">Loading devices…</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="device-modal-backdrop" hidden>
+  <div class="modal">
+    <h2 id="device-modal-title">Add device</h2>
+    <form id="device-form">
+      <input type="hidden" id="device-id">
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Name</span>
+          <input type="text" id="device-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        </label>
+        <label class="field">
+          <span class="field-label">Enabled</span>
+          <div class="checkbox-field" style="padding-top:8px;">
+            <input type="checkbox" id="device-enabled" checked>
+            <span>Active in generated config</span>
+          </div>
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng host identifier.</div>
+
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">IPv4 address / CIDR</span>
+          <input type="text" id="device-ip" required placeholder="10.10.10.10 or 10.10.10.0/24">
+        </label>
+        <label class="field">
+          <span class="field-label">IPv6 address / CIDR (optional)</span>
+          <input type="text" id="device-ipv6" placeholder="2001:db8::1">
+        </label>
+      </div>
+
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Vendor</span>
+          <input type="text" id="device-vendor" placeholder="Cisco">
+        </label>
+        <label class="field">
+          <span class="field-label">Platform</span>
+          <input type="text" id="device-platform" placeholder="IOS-XE">
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Device group</span>
+        <select id="device-group-select">
+          <option value="">— No group —</option>
+        </select>
+      </label>
+      <button type="button" class="quickadd-toggle" id="device-group-quickadd-toggle">+ New device group</button>
+      <div class="quickadd-panel" id="device-group-quickadd-panel" hidden>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">New device group name</span>
+            <input type="text" id="device-group-quickadd-name" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+          </label>
+          <label class="field">
+            <span class="field-label">Description</span>
+            <input type="text" id="device-group-quickadd-desc">
+          </label>
+        </div>
+        <div id="device-group-quickadd-error" class="form-error" role="alert" hidden></div>
+        <div class="modal-actions" style="justify-content:flex-start;margin-top:0;">
+          <button type="button" class="btn-secondary btn-small" id="device-group-quickadd-create-btn" style="width:auto;">Create</button>
+          <button type="button" class="btn-ghost btn-small" id="device-group-quickadd-cancel-btn">Cancel</button>
+        </div>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Shared secret</span>
+        <input type="password" id="device-secret" placeholder="">
+      </label>
+      <div class="field-hint" id="secret-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new devices. Never displayed once saved — leave blank when editing to keep the current secret.</div>
+
+      <label class="field">
+        <span class="field-label">Description</span>
+        <input type="text" id="device-description">
+      </label>
+
+      <div id="device-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="device-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Save device</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  let devices = [];
+  let deviceGroups = [];
+
+  async function loadDeviceGroupOptions() {
+    const res = await AAAPlatform.authedFetch('/api/device-groups');
+    if (!res.ok) return;
+    deviceGroups = await res.json();
+    const select = document.getElementById('device-group-select');
+    select.innerHTML = '<option value="">— No group —</option>' +
+      deviceGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function renderTable() {
+    const wrap = document.getElementById('devices-table-wrap');
+    document.getElementById('device-count').textContent = devices.length + (devices.length === 1 ? ' device' : ' devices');
+
+    if (devices.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No devices yet. Add one to get started.</div>';
+      return;
+    }
+
+    const rows = devices.map(d => `
+      <tr>
+        <td>${escapeHtml(d.name)}</td>
+        <td class="cell-mono">${escapeHtml(d.ip_address)}${d.ipv6_address ? '<br>' + escapeHtml(d.ipv6_address) : ''}</td>
+        <td>${escapeHtml(d.vendor || '—')}</td>
+        <td>${escapeHtml(d.device_group_name || '—')}</td>
+        <td>${d.enabled ? '<span class="badge badge-on">Enabled</span>' : '<span class="badge badge-off">Disabled</span>'}</td>
+        <td class="cell-actions">
+          <button class="btn-secondary btn-small" data-edit="${d.id}">Edit</button>
+          <button class="btn-danger btn-small" data-delete="${d.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th>Name</th><th>Address</th><th>Vendor</th><th>Group</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.addEventListener('click', () => openModal(devices.find(d => d.id === btn.dataset.edit)));
+    });
+    wrap.querySelectorAll('[data-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deleteDevice(btn.dataset.delete));
+    });
+  }
+
+  async function loadDevices() {
+    const res = await AAAPlatform.authedFetch('/api/devices');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    devices = await res.json();
+    renderTable();
+  }
+
+  function openModal(device) {
+    document.getElementById('device-form-error').hidden = true;
+    document.getElementById('device-form').reset();
+    document.getElementById('device-enabled').checked = true;
+    document.getElementById('device-group-quickadd-panel').hidden = true;
+
+    if (device) {
+      document.getElementById('device-modal-title').textContent = 'Edit device';
+      document.getElementById('device-id').value = device.id;
+      document.getElementById('device-name').value = device.name;
+      document.getElementById('device-ip').value = device.ip_address;
+      document.getElementById('device-ipv6').value = device.ipv6_address || '';
+      document.getElementById('device-vendor').value = device.vendor || '';
+      document.getElementById('device-platform').value = device.platform || '';
+      document.getElementById('device-group-select').value = device.device_group_id || '';
+      document.getElementById('device-description').value = device.description || '';
+      document.getElementById('device-enabled').checked = device.enabled;
+      document.getElementById('secret-hint').textContent = 'Leave blank to keep the current secret.';
+    } else {
+      document.getElementById('device-modal-title').textContent = 'Add device';
+      document.getElementById('device-id').value = '';
+      document.getElementById('secret-hint').textContent = 'Required for new devices.';
+    }
+    document.getElementById('device-modal-backdrop').hidden = false;
+  }
+
+  function closeModal() {
+    document.getElementById('device-modal-backdrop').hidden = true;
+  }
+
+  document.getElementById('add-device-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('device-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('device-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'device-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('device-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('device-form-error');
+    errorBox.hidden = true;
+
+    const id = document.getElementById('device-id').value;
+    const secret = document.getElementById('device-secret').value;
+
+    const payload = {
+      name: document.getElementById('device-name').value,
+      ip_address: document.getElementById('device-ip').value,
+      ipv6_address: document.getElementById('device-ipv6').value || null,
+      vendor: document.getElementById('device-vendor').value || null,
+      platform: document.getElementById('device-platform').value || null,
+      device_group_id: document.getElementById('device-group-select').value || null,
+      description: document.getElementById('device-description').value || null,
+      enabled: document.getElementById('device-enabled').checked,
+    };
+    if (secret) payload.shared_secret = secret;
+    if (!id && !secret) {
+      errorBox.textContent = 'A shared secret is required for new devices.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const url = id ? `/api/devices/${id}` : '/api/devices';
+    const method = id ? 'PUT' : 'POST';
+
+    const res = await AAAPlatform.authedFetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not save device.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    closeModal();
+    AAAPlatform.toast(id ? 'Device updated.' : 'Device added.');
+    loadDevices();
+  });
+
+  async function deleteDevice(id) {
+    const device = devices.find(d => d.id === id);
+    if (!confirm(`Delete device "${device ? device.name : id}"? This cannot be undone.`)) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/devices/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not delete device.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Device deleted.');
+    loadDevices();
+  }
+
+  loadDeviceGroupOptions();
+  loadDevices();
+
+  AAAPlatform.setupQuickAdd(
+    {
+      toggleBtn: 'device-group-quickadd-toggle',
+      panel: 'device-group-quickadd-panel',
+      nameInput: 'device-group-quickadd-name',
+      descInput: 'device-group-quickadd-desc',
+      errorBox: 'device-group-quickadd-error',
+      createBtn: 'device-group-quickadd-create-btn',
+      cancelBtn: 'device-group-quickadd-cancel-btn',
+      select: 'device-group-select',
+    },
+    '/api/device-groups',
+    loadDeviceGroupOptions
+  );
+</script>
+{% endblock %}

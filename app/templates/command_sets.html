@@ -1,0 +1,434 @@
+{% extends "app_shell.html" %}
+{% block title %}Command Sets — AAA Management Platform{% endblock %}
+{% block breadcrumb %}TACACS+ / Command Sets{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Command Sets</h1>
+    <p class="content-sub">Reusable, named permit/deny rule collections — a Policy references one or more Command Sets instead of duplicating rules. Manage which policies use a set, and view its usage before deleting it.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">
+      <strong style="color:var(--text-primary);">Denied commands always win</strong> — across every set a policy references, not just within one set. A broad <code>permit ^show</code> in one set and a specific <code>deny ^show running-config</code> in another still results in that one command being denied.
+      <br><br>
+      <strong style="color:var(--text-primary);">Patterns are regex, not wildcards.</strong> To match every "show" command, use <code>^show</code> — not <code>show*</code>, which in regex means "sho" followed by zero-or-more "w" characters, not "show anything." A few common patterns: <code>^show</code> (all show commands), <code>^configure terminal</code> (entering config mode), <code>^reload$</code> (exactly the reload command, nothing after it).
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="set-count"></span>
+    <button class="btn-primary btn-small" id="add-set-btn" style="width:auto;">+ Add command set</button>
+  </div>
+
+  <div id="sets-table-wrap">
+    <div class="empty-state">Loading command sets…</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="set-modal-backdrop" hidden>
+  <div class="modal" style="max-width: 680px; max-height: 88vh; overflow-y: auto;">
+    <h2 id="set-modal-title">Add command set</h2>
+
+    <div style="margin-bottom:18px;">
+      <div class="field-label" style="margin-bottom:8px;">Start from a template (optional)</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" class="btn-secondary btn-small" data-template="network_manager" style="width:auto;">Cisco Network Manager</button>
+        <button type="button" class="btn-secondary btn-small" data-template="auditor" style="width:auto;">Cisco Auditor (read-only)</button>
+      </div>
+      <div class="field-hint" style="margin-top:6px;">A full-access "Admin" policy doesn't need a command set at all — just set its default action to Permit on the Policies page.</div>
+    </div>
+
+    <form id="set-form">
+      <input type="hidden" id="set-id">
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Name</span>
+          <input type="text" id="set-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        </label>
+        <label class="field">
+          <span class="field-label">Vendor</span>
+          <input type="text" id="set-vendor" value="cisco_ios">
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Description</span>
+        <input type="text" id="set-description">
+      </label>
+
+      <label class="checkbox-field field" style="margin-bottom:18px;">
+        <input type="checkbox" id="set-enabled" checked>
+        <span>Enabled (a disabled set is skipped everywhere it's referenced)</span>
+      </label>
+
+      <div class="field-label" style="margin-bottom:8px;color:var(--red);">Denied commands</div>
+      <div id="deny-rules-list" style="margin-bottom:8px;"></div>
+      <button type="button" class="btn-secondary btn-small" id="add-deny-rule-btn" style="width:auto;margin-bottom:20px;">+ Add denied command</button>
+
+      <div class="field-label" style="margin-bottom:8px;color:var(--signal);">Permitted commands</div>
+      <div id="permit-rules-list" style="margin-bottom:8px;"></div>
+      <button type="button" class="btn-secondary btn-small" id="add-permit-rule-btn" style="width:auto;margin-bottom:16px;">+ Add permitted command</button>
+
+      <div id="set-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="set-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Save command set</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  let commandSets = [];
+  let categories = [];
+  let currentDenyRules = [];
+  let currentPermitRules = [];
+
+  const CISCO_TEMPLATES = {
+    network_manager: {
+      name: 'cisco-network-manager-rules',
+      description: 'Show/ping/traceroute/config-mode permitted; reload and erase denied.',
+      permit: [
+        { command_pattern: '^show', description: 'all show commands' },
+        { command_pattern: '^ping', description: '' },
+        { command_pattern: '^traceroute', description: '' },
+        { command_pattern: '^configure terminal', description: 'enter config mode' },
+        { command_pattern: '^interface', description: '' },
+        { command_pattern: '^exit$', description: '' },
+        { command_pattern: '^end$', description: '' },
+        { command_pattern: '^write memory', description: 'save config (not erase)' },
+      ],
+      deny: [
+        { command_pattern: '^reload', description: 'reboot the device' },
+        { command_pattern: '^write erase', description: 'factory reset' },
+        { command_pattern: '^erase', description: '' },
+        { command_pattern: '^format', description: '' },
+        { command_pattern: '^no aaa', description: "can't disable AAA itself" },
+      ],
+    },
+    auditor: {
+      name: 'cisco-auditor-rules',
+      description: 'Read-only — show and display-formatting commands only.',
+      permit: [
+        { command_pattern: '^show', description: 'all show commands' },
+        { command_pattern: '^terminal', description: 'display formatting only' },
+        { command_pattern: '^exit$', description: '' },
+      ],
+      deny: [],
+    },
+  };
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  async function loadCategories() {
+    const res = await AAAPlatform.authedFetch('/api/command-categories');
+    if (res.ok) categories = await res.json();
+  }
+
+  function categoryOptionsHtml(selectedId) {
+    return '<option value="">— none —</option>' +
+      categories.map(c => `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${escapeHtml(c.name)}</option>`).join('');
+  }
+
+  function renderTable() {
+    const wrap = document.getElementById('sets-table-wrap');
+    document.getElementById('set-count').textContent = commandSets.length + (commandSets.length === 1 ? ' command set' : ' command sets');
+
+    if (commandSets.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No command sets yet.</div>';
+      return;
+    }
+
+    const rows = commandSets.map(cs => {
+      const denyCount = cs.rules.filter(r => r.action === 'deny').length;
+      const permitCount = cs.rules.filter(r => r.action === 'permit').length;
+      return `
+      <tr>
+        <td>${escapeHtml(cs.name)}</td>
+        <td class="cell-mono">${escapeHtml(cs.vendor)}</td>
+        <td>${cs.enabled ? '<span class="badge badge-on">Enabled</span>' : '<span class="badge badge-off">Disabled</span>'}</td>
+        <td class="cell-mono">${permitCount} permit / ${denyCount} deny</td>
+        <td class="cell-mono">${cs.policy_count} ${cs.policy_count === 1 ? 'policy' : 'policies'}</td>
+        <td class="cell-actions">
+          <button class="btn-secondary btn-small" data-edit="${cs.id}">Edit</button>
+          <button class="btn-danger btn-small" data-delete="${cs.id}">Delete</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th>Name</th><th>Vendor</th><th>Status</th><th>Rules</th><th>Used by</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.addEventListener('click', () => openModal(commandSets.find(cs => cs.id === btn.dataset.edit)));
+    });
+    wrap.querySelectorAll('[data-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deleteSet(btn.dataset.delete));
+    });
+  }
+
+  async function loadSets() {
+    const res = await AAAPlatform.authedFetch('/api/command-sets');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    commandSets = await res.json();
+    renderTable();
+  }
+
+  function escapeRegexLiteral(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  // Reverse-engineers a friendly (mode, value) pair from a raw regex
+  // pattern for editing an EXISTING rule -- falls back to "custom"
+  // (showing the raw pattern as-is) whenever the pattern doesn't
+  // cleanly fit one of the three simple shapes below, which is always
+  // a safe, correct fallback: nothing about existing data is ever
+  // lost or silently reinterpreted, it just doesn't get the friendly
+  // editing view.
+  function patternToModeAndValue(pattern) {
+    const hasRegexMeta = (s) => /[.*+?()[\]{}|\\^$]/.test(s);
+    if (pattern.startsWith('^') && pattern.endsWith('$') && pattern.length > 1) {
+      const inner = pattern.slice(1, -1);
+      if (!hasRegexMeta(inner)) return { match_mode: 'exact', match_value: inner };
+    }
+    if (pattern.startsWith('^') && !pattern.endsWith('$')) {
+      const inner = pattern.slice(1);
+      if (!hasRegexMeta(inner)) return { match_mode: 'starts_with', match_value: inner };
+    }
+    if (!pattern.startsWith('^') && !pattern.endsWith('$') && !hasRegexMeta(pattern)) {
+      return { match_mode: 'contains', match_value: pattern };
+    }
+    return { match_mode: 'custom', match_value: pattern };
+  }
+
+  // The inverse -- computes the actual regex `command_pattern` sent
+  // to the API from a friendly mode + a PLAIN-TEXT value. The value
+  // is escaped for starts_with/contains/exact so a literal character
+  // like "." in a command name (e.g. "show ip.route") is matched as
+  // itself, not as regex "any character" -- "custom" mode passes the
+  // value straight through unescaped, since there the admin is
+  // deliberately writing regex, not plain text.
+  function modeAndValueToPattern(mode, value) {
+    const escaped = escapeRegexLiteral(value);
+    if (mode === 'starts_with') return '^' + escaped;
+    if (mode === 'contains') return escaped;
+    if (mode === 'exact') return '^' + escaped + '$';
+    return value; // custom
+  }
+
+  function renderRuleList(containerId, arr, onChange) {
+    const container = document.getElementById(containerId);
+    if (arr.length === 0) {
+      container.innerHTML = '<div class="content-sub" style="padding:4px 0;">None.</div>';
+      return;
+    }
+    container.innerHTML = arr.map((r, i) => `
+      <div class="field-row" style="align-items:flex-end;margin-bottom:6px;">
+        <label class="field" style="flex:0 0 130px;">
+          <span class="field-label">Match</span>
+          <select data-field="match_mode" data-index="${i}">
+            <option value="starts_with" ${r.match_mode === 'starts_with' ? 'selected' : ''}>Starts with</option>
+            <option value="contains" ${r.match_mode === 'contains' ? 'selected' : ''}>Contains</option>
+            <option value="exact" ${r.match_mode === 'exact' ? 'selected' : ''}>Exact match</option>
+            <option value="custom" ${r.match_mode === 'custom' ? 'selected' : ''}>Custom regex</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="field-label">${r.match_mode === 'custom' ? 'Regex pattern' : 'Command text'}</span>
+          <input type="text" data-field="match_value" data-index="${i}" value="${escapeHtml(r.match_value)}" placeholder="${r.match_mode === 'custom' ? '^show' : 'show'}">
+        </label>
+        <label class="field">
+          <span class="field-label">Category</span>
+          <select data-field="category_id" data-index="${i}">${categoryOptionsHtml(r.category_id)}</select>
+        </label>
+        <label class="field">
+          <span class="field-label">Note</span>
+          <input type="text" data-field="description" data-index="${i}" value="${escapeHtml(r.description || '')}" placeholder="optional">
+        </label>
+        <button type="button" class="btn-danger btn-small" data-remove="${i}" style="margin-bottom:2px;">×</button>
+      </div>
+      <div class="content-sub" style="margin:-4px 0 10px 4px;font-family:var(--font-mono);">→ ${escapeHtml(modeAndValueToPattern(r.match_mode, r.match_value) || '(empty)')}</div>
+    `).join('');
+
+    container.querySelectorAll('[data-field="match_mode"]').forEach(el => {
+      el.addEventListener('change', () => {
+        arr[parseInt(el.dataset.index, 10)].match_mode = el.value;
+        onChange(); // re-render: the value field's label/placeholder depend on mode
+      });
+    });
+    container.querySelectorAll('[data-field="match_value"]').forEach(el => {
+      el.addEventListener('input', () => {
+        const i = parseInt(el.dataset.index, 10);
+        arr[i].match_value = el.value;
+        // Live-update the preview line without a full re-render (keeps focus in the input)
+        const preview = el.closest('.field-row').nextElementSibling;
+        if (preview) preview.textContent = '→ ' + (modeAndValueToPattern(arr[i].match_mode, arr[i].match_value) || '(empty)');
+      });
+    });
+    container.querySelectorAll('[data-field="category_id"], [data-field="description"]').forEach(el => {
+      el.addEventListener('input', () => { arr[parseInt(el.dataset.index, 10)][el.dataset.field] = el.value; });
+      el.addEventListener('change', () => { arr[parseInt(el.dataset.index, 10)][el.dataset.field] = el.value; });
+    });
+    container.querySelectorAll('[data-remove]').forEach(btn => {
+      btn.addEventListener('click', () => { arr.splice(parseInt(btn.dataset.remove, 10), 1); onChange(); });
+    });
+  }
+
+  function renderDenyList() { renderRuleList('deny-rules-list', currentDenyRules, renderDenyList); }
+  function renderPermitList() { renderRuleList('permit-rules-list', currentPermitRules, renderPermitList); }
+
+  document.getElementById('add-deny-rule-btn').addEventListener('click', () => {
+    currentDenyRules.push({ match_mode: 'starts_with', match_value: '', description: '', category_id: null });
+    renderDenyList();
+  });
+  document.getElementById('add-permit-rule-btn').addEventListener('click', () => {
+    currentPermitRules.push({ match_mode: 'starts_with', match_value: '', description: '', category_id: null });
+    renderPermitList();
+  });
+
+  document.querySelectorAll('[data-template]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const t = CISCO_TEMPLATES[btn.dataset.template];
+      document.getElementById('set-name').value = t.name;
+      document.getElementById('set-description').value = t.description;
+      currentPermitRules = t.permit.map(r => ({ ...patternToModeAndValue(r.command_pattern), description: r.description, category_id: null }));
+      currentDenyRules = t.deny.map(r => ({ ...patternToModeAndValue(r.command_pattern), description: r.description, category_id: null }));
+      renderPermitList();
+      renderDenyList();
+    });
+  });
+
+  function openModal(commandSet) {
+    document.getElementById('set-form-error').hidden = true;
+    document.getElementById('set-form').reset();
+    document.getElementById('set-vendor').value = 'cisco_ios';
+    document.getElementById('set-enabled').checked = true;
+
+    if (commandSet) {
+      document.getElementById('set-modal-title').textContent = 'Edit command set';
+      document.getElementById('set-id').value = commandSet.id;
+      document.getElementById('set-name').value = commandSet.name;
+      document.getElementById('set-vendor').value = commandSet.vendor;
+      document.getElementById('set-description').value = commandSet.description || '';
+      document.getElementById('set-enabled').checked = commandSet.enabled;
+      currentDenyRules = commandSet.rules.filter(r => r.action === 'deny').map(r => ({ ...patternToModeAndValue(r.command_pattern), description: r.description || '', category_id: r.category_id }));
+      currentPermitRules = commandSet.rules.filter(r => r.action === 'permit').map(r => ({ ...patternToModeAndValue(r.command_pattern), description: r.description || '', category_id: r.category_id }));
+    } else {
+      document.getElementById('set-modal-title').textContent = 'Add command set';
+      document.getElementById('set-id').value = '';
+      currentDenyRules = [];
+      currentPermitRules = [];
+    }
+    renderDenyList();
+    renderPermitList();
+    document.getElementById('set-modal-backdrop').hidden = false;
+  }
+
+  function closeModal() {
+    document.getElementById('set-modal-backdrop').hidden = true;
+  }
+
+  document.getElementById('add-set-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('set-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('set-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'set-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('set-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('set-form-error');
+    errorBox.hidden = true;
+
+    const id = document.getElementById('set-id').value;
+    const allRules = [...currentDenyRules, ...currentPermitRules];
+    const emptyValue = allRules.find(r => !r.match_value.trim());
+    if (emptyValue) {
+      errorBox.textContent = 'Every command rule needs a value — remove any blank rows first.';
+      errorBox.hidden = false;
+      return;
+    }
+    // Validate that "custom regex" rows are actually valid regex
+    // client-side too, before hitting the API's own validation --
+    // catches a typo immediately instead of round-tripping a 400.
+    const badRegex = allRules.find(r => {
+      try { new RegExp(modeAndValueToPattern(r.match_mode, r.match_value)); return false; }
+      catch (err) { return true; }
+    });
+    if (badRegex) {
+      errorBox.textContent = `"${badRegex.match_value}" is not a valid regular expression.`;
+      errorBox.hidden = false;
+      return;
+    }
+
+    const payload = {
+      name: document.getElementById('set-name').value,
+      description: document.getElementById('set-description').value || null,
+      vendor: document.getElementById('set-vendor').value || 'cisco_ios',
+      enabled: document.getElementById('set-enabled').checked,
+      rules: [
+        ...currentDenyRules.map((r, i) => ({ order: i, action: 'deny', command_pattern: modeAndValueToPattern(r.match_mode, r.match_value), description: r.description || null, category_id: r.category_id || null })),
+        ...currentPermitRules.map((r, i) => ({ order: i, action: 'permit', command_pattern: modeAndValueToPattern(r.match_mode, r.match_value), description: r.description || null, category_id: r.category_id || null })),
+      ],
+    };
+
+    const url = id ? `/api/command-sets/${id}` : '/api/command-sets';
+    const method = id ? 'PUT' : 'POST';
+
+    const res = await AAAPlatform.authedFetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Could not save command set.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+
+    closeModal();
+    AAAPlatform.toast(id ? 'Command set updated.' : 'Command set added.');
+    loadSets();
+  });
+
+  async function deleteSet(id) {
+    const cs = commandSets.find(c => c.id === id);
+    if (cs && cs.policy_count > 0) {
+      AAAPlatform.toast(`Referenced by ${cs.policy_count} polic${cs.policy_count === 1 ? 'y' : 'ies'} — remove those references first.`, 'error');
+      return;
+    }
+    if (!confirm(`Delete command set "${cs ? cs.name : id}"?`)) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/command-sets/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      AAAPlatform.toast((body.detail && typeof body.detail === 'string') ? body.detail : 'Could not delete command set.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Command set deleted.');
+    loadSets();
+  }
+
+  (async function init() {
+    await loadCategories();
+    await loadSets();
+  })();
+</script>
+{% endblock %}

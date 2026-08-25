@@ -1,0 +1,169 @@
+{% extends "app_shell.html" %}
+{% block title %}Sessions — AAA Management Platform{% endblock %}
+{% block breadcrumb %}TACACS+ / Sessions{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>TACACS+ Sessions</h1>
+    <p class="content-sub">Correlated from accounting records sharing the same device and port — start and stop records on the same device+port are paired into one session.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">
+      <strong style="color:var(--text-primary);">On "active":</strong> a session is only shown as active when a start record exists with no matching stop record yet observed in the current log — a genuine, data-backed observation, not an assumption. <strong style="color:var(--text-primary);">On correlation:</strong> tac_plus-ng has a real, protocol-level session identifier (task_id), but it turned out not to be usable in a custom accounting format string — a real deployment caught that with a fatal config error, and it was removed. Sessions here are correlated by (device, port) instead: a heuristic that assumes at most one open session per device+port at a time, true for the large majority of real deployments but not a protocol-level guarantee the way task_id would have been.
+    </div>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body">
+      <div class="field-row" style="align-items:flex-end;">
+        <label class="field">
+          <span class="field-label">User</span>
+          <input type="text" id="filter-user" placeholder="username">
+        </label>
+        <label class="field">
+          <span class="field-label">Device</span>
+          <input type="text" id="filter-device" placeholder="device name">
+        </label>
+        <label class="checkbox-field field" style="flex:0 0 auto;padding-bottom:8px;">
+          <input type="checkbox" id="filter-active-only">
+          <span>Active only</span>
+        </label>
+        <button class="btn-primary btn-small" id="apply-filters-btn" style="width:auto;">Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="session-count"></span>
+  </div>
+
+  <div id="sessions-table-wrap">
+    <div class="empty-state">Loading sessions…</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="session-modal-backdrop" hidden>
+  <div class="modal" style="max-width: 600px;">
+    <h2>Session detail</h2>
+    <div id="session-detail-body" class="mono"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="session-detail-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  let sessions = [];
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function formatDuration(startIso, stopIso) {
+    if (!startIso) return '—';
+    const start = new Date(startIso);
+    const end = stopIso ? new Date(stopIso) : new Date();
+    const seconds = Math.max(0, Math.round((end - start) / 1000));
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}m ${s}s${stopIso ? '' : ' (ongoing)'}`;
+  }
+
+  function renderTable() {
+    const wrap = document.getElementById('sessions-table-wrap');
+    document.getElementById('session-count').textContent = sessions.length + (sessions.length === 1 ? ' session' : ' sessions');
+
+    if (sessions.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No sessions found in the current log tail.</div>';
+      return;
+    }
+
+    const rows = sessions.map((s, i) => `
+      <tr>
+        <td>${s.is_active ? '<span class="badge badge-on">Active</span>' : '<span class="badge">Closed</span>'}</td>
+        <td>${escapeHtml(s.user)}</td>
+        <td>${escapeHtml(s.device)}</td>
+        <td class="cell-mono">${escapeHtml(s.source_ip)}</td>
+        <td class="cell-mono">${s.start_at ? new Date(s.start_at).toLocaleString() : '—'}</td>
+        <td class="cell-mono">${formatDuration(s.start_at, s.stop_at)}</td>
+        <td class="cell-mono">${s.commands.length}</td>
+        <td class="cell-actions">
+          <button class="btn-secondary btn-small" data-index="${i}">Detail</button>
+        </td>
+      </tr>
+    `).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th>Status</th><th>User</th><th>Device</th><th>Source</th><th>Started</th><th>Duration</th><th>Commands</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-index]').forEach(btn => {
+      btn.addEventListener('click', () => showDetail(sessions[parseInt(btn.dataset.index, 10)]));
+    });
+  }
+
+  function showDetail(session) {
+    if (!session) return;
+    const body = document.getElementById('session-detail-body');
+    const timeline = [];
+    if (session.start_at) timeline.push(`${new Date(session.start_at).toLocaleTimeString()}  Accounting Start`);
+    session.commands.forEach(cmd => timeline.push(`  ...  Command: ${cmd}`));
+    if (session.stop_at) timeline.push(`${new Date(session.stop_at).toLocaleTimeString()}  Accounting Stop`);
+    else timeline.push('(no stop record observed yet)');
+
+    body.innerHTML = `
+      <div class="readout"><span class="readout-k">user</span><span class="readout-v">${escapeHtml(session.user)}</span></div>
+      <div class="readout"><span class="readout-k">device</span><span class="readout-v">${escapeHtml(session.device)}</span></div>
+      <div class="readout"><span class="readout-k">port</span><span class="readout-v">${escapeHtml(session.port)}</span></div>
+      <div class="readout"><span class="readout-k">source</span><span class="readout-v">${escapeHtml(session.source_ip)}</span></div>
+      <div class="readout"><span class="readout-k">duration</span><span class="readout-v">${formatDuration(session.start_at, session.stop_at)}</span></div>
+      <div style="margin-top:16px;" class="diff-view">${timeline.map(escapeHtml).join('\\n')}</div>
+    `;
+    document.getElementById('session-modal-backdrop').hidden = false;
+  }
+
+  document.getElementById('session-detail-close-btn').addEventListener('click', () => {
+    document.getElementById('session-modal-backdrop').hidden = true;
+  });
+  document.getElementById('session-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'session-modal-backdrop') document.getElementById('session-modal-backdrop').hidden = true;
+  });
+
+  async function loadSessions() {
+    const wrap = document.getElementById('sessions-table-wrap');
+    wrap.innerHTML = '<div class="empty-state">Loading…</div>';
+
+    const params = new URLSearchParams();
+    const user = document.getElementById('filter-user').value.trim();
+    const device = document.getElementById('filter-device').value.trim();
+    if (user) params.set('user', user);
+    if (device) params.set('device', device);
+    if (document.getElementById('filter-active-only').checked) params.set('active_only', 'true');
+
+    const res = await AAAPlatform.authedFetch('/api/tacacs-accounting/sessions' + (params.toString() ? '?' + params.toString() : ''));
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) {
+      wrap.innerHTML = '<div class="empty-state">Could not load sessions.</div>';
+      return;
+    }
+    const data = await res.json();
+    sessions = data.sessions;
+    renderTable();
+  }
+
+  document.getElementById('apply-filters-btn').addEventListener('click', loadSessions);
+
+  loadSessions();
+</script>
+{% endblock %}

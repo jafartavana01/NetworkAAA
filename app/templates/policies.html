@@ -1,0 +1,491 @@
+{% extends "app_shell.html" %}
+{% block title %}Policies — AAA Management Platform{% endblock %}
+{% block breadcrumb %}TACACS+ / Policies{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Authorization Policies</h1>
+    <p class="content-sub">A policy is self-contained: it declares both when it applies (conditions below) and what it grants (privilege level + referenced Command Sets). Enabled policies are evaluated in ascending priority order — the first full match wins. Drag rows by the <span class="cell-mono">⠿</span> handle to reorder priority — every policy below the drop point is automatically renumbered.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">
+      <strong style="color:var(--text-primary);">Conditions:</strong> leave a condition as "— Any —" to match everyone/everywhere on that dimension. A policy with no conditions at all matches unconditionally — useful as a low-priority catch-all.
+      <br><br>
+      <strong style="color:var(--text-primary);">Command rules</strong> now live on Command Sets, not here — a policy grants access by referencing one or more sets below. Manage the actual permit/deny rules on the <a href="/tacacs/command-sets">Command Sets</a> page.
+      <br><br>
+      <strong style="color:var(--text-primary);">On privilege levels:</strong> Cisco IOS only meaningfully distinguishes level 1 (user) and 15 (enable) out of the box. Intermediate levels only do anything if the device itself has custom <code>privilege exec level</code> mappings configured.
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="policy-count"></span>
+    <button class="btn-primary btn-small" id="add-policy-btn" style="width:auto;">+ Add policy</button>
+  </div>
+
+  <div id="policies-table-wrap">
+    <div class="empty-state">Loading policies…</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="policy-modal-backdrop" hidden>
+  <div class="modal" style="max-width: 640px; max-height: 88vh; overflow-y: auto;">
+    <h2 id="policy-modal-title">Add policy</h2>
+    <form id="policy-form">
+      <input type="hidden" id="policy-id">
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Name</span>
+          <input type="text" id="policy-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        </label>
+        <label class="field">
+          <span class="field-label">Priority</span>
+          <input type="number" id="policy-priority" min="0" max="100000" value="100" required>
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Lower numbers are evaluated first. Must be unique — two policies can't share the same priority. Letters/digits/hyphens/underscores only in the name — used directly as the tac_plus-ng profile identifier.</div>
+
+      <label class="field">
+        <span class="field-label">Description</span>
+        <input type="text" id="policy-description">
+      </label>
+
+      <label class="checkbox-field field" style="margin-bottom:18px;">
+        <input type="checkbox" id="policy-enabled" checked>
+        <span>Enabled</span>
+      </label>
+
+      <div class="field-label" style="margin-bottom:8px;">Conditions</div>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Group</span>
+          <select id="policy-condition-group"><option value="">— Any —</option></select>
+        </label>
+        <label class="field">
+          <span class="field-label">Device</span>
+          <select id="policy-condition-device"><option value="">— Any —</option></select>
+        </label>
+      </div>
+      <label class="field">
+        <span class="field-label">Device group</span>
+        <select id="policy-condition-device-group"><option value="">— Any —</option></select>
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:18px;">Multiple conditions combine with AND — e.g. Group + Device Group together means "this group, only on these devices."</div>
+
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Privilege level</span>
+          <input type="number" id="policy-priv-lvl" min="0" max="15" value="1" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Default action</span>
+          <select id="policy-default-action">
+            <option value="deny">Deny — block anything not covered by a referenced set</option>
+            <option value="permit">Permit — allow anything not covered by a referenced set</option>
+          </select>
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:18px;">A full-access "Admin" policy needs no Command Sets at all — just Permit here.</div>
+
+      <div class="field-label" style="margin-bottom:8px;">Command Sets</div>
+      <div id="command-sets-checklist" style="margin-bottom:16px;"></div>
+
+      <label class="field">
+        <span class="field-label">Change description (optional)</span>
+        <input type="text" id="policy-change-description" placeholder="e.g. Widened access for on-call rotation">
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Recorded with this save's version history entry — visible later in Version History.</div>
+
+      <div id="policy-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="policy-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Save policy</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="history-modal-backdrop" hidden>
+  <div class="modal" style="max-width: 640px; max-height: 88vh; overflow-y: auto;">
+    <h2 id="history-modal-title">Version History</h2>
+    <div id="history-list"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="history-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  let policies = [];
+  let allGroups = [];
+  let allDevices = [];
+  let allDeviceGroups = [];
+  let allCommandSets = [];
+  let currentCommandSetIds = [];
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  async function loadReferenceData() {
+    const [groupsRes, devicesRes, deviceGroupsRes, setsRes] = await Promise.all([
+      AAAPlatform.authedFetch('/api/tacacs-groups'),
+      AAAPlatform.authedFetch('/api/devices'),
+      AAAPlatform.authedFetch('/api/device-groups'),
+      AAAPlatform.authedFetch('/api/command-sets'),
+    ]);
+    allGroups = groupsRes.ok ? await groupsRes.json() : [];
+    allDevices = devicesRes.ok ? await devicesRes.json() : [];
+    allDeviceGroups = deviceGroupsRes.ok ? await deviceGroupsRes.json() : [];
+    allCommandSets = setsRes.ok ? await setsRes.json() : [];
+
+    document.getElementById('policy-condition-group').innerHTML =
+      '<option value="">— Any —</option>' + allGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    document.getElementById('policy-condition-device').innerHTML =
+      '<option value="">— Any —</option>' + allDevices.map(d => `<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
+    document.getElementById('policy-condition-device-group').innerHTML =
+      '<option value="">— Any —</option>' + allDeviceGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  }
+
+  function renderCommandSetsChecklist() {
+    const container = document.getElementById('command-sets-checklist');
+    if (allCommandSets.length === 0) {
+      container.innerHTML = `<div class="content-sub">No command sets exist yet. <a href="/tacacs/command-sets">Create one</a> first, or leave this policy unrestricted with Default action = Permit.</div>`;
+      return;
+    }
+    container.innerHTML = allCommandSets.map(cs => `
+      <label class="checkbox-field field" style="margin-bottom:6px;">
+        <input type="checkbox" data-set-id="${cs.id}" ${currentCommandSetIds.includes(cs.id) ? 'checked' : ''}>
+        <span>${escapeHtml(cs.name)}${!cs.enabled ? ' <span class="content-sub">(disabled)</span>' : ''}</span>
+      </label>
+    `).join('');
+
+    container.querySelectorAll('[data-set-id]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const id = cb.dataset.setId;
+        if (cb.checked && !currentCommandSetIds.includes(id)) currentCommandSetIds.push(id);
+        if (!cb.checked) currentCommandSetIds = currentCommandSetIds.filter(x => x !== id);
+      });
+    });
+  }
+
+  function renderTable() {
+    const wrap = document.getElementById('policies-table-wrap');
+    document.getElementById('policy-count').textContent = policies.length + (policies.length === 1 ? ' policy' : ' policies');
+
+    if (policies.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No policies yet. Add one to get started.</div>';
+      return;
+    }
+
+    const rows = policies.map((p, i) => {
+      const conditionParts = [];
+      if (p.condition_group_name) conditionParts.push(`group=${p.condition_group_name}`);
+      if (p.condition_device_name) conditionParts.push(`device=${p.condition_device_name}`);
+      if (p.condition_device_group_name) conditionParts.push(`device-group=${p.condition_device_group_name}`);
+      const conditionsText = conditionParts.length ? conditionParts.join(', ') : 'unconditional';
+
+      return `
+      <tr draggable="true" data-row-index="${i}" class="draggable-row">
+        <td class="drag-handle" title="Drag to reorder priority">⠿</td>
+        <td>${escapeHtml(p.name)}</td>
+        <td class="cell-mono">${p.priority}</td>
+        <td>${p.enabled ? '<span class="badge badge-on">Enabled</span>' : '<span class="badge badge-off">Disabled</span>'}</td>
+        <td class="cell-mono">${escapeHtml(conditionsText)}</td>
+        <td>${p.command_sets.length ? p.command_sets.map(cs => escapeHtml(cs.name)).join(', ') : '<span class="content-sub">none</span>'}</td>
+        <td class="cell-mono">priv ${p.default_priv_lvl}, ${p.default_action}</td>
+        <td class="cell-actions">
+          <button class="btn-secondary btn-small" data-edit="${p.id}">Edit</button>
+          <button class="btn-secondary btn-small" data-history="${p.id}">History</button>
+          <button class="btn-danger btn-small" data-delete="${p.id}">Delete</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th></th><th>Name</th><th>Priority</th><th>Status</th><th>Conditions</th><th>Command Sets</th><th>Grants</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.addEventListener('click', () => openModal(policies.find(p => p.id === btn.dataset.edit)));
+    });
+    wrap.querySelectorAll('[data-history]').forEach(btn => {
+      btn.addEventListener('click', () => openHistory(policies.find(p => p.id === btn.dataset.history)));
+    });
+    wrap.querySelectorAll('[data-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deletePolicy(btn.dataset.delete));
+    });
+
+    attachDragHandlers(wrap);
+  }
+
+  let draggedRowIndex = null;
+
+  function attachDragHandlers(wrap) {
+    wrap.querySelectorAll('tr.draggable-row').forEach(row => {
+      row.addEventListener('dragstart', () => {
+        draggedRowIndex = parseInt(row.dataset.rowIndex, 10);
+        row.classList.add('is-dragging');
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('is-dragging');
+        wrap.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+      });
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        row.classList.add('drag-over');
+      });
+      row.addEventListener('dragleave', () => {
+        row.classList.remove('drag-over');
+      });
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        row.classList.remove('drag-over');
+        const targetIndex = parseInt(row.dataset.rowIndex, 10);
+        if (draggedRowIndex === null || draggedRowIndex === targetIndex) return;
+        reorderPolicies(draggedRowIndex, targetIndex);
+        draggedRowIndex = null;
+      });
+    });
+  }
+
+  async function reorderPolicies(fromIndex, toIndex) {
+    const reordered = [...policies];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+
+    // Single bulk request, one transaction server-side -- priorities
+    // are UNIQUE now (deferred constraint; see app/models/policy.py),
+    // so this can't be done as separate sequential PUTs anymore: a
+    // policy moving onto another's CURRENT priority a moment before
+    // that other policy moves off it would violate uniqueness on an
+    // individual, immediately-committed request. The bulk endpoint
+    // reassigns everyone within one transaction, where that transient
+    // state is fine and only the final, fully-unique arrangement is
+    // ever actually checked.
+    const res = await AAAPlatform.authedFetch('/api/policies/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ordered_ids: reordered.map(p => p.id) }),
+    });
+
+    if (!res.ok) {
+      AAAPlatform.toast('Could not reorder policies.', 'error');
+      return;
+    }
+
+    AAAPlatform.toast('Priority order updated.');
+    loadPolicies();
+  }
+
+  async function loadPolicies() {
+    const res = await AAAPlatform.authedFetch('/api/policies');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    policies = await res.json();
+    renderTable();
+  }
+
+  function openModal(policy) {
+    document.getElementById('policy-form-error').hidden = true;
+    document.getElementById('policy-form').reset();
+    document.getElementById('policy-change-description').value = '';
+
+    if (policy) {
+      document.getElementById('policy-modal-title').textContent = 'Edit policy';
+      document.getElementById('policy-id').value = policy.id;
+      document.getElementById('policy-name').value = policy.name;
+      document.getElementById('policy-priority').value = policy.priority;
+      document.getElementById('policy-description').value = policy.description || '';
+      document.getElementById('policy-enabled').checked = policy.enabled;
+      document.getElementById('policy-condition-group').value = policy.condition_group_id || '';
+      document.getElementById('policy-condition-device').value = policy.condition_device_id || '';
+      document.getElementById('policy-condition-device-group').value = policy.condition_device_group_id || '';
+      document.getElementById('policy-priv-lvl').value = policy.default_priv_lvl;
+      document.getElementById('policy-default-action').value = policy.default_action;
+      currentCommandSetIds = policy.command_sets.map(cs => cs.id);
+    } else {
+      document.getElementById('policy-modal-title').textContent = 'Add policy';
+      document.getElementById('policy-id').value = '';
+      document.getElementById('policy-priority').value = 100;
+      document.getElementById('policy-priv-lvl').value = 1;
+      document.getElementById('policy-default-action').value = 'deny';
+      currentCommandSetIds = [];
+    }
+    renderCommandSetsChecklist();
+    document.getElementById('policy-modal-backdrop').hidden = false;
+  }
+
+  function closeModal() {
+    document.getElementById('policy-modal-backdrop').hidden = true;
+  }
+
+  document.getElementById('add-policy-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('policy-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('policy-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'policy-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('policy-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('policy-form-error');
+    errorBox.hidden = true;
+
+    const id = document.getElementById('policy-id').value;
+    const payload = {
+      name: document.getElementById('policy-name').value,
+      description: document.getElementById('policy-description').value || null,
+      enabled: document.getElementById('policy-enabled').checked,
+      priority: parseInt(document.getElementById('policy-priority').value, 10),
+      condition_group_id: document.getElementById('policy-condition-group').value || null,
+      condition_device_id: document.getElementById('policy-condition-device').value || null,
+      condition_device_group_id: document.getElementById('policy-condition-device-group').value || null,
+      default_priv_lvl: parseInt(document.getElementById('policy-priv-lvl').value, 10),
+      default_action: document.getElementById('policy-default-action').value,
+      command_set_ids: currentCommandSetIds,
+      change_description: document.getElementById('policy-change-description').value || null,
+    };
+
+    const url = id ? `/api/policies/${id}` : '/api/policies';
+    const method = id ? 'PUT' : 'POST';
+
+    const res = await AAAPlatform.authedFetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Could not save policy.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+
+    closeModal();
+    AAAPlatform.toast(id ? 'Policy updated.' : 'Policy added.');
+    loadPolicies();
+  });
+
+  async function deletePolicy(id) {
+    const policy = policies.find(p => p.id === id);
+    if (!confirm(`Delete policy "${policy ? policy.name : id}"?`)) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/policies/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not delete policy.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Policy deleted.');
+    loadPolicies();
+  }
+
+  let currentHistoryPolicyId = null;
+
+  async function openHistory(policy) {
+    if (!policy) return;
+    currentHistoryPolicyId = policy.id;
+    document.getElementById('history-modal-title').textContent = `Version History — ${policy.name}`;
+    await renderHistoryList();
+    document.getElementById('history-modal-backdrop').hidden = false;
+  }
+
+  async function renderHistoryList() {
+    const list = document.getElementById('history-list');
+    list.innerHTML = '<div class="content-sub">Loading…</div>';
+
+    const res = await AAAPlatform.authedFetch(`/api/policies/${currentHistoryPolicyId}/versions`);
+    if (!res.ok) {
+      list.innerHTML = '<div class="empty-state">Could not load version history.</div>';
+      return;
+    }
+    const data = await res.json();
+    if (data.versions.length === 0) {
+      list.innerHTML = '<div class="empty-state">No versions recorded yet.</div>';
+      return;
+    }
+
+    list.innerHTML = `<div class="version-list">${data.versions.map(v => `
+      <div class="version-row" style="flex-direction:column;align-items:stretch;">
+        <div style="display:flex;justify-content:space-between;align-items:center;width:100%;">
+          <div>
+            <strong>v${v.version_number}</strong>
+            <div class="version-meta">${new Date(v.created_at).toLocaleString()} · ${escapeHtml(v.created_by || 'unknown')}${v.change_description ? ' · ' + escapeHtml(v.change_description) : ''}</div>
+          </div>
+          <div class="version-actions">
+            <button class="btn-secondary btn-small" data-diff="${v.id}">Diff vs. current</button>
+            <button class="btn-secondary btn-small" data-restore="${v.id}">Restore</button>
+          </div>
+        </div>
+        <div class="diff-view" id="diff-${v.id}" style="display:none;margin-top:10px;"></div>
+      </div>
+    `).join('')}</div>`;
+
+    list.querySelectorAll('[data-diff]').forEach(btn => {
+      btn.addEventListener('click', () => toggleDiff(btn.dataset.diff));
+    });
+    list.querySelectorAll('[data-restore]').forEach(btn => {
+      btn.addEventListener('click', () => restoreVersion(btn.dataset.restore));
+    });
+  }
+
+  async function toggleDiff(versionId) {
+    const box = document.getElementById(`diff-${versionId}`);
+    if (box.style.display === 'block') { box.style.display = 'none'; return; }
+
+    box.style.display = 'block';
+    box.textContent = 'Loading…';
+    const res = await AAAPlatform.authedFetch(`/api/policies/${currentHistoryPolicyId}/versions/${versionId}/diff`);
+    if (!res.ok) { box.textContent = 'Could not load diff.'; return; }
+    const data = await res.json();
+    if (data.identical) {
+      box.textContent = 'Identical to the current policy state.';
+      return;
+    }
+    box.textContent = data.changed.map(c => `${c.field}:\n  from: ${JSON.stringify(c.from)}\n  to:   ${JSON.stringify(c.to)}`).join('\n\n');
+  }
+
+  async function restoreVersion(versionId) {
+    if (!confirm('Restore this version? This creates a new version with these values — nothing is deleted.')) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/policies/${currentHistoryPolicyId}/versions/${versionId}/restore`, { method: 'POST' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not restore this version.', 'error');
+      return;
+    }
+    const data = await res.json();
+    if (data.warnings && data.warnings.length) {
+      AAAPlatform.toast(`Restored with ${data.warnings.length} warning(s) — see console.`, 'error');
+      console.warn('Restore warnings:', data.warnings);
+    } else {
+      AAAPlatform.toast('Policy restored.');
+    }
+    await renderHistoryList();
+    loadPolicies();
+  }
+
+  document.getElementById('history-close-btn').addEventListener('click', () => {
+    document.getElementById('history-modal-backdrop').hidden = true;
+  });
+  document.getElementById('history-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'history-modal-backdrop') document.getElementById('history-modal-backdrop').hidden = true;
+  });
+
+  (async function init() {
+    await loadReferenceData();
+    await loadPolicies();
+  })();
+</script>
+{% endblock %}

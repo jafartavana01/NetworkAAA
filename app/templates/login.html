@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Sign in — AAA Management Platform{% endblock %}
+{% block body_class %}auth-body{% endblock %}
+
+{% block content %}
+<main class="auth-shell">
+  <div class="auth-panel">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div class="brand-text">
+        <span class="brand-name">AAA Management Platform</span>
+        <span class="brand-sub">tac_plus-ng control plane</span>
+      </div>
+    </div>
+
+    <form id="login-form" class="auth-form" autocomplete="off">
+      <label class="field">
+        <span class="field-label">Username</span>
+        <input type="text" name="username" id="username" required autofocus autocomplete="username">
+      </label>
+      <label class="field">
+        <span class="field-label">Password</span>
+        <input type="password" name="password" id="password" required autocomplete="current-password">
+      </label>
+
+      <div id="login-error" class="form-error" role="alert" hidden></div>
+
+      <button type="submit" class="btn-primary">Sign in</button>
+    </form>
+
+    <div class="auth-footnote">
+      <span class="dot dot-signal"></span> tac_plus-ng data plane &middot; local PostgreSQL control plane
+    </div>
+  </div>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('login-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const errorBox = document.getElementById('login-error');
+    errorBox.hidden = true;
+
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        errorBox.textContent = body.detail || 'Sign-in failed.';
+        errorBox.hidden = false;
+        return;
+      }
+
+      window.location.href = '/dashboard';
+    } catch (err) {
+      errorBox.textContent = 'Could not reach the management API.';
+      errorBox.hidden = false;
+    }
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,184 @@
+{% extends "app_shell.html" %}
+{% block title %}Command Categories — AAA Management Platform{% endblock %}
+{% block breadcrumb %}TACACS+ / Command Categories{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Command Categories</h1>
+    <p class="content-sub">A vendor-scoped, purely observational taxonomy for command rules — used for filtering and reporting. Assigning a category to a rule never changes what it permits or denies.</p>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="category-count"></span>
+    <button class="btn-primary btn-small" id="add-category-btn" style="width:auto;">+ Add category</button>
+  </div>
+
+  <div id="categories-table-wrap">
+    <div class="empty-state">Loading categories…</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="category-modal-backdrop" hidden>
+  <div class="modal">
+    <h2>Add category</h2>
+    <form id="category-form">
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Name</span>
+          <input type="text" id="category-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        </label>
+        <label class="field">
+          <span class="field-label">Vendor</span>
+          <input type="text" id="category-vendor" value="cisco_ios">
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Risk level (optional)</span>
+        <select id="category-risk">
+          <option value="">— None —</option>
+          <option value="LOW">LOW</option>
+          <option value="MEDIUM">MEDIUM</option>
+          <option value="HIGH">HIGH</option>
+          <option value="CRITICAL">CRITICAL</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Description</span>
+        <input type="text" id="category-description">
+      </label>
+
+      <div id="category-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="category-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Save category</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  let categories = [];
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function riskColor(level) {
+    if (level === 'LOW') return 'var(--signal)';
+    if (level === 'MEDIUM') return 'var(--text-primary)';
+    if (level === 'HIGH') return '#e0a030';
+    if (level === 'CRITICAL') return 'var(--red)';
+    return 'var(--text-faint)';
+  }
+
+  function renderTable() {
+    const wrap = document.getElementById('categories-table-wrap');
+    document.getElementById('category-count').textContent = categories.length + (categories.length === 1 ? ' category' : ' categories');
+
+    if (categories.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No categories yet.</div>';
+      return;
+    }
+
+    const rows = categories.map(c => `
+      <tr>
+        <td>${escapeHtml(c.name)}</td>
+        <td class="cell-mono">${escapeHtml(c.vendor)}</td>
+        <td><span style="color:${riskColor(c.risk_level)};font-weight:600;">${escapeHtml(c.risk_level || '—')}</span></td>
+        <td>${escapeHtml(c.description || '—')}</td>
+        <td class="cell-actions">
+          <button class="btn-danger btn-small" data-delete="${c.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th>Name</th><th>Vendor</th><th>Risk</th><th>Description</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deleteCategory(btn.dataset.delete));
+    });
+  }
+
+  async function loadCategories() {
+    const res = await AAAPlatform.authedFetch('/api/command-categories');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    categories = await res.json();
+    renderTable();
+  }
+
+  function openModal() {
+    document.getElementById('category-form-error').hidden = true;
+    document.getElementById('category-form').reset();
+    document.getElementById('category-vendor').value = 'cisco_ios';
+    document.getElementById('category-modal-backdrop').hidden = false;
+  }
+
+  function closeModal() {
+    document.getElementById('category-modal-backdrop').hidden = true;
+  }
+
+  document.getElementById('add-category-btn').addEventListener('click', openModal);
+  document.getElementById('category-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('category-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'category-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('category-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('category-form-error');
+    errorBox.hidden = true;
+
+    const payload = {
+      name: document.getElementById('category-name').value,
+      vendor: document.getElementById('category-vendor').value || 'cisco_ios',
+      risk_level: document.getElementById('category-risk').value || null,
+      description: document.getElementById('category-description').value || null,
+    };
+
+    const res = await AAAPlatform.authedFetch('/api/command-categories', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not save category.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    closeModal();
+    AAAPlatform.toast('Category added.');
+    loadCategories();
+  });
+
+  async function deleteCategory(id) {
+    const category = categories.find(c => c.id === id);
+    if (!confirm(`Delete category "${category ? category.name : id}"? Rules using it will simply become uncategorized.`)) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/command-categories/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not delete category.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Category deleted.');
+    loadCategories();
+  }
+
+  loadCategories();
+</script>
+{% endblock %}
