@@ -9,6 +9,7 @@ Centralized TACACS+ authentication, authorization, policy management, accounting
 [![Status](https://img.shields.io/badge/Status-Phases%201–7%20Complete-green)]()
 
 ---
+<img width="1555" height="1166" alt="v1" src="https://github.com/user-attachments/assets/fcec4b33-8081-4acf-af09-374f9b43ffa9" />
 
 ## Table of Contents
 
@@ -42,6 +43,7 @@ Centralized TACACS+ authentication, authorization, policy management, accounting
 - [License](#license)
 
 ---
+<img width="1730" height="852" alt="v2" src="https://github.com/user-attachments/assets/9e18bcd0-58e9-4e48-b5d1-45a6a0782a1c" />
 
 ## Why NetworkAAA Exists
 
@@ -74,6 +76,7 @@ The TACACS+ engine itself is **never modified**. NetworkAAA only ever *configure
 ---
 
 ## Architecture Overview
+<img width="1855" height="826" alt="v3" src="https://github.com/user-attachments/assets/78d24936-f55c-4a3a-9112-e65aa4b29f2e" />
 
 ```
 Browser
@@ -121,6 +124,7 @@ Python dependencies (see `requirements.txt`) are installed system-wide with `--b
 ---
 
 ## Project Status
+<img width="1489" height="833" alt="v4" src="https://github.com/user-attachments/assets/5b5c93c6-6996-4f85-bfaf-8bc369bbb3a7" />
 
 Phases 1–7 of the original 8-phase plan are complete:
 
@@ -156,6 +160,7 @@ Phases 1–7 of the original 8-phase plan are complete:
 - **Python:** 3.8+ (the installer itself requires this)
 
 ---
+<img width="874" height="790" alt="v5" src="https://github.com/user-attachments/assets/10ee981e-bcfe-4786-aaf2-8e7d03475642" />
 
 ## Installation
 
@@ -181,6 +186,7 @@ The installer is interactive and will guide you through the process.
    ```
 
 3. The installer performs the following phases automatically (see next section).
+<img width="1685" height="788" alt="v6" src="https://github.com/user-attachments/assets/0ba90123-1ed2-4408-b4f6-60ebc496bb6a" />
 
 ### What the Installer Does
 
@@ -198,6 +204,7 @@ The installer is interactive and will guide you through the process.
 
 Installation logs are written to `/tmp/aaa-platform-install.log`.  
 Full build metadata is stored at `/etc/aaa-platform/build_info.json`.
+<img width="1650" height="818" alt="v7" src="https://github.com/user-attachments/assets/4c4a20bc-c03e-425e-9e07-fb6bfcf4cd6c" />
 
 ### Post-Install Access
 
@@ -214,6 +221,7 @@ Management GUI:  http://<server-ip>:8420
 ---
 
 ## How to Use
+<img width="1672" height="849" alt="v8" src="https://github.com/user-attachments/assets/8b4ac2c0-9dba-4938-a1dc-1d2e20e1da78" />
 
 ### First Login & Platform Settings
 
@@ -247,6 +255,7 @@ Management GUI:  http://<server-ip>:8420
   - Auditor
 
 ### Accounting
+<img width="1690" height="824" alt="v9" src="https://github.com/user-attachments/assets/671968ff-e880-4d7d-acc0-042aa3c43198" />
 
 - View, search, and filter accounting records.
 - Export to CSV.
@@ -258,6 +267,7 @@ Management GUI:  http://<server-ip>:8420
 - Configuration change audit trail
 - Live service logs
 - Authentication and authorization log tails
+<img width="1842" height="851" alt="v10" src="https://github.com/user-attachments/assets/bfea49f0-8791-445c-bced-fcf98c638504" />
 
 ### Platform Self-Management
 
@@ -269,6 +279,9 @@ Management GUI:  http://<server-ip>:8420
 ---
 
 ## Configuration Compiler & Safe Apply Workflow
+
+
+<img width="1864" height="830" alt="v11" src="https://github.com/user-attachments/assets/524d5d8e-f560-4730-856a-91599acfc9ba" />
 
 Whenever you change devices, users, groups, or policies:
 
@@ -320,6 +333,8 @@ README.md
 ```
 
 ---
+
+<img width="1733" height="833" alt="v12" src="https://github.com/user-attachments/assets/6616b4d5-0714-4c6b-99c7-f8f6c2308ca3" />
 
 ## Security Model
 
