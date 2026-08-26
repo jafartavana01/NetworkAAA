@@ -62,5 +62,27 @@ class TacacsUser(Base):
 
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # Trusted-host allowlist -- SAME storage/parsing convention as
+    # AdminUser.allowed_source_ips (comma-separated IPs/CIDRs, parsed
+    # by the same generic app.security.parse_allowed_source_ips /
+    # is_source_ip_allowed helpers, reused as-is rather than
+    # duplicated). NOT YET ENFORCED by the generated tac_plus-ng
+    # config -- see app.services.condition_engine's docstring and
+    # docs/ARCHITECTURE.md for exactly why: AdminUser's version works
+    # because THIS platform's own login check enforces it directly;
+    # a TACACS+ end-user authenticates THROUGH tac_plus-ng, and
+    # per-user (not per-group) source-IP restriction has no directly
+    # confirmed tac_plus-ng syntax for this project's data model
+    # (each TacacsUser has exactly one group, and the confirmed
+    # ACL-restriction examples found during research were all
+    # group-level, not user-level, for tac_plus-ng's newer
+    # scripting-style config specifically -- restricting the shared
+    # group would wrongly restrict every member, not just one user).
+    # Stored now so the GUI/API/Simulator can exist and be tested
+    # ahead of that compiler work, but this field intentionally does
+    # NOT yet change what any real login is allowed to do -- the GUI
+    # says so explicitly, not just this comment.
+    allowed_source_ips: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

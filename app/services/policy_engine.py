@@ -233,6 +233,7 @@ def evaluate(
     user: TacacsUser | None = None,
     device: NetworkDevice | None = None,
     command: str | None = None,
+    source_ip: str | None = None,
 ) -> EvaluationResult:
     """
     The main entry point: given a (possibly hypothetical) user and
@@ -243,6 +244,16 @@ def evaluate(
     trace if no policy matches at all, matching this project's
     consistent "unmatched means denied, not silently permitted"
     default established since Phase 5.
+
+    Per-policy CONDITION matching now has two paths, chosen per policy
+    by app.services.condition_engine.has_condition_tree(): a policy
+    migrated to the new condition-tree model (pasted spec) is
+    evaluated by that engine, using the full RequestContext including
+    `source_ip`; an un-migrated policy still uses the original
+    legacy flat-field check below, completely unchanged -- migrating
+    is an explicit, separate action (see condition_engine.
+    migrate_legacy_policy), never automatic, so an existing policy's
+    behavior never silently changes underneath it.
     """
     trace: list[TraceStep] = []
 
@@ -254,6 +265,7 @@ def evaluate(
         "request",
         f"user={user.username if user else '(none)'}, "
         f"device={device.name if device else '(none)'}, "
+        f"source_ip={source_ip or '(none)'}, "
         f"command={repr(command) if command else '(none)'}",
         None,
     ))
@@ -265,11 +277,21 @@ def evaluate(
         None,
     ))
 
+    # Local import avoids a circular import at module load time --
+    # condition_engine imports TraceStep from this module.
+    from . import condition_engine
+
     for policy in policies:
         trace.append(TraceStep("evaluating_policy", f"Evaluating policy '{policy.name}' (priority {policy.priority}).", None))
-        matched, match_trace = policy_matches(
-            policy, group_id=group_id, device_id=device_id, device_group_id=device_group_id
-        )
+
+        if condition_engine.has_condition_tree(db, policy):
+            trace.append(TraceStep("condition_model", "Using condition-tree evaluation (this policy has been migrated).", None))
+            context = condition_engine.RequestContext(user=user, device=device, source_ip=source_ip)
+            matched, match_trace = condition_engine.evaluate_policy_condition_tree(db, policy, context)
+        else:
+            matched, match_trace = policy_matches(
+                policy, group_id=group_id, device_id=device_id, device_group_id=device_group_id
+            )
         trace.extend(match_trace)
         if not matched:
             continue

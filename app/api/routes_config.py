@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models.admin import AdminUser
 from ..models.config_version import ConfigVersion
+from ..models.system_info import InstallEvent
 from ..services import config_backup, config_compiler
 from .deps import get_current_admin, verify_csrf
 
@@ -76,6 +77,21 @@ def apply_config(
     active = config_compiler.get_active_config()
     if candidate == active:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="No pending changes to apply.")
+
+    # Any policy on the new condition-tree model that couldn't be
+    # safely compiled (see config_compiler.UncompilablePolicyError)
+    # was already silently excluded from `candidate` above -- this is
+    # the one point (an actual apply, not every candidate preview)
+    # where that exclusion becomes a recorded, auditable InstallEvent
+    # rather than a gap nobody would ever see.
+    uncompilable = config_compiler.get_uncompilable_policies(db)
+    for policy, reason in uncompilable:
+        db.add(InstallEvent(
+            event_type="policy_excluded_from_config",
+            detail=f"Policy '{policy.name}' excluded from the generated configuration: {reason}",
+        ))
+    if uncompilable:
+        db.commit()
 
     try:
         version = config_compiler.apply_candidate(

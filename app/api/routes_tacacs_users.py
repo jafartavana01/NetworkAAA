@@ -60,6 +60,7 @@ def _to_out(user: TacacsUser, group_name: str | None = None) -> TacacsUserOut:
         group_id=str(user.group_id) if user.group_id else None,
         group_name=group_name,
         enabled=user.enabled,
+        allowed_source_ips=user.allowed_source_ips,
     )
 
 
@@ -90,6 +91,7 @@ def create_user(
         description=payload.description,
         group_id=group.id if group else None,
         enabled=payload.enabled,
+        allowed_source_ips=payload.allowed_source_ips,
         password_hash=security.hash_password(payload.password),
     )
     db.add(user)
@@ -139,6 +141,7 @@ def update_user(
     user.description = payload.description
     user.group_id = group.id if group else None
     user.enabled = payload.enabled
+    user.allowed_source_ips = payload.allowed_source_ips
     if payload.password:
         user.password_hash = security.hash_password(payload.password)
 

@@ -32,9 +32,11 @@ from ..models.config_version import ConfigVersion
 from ..models.device import NetworkDevice
 from ..models.group import TacacsGroup
 from ..models.policy import Policy
+from ..models.policy_condition import PolicyCondition
+from ..models.policy_condition_group import PolicyConditionGroup
 from ..models.system_info import InstallEvent
 from ..models.user import TacacsUser
-from . import build_info_service, policy_engine, service_control
+from . import build_info_service, condition_engine, policy_engine, service_control
 
 ACTIVE_CONFIG_PATH = GENERATED_DIR / "tac_plus-ng.conf"
 
@@ -81,6 +83,7 @@ id = tac_plus-ng {{
 {host_blocks}\
 {group_blocks}\
 {user_blocks}\
+{acl_blocks}\
 {policy_blocks}\
 {ruleset_block}\
 }}
@@ -88,6 +91,23 @@ id = tac_plus-ng {{
 
 
 class ConfigCompilerError(RuntimeError):
+    pass
+
+
+class UncompilablePolicyError(RuntimeError):
+    """
+    Raised when a policy's condition tree contains something with no
+    confirmed tac_plus-ng syntax to compile it into -- per the pasted
+    condition-builder spec's explicit "if something cannot be
+    represented safely in tac_plus-ng, do NOT fake it" instruction.
+    The caller (compile_candidate) catches this PER POLICY and
+    excludes just that one policy from the generated ruleset entirely
+    -- it simply never matches anything in the compiled config, which
+    is the safe, deny-leaning failure mode this project has used
+    consistently since Phase 5, not a silently-wrong or partially-fake
+    compilation. compile_candidate() also records an InstallEvent for
+    every exclusion, so this is auditable, not a silent gap.
+    """
     pass
 
 
@@ -239,6 +259,8 @@ def _condition_expression(
     device_names_by_group_id: dict,
 ) -> str | None:
     """
+    LEGACY model only (see resolve_condition_expression below for the
+    dispatch between this and the new condition-tree compiler).
     Translates a Policy's condition_* fields (PAM Expansion Plan §4)
     into a tac_plus-ng script boolean expression, combining multiple
     conditions on the same policy with `&&`. Returns None when the
@@ -276,42 +298,223 @@ def _condition_expression(
     return " && ".join(clauses)
 
 
-def _ruleset_block(
-    policies: list[Policy],
+def _compile_condition_leaf(
+    condition: PolicyCondition,
     *,
     group_names_by_id: dict,
     device_names_by_id: dict,
     device_names_by_group_id: dict,
+    acl_blocks_out: list[str],
 ) -> str:
+    """
+    Compiles ONE condition-tree leaf into real tac_plus-ng syntax, or
+    raises UncompilablePolicyError. Confidence per construct (see
+    docs/ARCHITECTURE.md for the sourcing):
+
+    - `member == <name>` / `device == <name>` -- CONFIRMED (same
+      sources as the legacy _condition_expression above).
+    - `member != <name>` / `device != <name>` / `nac != <name>` --
+      REASONED, not directly observed for these specific comparisons:
+      a real event-driven-servers mailing-list thread confirms tac_plus
+      -ng accepts `!=` for ACL comparisons generally (a parser bug that
+      had blocked it was explicitly fixed), and every `if()` expression
+      in this scripting language shares one grammar (the same thread's
+      own example combines an ACL check and a `member ==` check with
+      `&&` in a single expression) -- so `!=` extending to member/device
+      comparisons the same way `==` already does is a reasoned
+      extension of confirmed behavior, not a guess from nothing.
+    - `nac == <cidr>` inside an `acl { }` block, referenced via
+      `acl == <name>` -- CONFIRMED directly: a real example
+      (`acl alu_tl_mbh { if (nac == 10.27.64.0/21) permit deny }`,
+      referenced as `if (acl == alu_tl_mbh && member == region)`)
+      shows exactly this CIDR-range-via-== pattern working inside an
+      ACL block specifically. is_not_in_cidr negates at the REFERENCE
+      point (`acl != <name>`) rather than guessing at a differently
+      -negated internal ACL check that hasn't been directly observed,
+      to stay as close as possible to the one confirmed example.
+    - Direct per-user matching (`user` object type, any operator) --
+      NOT compilable. Every confirmed real tac_plus-ng example matches
+      via `member == <group>`, never a bare username.
+    """
+    obj_type = condition.object_type
+    op = condition.operator
+
+    if obj_type == "user":
+        raise UncompilablePolicyError(
+            "Direct per-user conditions have no confirmed tac_plus-ng syntax and cannot be compiled -- "
+            "target the user's group instead."
+        )
+
+    elif obj_type == "user_group":
+        name = group_names_by_id.get(condition.referenced_object_id)
+        if not name:
+            raise UncompilablePolicyError("This condition's referenced user group no longer exists.")
+        if op == "equal":
+            return f"member == {name}"
+        elif op == "not_equal":
+            return f"member != {name}"
+        raise UncompilablePolicyError(f"Operator '{op}' is not compilable for user_group.")
+
+    elif obj_type == "device":
+        name = device_names_by_id.get(condition.referenced_object_id)
+        if not name:
+            raise UncompilablePolicyError("This condition's referenced device no longer exists.")
+        if op == "equal":
+            return f"device == {name}"
+        elif op == "not_equal":
+            return f"device != {name}"
+        raise UncompilablePolicyError(f"Operator '{op}' is not compilable for device.")
+
+    elif obj_type == "device_group":
+        member_names = device_names_by_group_id.get(condition.referenced_object_id, [])
+        if not member_names:
+            raise UncompilablePolicyError("This condition's referenced device group has no members, or no longer exists.")
+        if op == "equal":
+            or_chain = " || ".join(f"device == {n}" for n in member_names)
+            return f"({or_chain})" if len(member_names) > 1 else or_chain
+        elif op == "not_equal":
+            and_chain = " && ".join(f"device != {n}" for n in member_names)
+            return f"({and_chain})" if len(member_names) > 1 else and_chain
+        raise UncompilablePolicyError(f"Operator '{op}' is not compilable for device_group.")
+
+    elif obj_type == "source_ip":
+        if op == "equal":
+            return f"nac == {condition.value}"
+        elif op == "not_equal":
+            return f"nac != {condition.value}"
+        elif op in ("is_in_cidr", "is_not_in_cidr"):
+            acl_name = f"acl_cond_{str(condition.id).replace('-', '')[:12]}"
+            acl_blocks_out.append(f"    acl {acl_name} {{ if (nac == {condition.value}) permit deny }}\n")
+            reference_op = "==" if op == "is_in_cidr" else "!="
+            return f"acl {reference_op} {acl_name}"
+        raise UncompilablePolicyError(f"Operator '{op}' is not compilable for source_ip.")
+
+    raise UncompilablePolicyError(f"Unknown condition object type '{obj_type}'.")
+
+
+def _compile_condition_group_tree(
+    db: Session,
+    group: PolicyConditionGroup,
+    *,
+    group_names_by_id: dict,
+    device_names_by_id: dict,
+    device_names_by_group_id: dict,
+    acl_blocks_out: list[str],
+) -> str:
+    """
+    Recursively compiles a condition-tree group into a tac_plus-ng
+    boolean expression. AND -> `&&`, OR -> `||` (both confirmed --
+    already used by the legacy compiler and the official upstream
+    sample's own multi-condition rules). NOT is NOT yet compilable:
+    `!` has no confirmed tac_plus-ng syntax the way `&&`/`||`/`==`/`!=`
+    now do -- a NOT group anywhere in the tree makes the WHOLE policy
+    uncompilable (see UncompilablePolicyError's docstring for what
+    that means in practice: excluded from the ruleset, not faked).
+    """
+    child_conditions = (
+        db.query(PolicyCondition).filter(PolicyCondition.group_id == group.id).order_by(PolicyCondition.order.asc()).all()
+    )
+    child_groups = (
+        db.query(PolicyConditionGroup)
+        .filter(PolicyConditionGroup.parent_group_id == group.id)
+        .order_by(PolicyConditionGroup.order.asc())
+        .all()
+    )
+
+    clauses = []
+    for cond in child_conditions:
+        clauses.append(_compile_condition_leaf(
+            cond,
+            group_names_by_id=group_names_by_id,
+            device_names_by_id=device_names_by_id,
+            device_names_by_group_id=device_names_by_group_id,
+            acl_blocks_out=acl_blocks_out,
+        ))
+    for child_group in child_groups:
+        sub_expr = _compile_condition_group_tree(
+            db, child_group,
+            group_names_by_id=group_names_by_id,
+            device_names_by_id=device_names_by_id,
+            device_names_by_group_id=device_names_by_group_id,
+            acl_blocks_out=acl_blocks_out,
+        )
+        clauses.append(f"({sub_expr})")
+
+    if not clauses:
+        raise UncompilablePolicyError("An empty condition group cannot be compiled.")
+
+    if group.logical_operator == "AND":
+        return " && ".join(clauses)
+    elif group.logical_operator == "OR":
+        return " || ".join(clauses)
+    elif group.logical_operator == "NOT":
+        raise UncompilablePolicyError(
+            "NOT groups have no confirmed tac_plus-ng syntax ('!' has not been confirmed) and cannot be compiled yet."
+        )
+    raise UncompilablePolicyError(f"Unknown logical operator '{group.logical_operator}'.")
+
+
+def resolve_condition_expression(
+    db: Session,
+    policy: Policy,
+    *,
+    group_names_by_id: dict,
+    device_names_by_id: dict,
+    device_names_by_group_id: dict,
+    acl_blocks_out: list[str],
+) -> str | None:
+    """
+    The single dispatch point between the legacy flat-field model and
+    the new condition-tree model for compilation -- the SAME switch
+    app.services.policy_engine.evaluate() uses for evaluation
+    (condition_engine.has_condition_tree()), so a policy is compiled
+    using the identical model it's evaluated/simulated under; the two
+    can never diverge on which model a given policy is using. Can
+    raise UncompilablePolicyError for a tree-model policy -- the
+    caller (compile_candidate) must catch this per policy.
+    """
+    if condition_engine.has_condition_tree(db, policy):
+        root = condition_engine.get_root_group(db, policy)
+        if root is None:
+            raise UncompilablePolicyError("This policy's condition tree is missing its root group.")
+        return _compile_condition_group_tree(
+            db, root,
+            group_names_by_id=group_names_by_id,
+            device_names_by_id=device_names_by_id,
+            device_names_by_group_id=device_names_by_group_id,
+            acl_blocks_out=acl_blocks_out,
+        )
+    return _condition_expression(
+        policy,
+        group_names_by_id=group_names_by_id,
+        device_names_by_id=device_names_by_id,
+        device_names_by_group_id=device_names_by_group_id,
+    )
+
+
+def _ruleset_block(policies_with_conditions: list[tuple[Policy, str | None]]) -> str:
     """
     Confirmed against the official upstream sample config
     (tac_plus-ng/sample/tac_plus-ng.cfg): a single top-level `ruleset
     {}` block containing one named `rule <name> { }` per policy, each
-    with its own `script`. `policies` must already be in the exact
-    order evaluation should walk them -- see
-    app.services.policy_engine.get_ordered_policies, the single source
-    of truth for that ordering (ascending priority, ties broken by
-    creation order), reused here rather than re-sorted independently
-    so "what the ruleset does" and "what the Simulator predicts" can
-    never diverge.
+    with its own `script`. `policies_with_conditions` must already be
+    in the exact order evaluation should walk them (see
+    app.services.policy_engine.get_ordered_policies) and already
+    exclude any policy resolve_condition_expression() couldn't compile
+    -- this function only renders, it doesn't decide what's compilable.
 
-    A policy with no conditions matches unconditionally -- its rule's
-    script body is a bare `profile = <name> permit` with no `if`
-    wrapper, rather than something artificial like `if (1)`, since a
-    bare statement is the more directly defensible translation of
-    "always applies" into this scripting language.
+    A policy with no conditions (condition is None) matches
+    unconditionally -- its rule's script body is a bare `profile =
+    <name> permit` with no `if` wrapper, rather than something
+    artificial like `if (1)`, since a bare statement is the more
+    directly defensible translation of "always applies" into this
+    scripting language.
     """
-    if not policies:
+    if not policies_with_conditions:
         return ""
 
     lines = ["    ruleset {"]
-    for policy in policies:
-        condition = _condition_expression(
-            policy,
-            group_names_by_id=group_names_by_id,
-            device_names_by_id=device_names_by_id,
-            device_names_by_group_id=device_names_by_group_id,
-        )
+    for policy, condition in policies_with_conditions:
         lines.append(f"        rule {policy.name} {{")
         lines.append("            enabled = yes")
         lines.append("            script {")
@@ -329,10 +532,55 @@ def _ruleset_block(
     return "\n".join(lines) + "\n"
 
 
+def get_uncompilable_policies(db: Session) -> list[tuple[Policy, str]]:
+    """
+    Read-only check: which enabled policies would be excluded from
+    the ruleset if compiled right now, and why. Shares the exact same
+    resolve_condition_expression() logic compile_candidate() uses
+    internally, so this can never disagree with what actually gets
+    excluded. Exists as its own callable (rather than folded silently
+    into compile_candidate(), which is documented and relied upon as
+    a pure function with no side effects) specifically so callers that
+    DO want to act on this -- apply_candidate() recording an
+    InstallEvent, or a future Diagnostics page warning -- can, without
+    every plain candidate-preview call (the GET /candidate endpoint,
+    the Simulator, diagnostics' "would_change" check) picking up an
+    unexpected write.
+    """
+    groups = db.query(TacacsGroup).all()
+    group_names_by_id = {g.id: g.name for g in groups}
+    all_devices = db.query(NetworkDevice).all()
+    device_names_by_id = {d.id: d.name for d in all_devices}
+    device_names_by_group_id: dict = {}
+    for d in all_devices:
+        if d.device_group_id is not None:
+            device_names_by_group_id.setdefault(d.device_group_id, []).append(d.name)
+
+    excluded = []
+    for policy in policy_engine.get_ordered_policies(db):
+        try:
+            resolve_condition_expression(
+                db, policy,
+                group_names_by_id=group_names_by_id,
+                device_names_by_id=device_names_by_id,
+                device_names_by_group_id=device_names_by_group_id,
+                acl_blocks_out=[],  # discarded -- this call is for the exclusion check only
+            )
+        except UncompilablePolicyError as exc:
+            excluded.append((policy, str(exc)))
+    return excluded
+
+
 def compile_candidate(db: Session) -> str:
     """Pure function of DB state: same devices/users/groups/policies
     in, same config text out, every time -- which is what makes
-    diffing meaningful."""
+    diffing meaningful. A policy whose condition tree can't be safely
+    compiled (see resolve_condition_expression / UncompilablePolicyError)
+    is silently excluded from the OUTPUT here -- "silently" only in the
+    sense that this function itself never writes anything (it's pure);
+    see get_uncompilable_policies() for how a caller gets visibility
+    into exactly which policies and why, and apply_candidate() below
+    for where that visibility becomes an actual recorded InstallEvent."""
     devices = (
         db.query(NetworkDevice)
         .filter(NetworkDevice.enabled.is_(True))
@@ -362,20 +610,31 @@ def compile_candidate(db: Session) -> str:
         if d.device_group_id is not None:
             device_names_by_group_id.setdefault(d.device_group_id, []).append(d.name)
 
-    policies = policy_engine.get_ordered_policies(db)
+    all_policies = policy_engine.get_ordered_policies(db)
+
+    acl_blocks_out: list[str] = []
+    compilable_policies: list[tuple[Policy, str | None]] = []
+    for policy in all_policies:
+        try:
+            condition = resolve_condition_expression(
+                db, policy,
+                group_names_by_id=group_names_by_id,
+                device_names_by_id=device_names_by_id,
+                device_names_by_group_id=device_names_by_group_id,
+                acl_blocks_out=acl_blocks_out,
+            )
+        except UncompilablePolicyError:
+            continue  # excluded -- see get_uncompilable_policies() for why, callers that need to know check that separately
+        compilable_policies.append((policy, condition))
 
     host_blocks = "".join(_host_block(d) for d in devices)
     group_blocks = "".join(_group_block(g) for g in groups)
     user_blocks = "".join(_user_block(u, group_names_by_id.get(u.group_id)) for u in users)
     policy_blocks = "".join(
-        _policy_block(p, policy_engine.get_ordered_rules_for_policy(db, p)) for p in policies
+        _policy_block(p, policy_engine.get_ordered_rules_for_policy(db, p)) for p, _ in compilable_policies
     )
-    ruleset_block = _ruleset_block(
-        policies,
-        group_names_by_id=group_names_by_id,
-        device_names_by_id=device_names_by_id,
-        device_names_by_group_id=device_names_by_group_id,
-    )
+    acl_blocks = "".join(acl_blocks_out)
+    ruleset_block = _ruleset_block(compilable_policies)
 
     from ..platform_settings import load_settings
     tacacs_port = load_settings()["tacacs_port"]
@@ -387,6 +646,7 @@ def compile_candidate(db: Session) -> str:
         host_blocks=host_blocks,
         group_blocks=group_blocks,
         user_blocks=user_blocks,
+        acl_blocks=acl_blocks,
         policy_blocks=policy_blocks,
         ruleset_block=ruleset_block,
     )

@@ -851,3 +851,295 @@ afterward -- the two other modules edited with the same risky
 insert-before-existing-function pattern (`policy_engine.py`) were
 confirmed clean the same way.
 
+## New Policy Condition Engine (pasted policy-condition-builder spec)
+
+Phase 1-2 (inspect existing implementation, report findings) were
+covered conversationally before this increment. This is Phase 4-5:
+the database schema and evaluation engine, built and tested. GUI
+builder (Phase 6+) is NOT part of this increment -- see "Not done
+yet" below.
+
+**Schema**: `PolicyConditionGroup` (the tree structure -- AND/OR/NOT
+nodes, self-referencing `parent_group_id` for nesting) and
+`PolicyCondition` (leaf nodes -- object_type/operator/value). Both
+CASCADE from Policy, since a condition tree has no meaning independent
+of the policy it belongs to.
+
+**Object types implemented**: `user`, `user_group`, `device`,
+`device_group` (all PostgreSQL-backed, matched by
+`referenced_object_id`, never by the cached display name) and
+`source_ip` (request-context, manual CIDR/address value) -- exactly
+the five with "a real source", per the spec's own explicit
+requirement. `command` is deliberately NOT a condition object type:
+the spec's own §12 requires command authorization to stay separate,
+in Command Sets (already built) -- adding it to conditions would have
+contradicted the spec's own architecture, not just added scope.
+`user` is evaluable but not yet compilable to tac_plus-ng syntax --
+every confirmed real example matches via `member ==`, never a bare
+username; compiler integration for the tree model (translating it
+into real config) is itself part of "Not done yet" below, so this
+particular gap doesn't block anything yet.
+
+**Operators implemented**: `equal`, `not_equal` (all five object
+types), `is_in_cidr`, `is_not_in_cidr` (source_ip only) -- a
+deliberately narrower set than the spec's full list (contains, starts
+with, regex, in/not-in lists), scoped down for this increment; adding
+more is a matter of extending `VALID_OPERATORS_BY_OBJECT_TYPE` and a
+branch in `evaluate_condition()`, not a schema change.
+
+**Coexistence with the legacy model**: `condition_engine.
+has_condition_tree()` is the single switch. A policy with no root
+group uses the original `policy_matches()` flat-field check, byte-for-
+byte unchanged. A policy WITH a root group uses the new engine
+exclusively. Migrating is `condition_engine.migrate_legacy_policy()`
+-- an explicit, separate action (a new API endpoint,
+`POST /api/policies/{id}/migrate-conditions`), never automatic, per
+the spec's own "never silently change an existing policy's
+authorization behavior" requirement. The migration is lossless (every
+non-null legacy field becomes one leaf condition under a root AND
+group) and refuses outright, rather than guessing, for a genuinely
+unconditional policy (an "always match" leaf type doesn't exist yet)
+-- see that function's docstring for exactly why.
+
+**Fail-closed throughout**: a condition whose database reference no
+longer resolves, a request context missing the field a condition
+needs, and a malformed CIDR/IP value all evaluate to "does not match"
+-- never "matches everything", never a crash.
+
+**Verified with real executable Python** (not just review), including
+the exact nested AND/OR example from the pasted spec's own §7
+("Username == admin AND (DeviceGroup == CoreSwitch OR DeviceGroup ==
+DistributionSwitch)") across four scenarios (both branches of the OR
+matching, an unrelated device group failing, and a different username
+failing the AND) -- all four produced the correct result. Also
+verified: source_ip CIDR matching against the exact §10 example
+(10.10.20.0/24), NOT-group inversion, and fail-closed behavior for
+both an unresolvable database reference and a malformed IP. Since the
+sandbox this was built in has no live PostgreSQL/SQLAlchemy available,
+these tests mirror the real algorithm with plain Python stand-ins
+rather than exercising the actual ORM query layer -- a real
+limitation, stated plainly rather than glossed over.
+
+**Integration**: `policy_engine.evaluate()` -- the single function the
+Policy Simulator and Effective Access both already call -- now checks
+`has_condition_tree()` per policy and dispatches accordingly,
+including a new `source_ip` parameter threaded all the way through.
+Because the Simulator already displays whatever trace its API returns
+generically, it can show a full tree-evaluation trace for a migrated
+policy with zero GUI changes -- verified by tracing the actual call
+path, not assumed. `source_ip` was already an accepted-but-unused
+Simulator input field (added two turns prior with an honest "not yet
+evaluated" note); it's now actually evaluated, and that note is
+corrected to say so precisely (still unevaluated: protocol, service,
+privilege -- no condition type checks those yet).
+
+**Not done yet, stated plainly rather than implied by omission**:
+- GUI condition builder (spec's own Phase 6+) -- no interactive
+  object-type/operator/value picker, no +Add Condition / +Add Group
+  UI. The Policies page still edits only the legacy three fields.
+- Full tree EDITING API (add/remove a condition or nested group,
+  change a group's operator) -- only migration (read + convert) exists
+  this increment.
+- Compiler integration -- `config_compiler.py`'s `_condition_expression()`
+  still only reads the legacy three fields; it does not yet compile a
+  condition tree into `&&`/`||` tac_plus-ng script, and does not yet
+  handle a migrated policy at all (a migrated policy would currently
+  compile as if it had NO conditions -- unconditional -- since the
+  compiler doesn't check `has_condition_tree()` yet). **This is a real,
+  currently-live gap**: migrating a policy via the new API changes what
+  the Simulator predicts but does NOT yet change the generated
+  tac_plus-ng config to match. Do not migrate a live policy expecting
+  the compiled config to reflect the new tree until compiler
+  integration is built.
+- `!` (NOT) has not been confirmed as real tac_plus-ng script syntax
+  the way `&&`/`||` already are -- compiler integration for NOT groups
+  needs that confirmed (or an alternative compilation strategy) before
+  it can compile correctly; the engine itself supports NOT today
+  regardless, for evaluation/simulation purposes.
+- Additional operators (contains, starts_with, regex, in/not_in) from
+  the spec's fuller list.
+- Phases 12-14 of the spec's own process (comprehensive tests beyond
+  what's described above, real TACACS+ authentication/authorization
+  testing against a live daemon, verifying existing policies still
+  behave correctly against the running system) have not been done --
+  this sandbox has no live tac_plus-ng or PostgreSQL to test against.
+
+## Condition-tree COMPILER integration (the gap flagged as most critical last turn)
+
+The chain now genuinely reaches tac_plus-ng for a migrated policy:
+database → condition tree → compiled `&&`/`||` expression (plus
+generated `acl {}` blocks for CIDR conditions) → real config text →
+the same validate/apply/health-check/auto-rollback pipeline every
+other config change already goes through. Not stopped at "database +
+GUI + simulator", per the explicit instruction this was built against.
+
+**Two syntax questions were resolved with real evidence before writing
+any of this**, not guessed:
+- **CIDR matching**: a real event-driven-servers mailing-list thread
+  confirms `acl <name> { if (nac == 10.27.64.0/21) permit deny }` --
+  direct, real-world evidence that `nac == <cidr>` performs actual
+  range matching inside an ACL block, referenced from a ruleset via
+  `acl == <name>`. `is_not_in_cidr` negates at the reference point
+  (`acl != <name>`) rather than guessing at a differently-negated
+  internal ACL check that was never directly observed -- staying as
+  close as possible to the one confirmed example.
+- **`!=`**: the same thread states a parser bug that blocked `!=` for
+  ACL comparisons was explicitly fixed -- confirming `!=` is a real,
+  intended operator, not invented. Extended to `member !=` / `device
+  !=` as a reasoned (not directly observed for those specific
+  comparisons) extension, since every `if()` expression in this
+  scripting language shares one grammar -- the same confirmed example
+  combines an ACL check and a `member ==` check with `&&` in one
+  expression, evidence the grammar isn't segmented per comparison
+  type.
+
+**What's compilable this increment**: `user_group`/`device` equal and
+not_equal (`member`/`device` `==`/`!=`), `device_group` equal and
+not_equal (OR-chain / AND-of-negations over member devices),
+`source_ip` equal/not_equal (`nac ==`/`!=`) and is_in_cidr/is_not_in_cidr
+(generated ACL block). AND → `&&`, OR → `||` (both already confirmed
+and shipped since Phase 5).
+
+**What's NOT compilable, and what happens when it's hit**: `user`
+object type (no confirmed per-user syntax), NOT groups (`!` not
+confirmed). `UncompilablePolicyError` is raised per-policy and the
+WHOLE policy is excluded from the generated ruleset -- it simply never
+matches anything, the same deny-leaning failure mode this project has
+used consistently since Phase 5. Never a partial or faked compilation.
+`compile_candidate()` stays a genuinely pure function (no DB writes --
+several existing callers, including a plain candidate preview, rely on
+that); the exclusion becomes an actual recorded, auditable
+`InstallEvent` only at the real `/apply` endpoint, via a new
+`get_uncompilable_policies()` read-only check called from there
+specifically, not folded silently into compilation itself.
+
+**Verified with real Python execution**, mirroring the actual
+algorithm exactly as done for the engine itself: the user's own exact
+latest example (`User Group == Network Engineers AND Device Group ==
+CoreSwitches AND Source IP IN 10.10.20.0/24`) compiles to
+`member == NetworkEngineers && (device == CORE-R01 || device ==
+CORE-R02) && acl == acl_cond_<id>` with a correctly generated
+`acl acl_cond_<id> { if (nac == 10.10.20.0/24) permit deny }` block.
+Also verified: a `user`-type condition and a `NOT` group both raise
+`UncompilablePolicyError` for the correct, specific reason -- caught
+and fixed a real flaw in the first draft of the NOT-group test itself
+(an empty lookup dict made a leaf condition fail for an unrelated
+reason before the NOT-specific code path was ever reached; the
+underlying algorithm was fine, but the test wasn't actually verifying
+what it claimed to until corrected).
+
+**Still open**: `command`-as-a-condition (the newly clarified spec's
+explicit "additional policy-level condition capability", separate from
+Command Sets) -- deferred, exactly as that spec itself caveats
+("only implement command conditions if the exact installed tac_plus-ng
+version can support the required behavior... never invent syntax"),
+pending its own syntax confirmation. The interactive GUI condition
+builder is still not built -- migration, inspection, and now full
+compilation all work at the API/engine level, with no visual builder
+yet.
+
+## The interactive GUI condition builder
+
+The last major gap from the condition-builder work is closed: an
+admin can now actually build a condition tree visually, not just
+migrate a legacy policy through the API.
+
+**Backend**: `PUT /api/policies/{id}/condition-tree` -- atomically
+replaces a policy's whole tree, following this project's established
+"replace on save" pattern (the same one `CommandSet.rules` and
+`Policy.command_set_ids` already use) rather than granular per-node
+CRUD endpoints. Every node in the submitted tree is validated together
+as one operation: an invalid operator for the object type, a dangling
+database reference, or a malformed CIDR/IP anywhere rejects the whole
+save with a specific 400 -- never a partially-applied tree. Verified
+with a real Python test mirroring the actual validation algorithm,
+covering: the user's own exact example accepted, a dangling reference
+rejected, a malformed CIDR rejected, an empty group rejected, and a
+nested AND/OR tree accepted.
+
+**GUI**: added to the existing Policy edit modal in `policies.html`,
+scoped to root group + one level of nested groups -- covers every
+example in both pasted specs exactly (a flat AND of conditions, and
+one level of OR nested inside AND) without building a fully general
+infinite-depth tree editor. The backend already supports arbitrary
+nesting; a deeper GUI is a future enhancement, not a backend change.
+Object-type selection filters the operator dropdown to only what's
+valid for that type (matching `VALID_OPERATORS_BY_OBJECT_TYPE`
+exactly); database-backed object types (user/user_group/device/
+device_group) get a real searchable-by-scroll dropdown populated from
+this platform's own APIs, never a manually-typed id; source_ip gets a
+plain text input. Selecting `user` shows an inline note that it
+evaluates correctly in the Simulator but has no confirmed compiler
+syntax, matching the compiler's own actual behavior rather than
+promising something the backend can't do.
+
+Editing an existing policy fetches its real condition tree
+(`GET .../condition-tree`) and shows the advanced builder automatically
+if it's already migrated; a brand-new or un-migrated policy starts on
+the simple three-field view with a "Switch to advanced" toggle.
+
+**Verified with real Node.js execution of the actual extracted
+functions from the rendered page** (not reimplementations): a full
+round-trip of the user's own exact example through
+`apiTreeToBuilderTree` → `builderTreeToApiPayload` preserves every
+field exactly (database references, manual CIDR values, operators);
+removing the middle item from a 3-condition list correctly leaves the
+other two, in order, with no duplication or loss; removing the only
+nested group correctly empties the array rather than leaving a stale
+entry.
+
+**What's still open**: the GUI is capped at one level of nesting (a
+deliberate scope decision, not a backend limitation); `command` as a
+condition object type (deferred pending its own syntax confirmation,
+per the pasted spec's own explicit caveat); a policy already using
+deeper nesting than one level, if created via direct API access, would
+display read-only-ish in this GUI (only its top level and immediate
+children are editable) until a fuller recursive editor is built.
+
+## TACACS+ user trusted-host — data model only, enforcement deliberately not built
+
+Two research rounds before writing any code: the official
+`tac_plus.conf(5)` manual explicitly confirms ACLs can restrict
+"user's (or group's) login... by daemon client IP address" -- the
+concept is real and well-precedented across the tac_plus family. But
+every tac_plus-ng-SPECIFIC example found (not legacy tac_plus) uses
+ACL checks tied to GROUP membership within a ruleset script
+(`if (acl == X && member == Y)`), never a standalone `acl =` attribute
+directly on a `user {}` block in tac_plus-ng's newer scripting-style
+config. Since this project's `TacacsUser` has exactly one group,
+attaching a restrictive ACL to that shared group would wrongly
+restrict every member, not just the one user who wants it.
+
+Rather than guess at an unconfirmed per-user mechanism -- exactly the
+category of mistake that caused the `task_id` incident -- this ships
+as data-only: `TacacsUser.allowed_source_ips` (same storage format and
+the same `security.parse_allowed_source_ips` / `is_source_ip_allowed`
+helpers `AdminUser`'s real, enforced version already uses), a GUI
+field, and list-view visibility. It does **not** restrict any real
+login. The GUI carries an explicit, high-visibility red warning on the
+edit form (not just a docstring) and a status badge in the user list
+-- both say "not enforced" in plain language, specifically so no admin
+could reasonably mistake this for real protection. Given a false sense
+of security is arguably worse than not having the field at all, this
+warning was treated as non-optional, not a nice-to-have.
+
+## Command Set assignment on the Policy form -- brought up to the same interaction level
+
+Flagged directly: this checklist hadn't changed since Phase 5 while
+everything around it (conditions, patterns) got richer. The checkbox
+interaction itself was fine and is unchanged -- what it *showed* was
+just a bare name. Now each row shows a live permit/deny rule count and
+an expandable "Preview" toggle listing every actual rule
+(action, pattern, category) without leaving the Policy modal, plus a
+name filter for platforms with many command sets. No backend or
+schema change -- `CommandSetOut` already returned the full `rules`
+array and `policy_count`, just unused by this specific view before.
+
+Verified with a real Node.js execution test (a minimal DOM stub
+sufficient to run the actual extracted function, not a
+reimplementation): rule counts render correctly, the disabled-state
+tag appears correctly, and the name filter correctly narrows the
+visible list without touching `currentCommandSetIds` (unchecking
+something by filtering it out of view and back was verified to
+preserve its checked state).
+

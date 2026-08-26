@@ -94,6 +94,16 @@
         <input type="text" id="user-description">
       </label>
 
+      <label class="field">
+        <span class="field-label">Trusted hosts (optional)</span>
+        <input type="text" id="user-allowed-source-ips" placeholder="e.g. 10.0.0.5, 192.168.1.0/24">
+      </label>
+      <div class="panel panel-wide" style="margin:-8px 0 18px 0;border-color:var(--red);">
+        <div class="panel-body" style="font-size:12px;color:var(--red);">
+          ⚠ NOT YET ENFORCED — this is saved for planning purposes only and does not currently restrict where this user can log in from. tac_plus-ng needs a confirmed, safe way to restrict one specific user (not their whole group) by source IP before this can be turned into a real login restriction; that hasn't been built yet. Leave blank unless you're preparing ahead of that.
+        </div>
+      </div>
+
       <div id="user-form-error" class="form-error" role="alert" hidden></div>
 
       <div class="modal-actions">
@@ -139,6 +149,7 @@
         <td>${escapeHtml(u.full_name || '—')}</td>
         <td>${escapeHtml(u.group_name || '—')}</td>
         <td>${u.enabled ? '<span class="badge badge-on">Enabled</span>' : '<span class="badge badge-off">Disabled</span>'}</td>
+        <td>${u.allowed_source_ips ? '<span class="badge badge-off" title="Saved but not enforced yet — see the user\'s edit form">Trusted hosts set (not enforced)</span>' : '<span class="content-sub">—</span>'}</td>
         <td class="cell-actions">
           <button class="btn-secondary btn-small" data-edit="${u.id}">Edit</button>
           <button class="btn-danger btn-small" data-delete="${u.id}">Delete</button>
@@ -149,7 +160,7 @@
     wrap.innerHTML = `
       <table class="data-table">
         <thead>
-          <tr><th>Username</th><th>Full name</th><th>Group</th><th>Status</th><th></th></tr>
+          <tr><th>Username</th><th>Full name</th><th>Group</th><th>Status</th><th>Trusted hosts</th><th></th></tr>
         </thead>
         <tbody>${rows}</tbody>
       </table>
@@ -184,6 +195,7 @@
       document.getElementById('user-group-select').value = user.group_id || '';
       document.getElementById('user-description').value = user.description || '';
       document.getElementById('user-enabled').checked = user.enabled;
+      document.getElementById('user-allowed-source-ips').value = user.allowed_source_ips || '';
       document.getElementById('user-secret-hint').textContent = 'Leave blank to keep the current password.';
     } else {
       document.getElementById('user-modal-title').textContent = 'Add user';
@@ -217,6 +229,7 @@
       group_id: document.getElementById('user-group-select').value || null,
       description: document.getElementById('user-description').value || null,
       enabled: document.getElementById('user-enabled').checked,
+      allowed_source_ips: document.getElementById('user-allowed-source-ips').value || null,
     };
     if (password) payload.password = password;
     if (!id && !password) {

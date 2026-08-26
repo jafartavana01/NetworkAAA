@@ -71,7 +71,31 @@
         <span class="field-label">Device group</span>
         <select id="policy-condition-device-group"><option value="">— Any —</option></select>
       </label>
-      <div class="field-hint" style="margin-top:-10px;margin-bottom:18px;">Multiple conditions combine with AND — e.g. Group + Device Group together means "this group, only on these devices."</div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:10px;">Multiple conditions combine with AND — e.g. Group + Device Group together means "this group, only on these devices."</div>
+      <button type="button" class="btn-secondary btn-small" id="toggle-advanced-conditions-btn" style="width:auto;margin-bottom:18px;">Switch to advanced condition builder →</button>
+
+      <div id="advanced-conditions-section" hidden style="margin-bottom:18px;">
+        <div class="panel panel-wide" style="margin-bottom:14px;">
+          <div class="panel-body" style="font-size:12px;color:var(--text-dim);">
+            Replaces the simple fields above entirely — saving with conditions here ignores Group/Device/Device group. Supports up to one level of nested groups (e.g. "this user group AND (this device group OR that device group)"), matching every example in the spec. Source IP is checked exactly or as a CIDR range.
+          </div>
+        </div>
+        <button type="button" class="btn-ghost btn-small" id="revert-to-simple-btn" style="width:auto;margin-bottom:14px;">← Back to simple fields</button>
+
+        <label class="field" style="flex:0 0 220px;margin-bottom:10px;">
+          <span class="field-label">Match</span>
+          <select id="root-logical-operator">
+            <option value="AND">ALL of these (AND)</option>
+            <option value="OR">ANY of these (OR)</option>
+            <option value="NOT">NONE of these (NOT)</option>
+          </select>
+        </label>
+        <div id="root-conditions-list" style="margin-bottom:8px;"></div>
+        <button type="button" class="btn-secondary btn-small" id="add-root-condition-btn" style="width:auto;margin-right:8px;">+ Add Condition</button>
+        <button type="button" class="btn-secondary btn-small" id="add-nested-group-btn" style="width:auto;">+ Add Condition Group</button>
+
+        <div id="nested-groups-list" style="margin-top:14px;"></div>
+      </div>
 
       <div class="field-row">
         <label class="field">
@@ -89,6 +113,7 @@
       <div class="field-hint" style="margin-top:-10px;margin-bottom:18px;">A full-access "Admin" policy needs no Command Sets at all — just Permit here.</div>
 
       <div class="field-label" style="margin-bottom:8px;">Command Sets</div>
+      <input type="text" id="command-sets-filter" placeholder="Filter by name…" style="margin-bottom:8px;">
       <div id="command-sets-checklist" style="margin-bottom:16px;"></div>
 
       <label class="field">
@@ -125,6 +150,8 @@
   let allDevices = [];
   let allDeviceGroups = [];
   let allCommandSets = [];
+  let allUsers = [];
+  let currentConditionTree = null; // null = using the simple legacy fields; an object = using the advanced builder
   let currentCommandSetIds = [];
 
   function escapeHtml(s) {
@@ -134,16 +161,18 @@
   }
 
   async function loadReferenceData() {
-    const [groupsRes, devicesRes, deviceGroupsRes, setsRes] = await Promise.all([
+    const [groupsRes, devicesRes, deviceGroupsRes, setsRes, usersRes] = await Promise.all([
       AAAPlatform.authedFetch('/api/tacacs-groups'),
       AAAPlatform.authedFetch('/api/devices'),
       AAAPlatform.authedFetch('/api/device-groups'),
       AAAPlatform.authedFetch('/api/command-sets'),
+      AAAPlatform.authedFetch('/api/tacacs-users'),
     ]);
     allGroups = groupsRes.ok ? await groupsRes.json() : [];
     allDevices = devicesRes.ok ? await devicesRes.json() : [];
     allDeviceGroups = deviceGroupsRes.ok ? await deviceGroupsRes.json() : [];
     allCommandSets = setsRes.ok ? await setsRes.json() : [];
+    allUsers = usersRes.ok ? await usersRes.json() : [];
 
     document.getElementById('policy-condition-group').innerHTML =
       '<option value="">— Any —</option>' + allGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
@@ -159,12 +188,35 @@
       container.innerHTML = `<div class="content-sub">No command sets exist yet. <a href="/tacacs/command-sets">Create one</a> first, or leave this policy unrestricted with Default action = Permit.</div>`;
       return;
     }
-    container.innerHTML = allCommandSets.map(cs => `
-      <label class="checkbox-field field" style="margin-bottom:6px;">
-        <input type="checkbox" data-set-id="${cs.id}" ${currentCommandSetIds.includes(cs.id) ? 'checked' : ''}>
-        <span>${escapeHtml(cs.name)}${!cs.enabled ? ' <span class="content-sub">(disabled)</span>' : ''}</span>
-      </label>
-    `).join('');
+
+    const filterValue = (document.getElementById('command-sets-filter').value || '').toLowerCase();
+    const visibleSets = allCommandSets.filter(cs => cs.name.toLowerCase().includes(filterValue));
+
+    if (visibleSets.length === 0) {
+      container.innerHTML = `<div class="content-sub">No command sets match "${escapeHtml(filterValue)}".</div>`;
+      return;
+    }
+
+    container.innerHTML = visibleSets.map(cs => {
+      const permitCount = cs.rules.filter(r => r.action === 'permit').length;
+      const denyCount = cs.rules.filter(r => r.action === 'deny').length;
+      const ruleLines = cs.rules.length
+        ? cs.rules.map(r => `<div class="cell-mono content-sub" style="padding:2px 0;">${r.action === 'deny' ? '<span style="color:var(--red);">deny</span>' : '<span style="color:var(--signal);">permit</span>'}  ${escapeHtml(r.command_pattern)}${r.category_name ? ' <span class="content-sub">[' + escapeHtml(r.category_name) + ']</span>' : ''}</div>`).join('')
+        : '<div class="content-sub">No rules in this set.</div>';
+
+      return `
+      <div style="border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <label class="checkbox-field field" style="margin-bottom:0;flex:1;">
+            <input type="checkbox" data-set-id="${cs.id}" ${currentCommandSetIds.includes(cs.id) ? 'checked' : ''}>
+            <span>${escapeHtml(cs.name)}${!cs.enabled ? ' <span class="content-sub">(disabled)</span>' : ''} <span class="content-sub cell-mono">— ${permitCount} permit / ${denyCount} deny</span></span>
+          </label>
+          <button type="button" class="btn-ghost btn-small" data-toggle-preview="${cs.id}" style="width:auto;">Preview ▾</button>
+        </div>
+        <div id="preview-${cs.id}" hidden style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line);">${ruleLines}</div>
+      </div>
+    `;
+    }).join('');
 
     container.querySelectorAll('[data-set-id]').forEach(cb => {
       cb.addEventListener('change', () => {
@@ -173,7 +225,265 @@
         if (!cb.checked) currentCommandSetIds = currentCommandSetIds.filter(x => x !== id);
       });
     });
+    container.querySelectorAll('[data-toggle-preview]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const preview = document.getElementById(`preview-${btn.dataset.togglePreview}`);
+        preview.hidden = !preview.hidden;
+        btn.textContent = preview.hidden ? 'Preview ▾' : 'Preview ▴';
+      });
+    });
   }
+  document.getElementById('command-sets-filter').addEventListener('input', renderCommandSetsChecklist);
+
+  // ---------- Advanced condition builder ----------
+  // Scoped to root group + one level of nested groups -- covers every
+  // example in the spec (single AND, and one level of OR nested
+  // inside AND) without needing a fully general infinite-depth tree
+  // UI. The backend (app.services.condition_engine,
+  // app.api.routes_policy_conditions) already supports arbitrary
+  // nesting -- a future GUI enhancement could go deeper without any
+  // backend change.
+
+  const OBJECT_TYPE_LABELS = {
+    user: 'User', user_group: 'User Group', device: 'Device',
+    device_group: 'Device Group', source_ip: 'Source IP',
+  };
+  const OPERATORS_BY_OBJECT_TYPE = {
+    user: [['equal', 'Equal'], ['not_equal', 'Not Equal']],
+    user_group: [['equal', 'Equal'], ['not_equal', 'Not Equal']],
+    device: [['equal', 'Equal'], ['not_equal', 'Not Equal']],
+    device_group: [['equal', 'Equal'], ['not_equal', 'Not Equal']],
+    source_ip: [['equal', 'Equal'], ['not_equal', 'Not Equal'], ['is_in_cidr', 'Is In CIDR'], ['is_not_in_cidr', 'Is Not In CIDR']],
+  };
+  const DATABASE_BACKED_TYPES = ['user', 'user_group', 'device', 'device_group'];
+
+  function referenceOptionsFor(objectType) {
+    if (objectType === 'user') return allUsers.map(u => ({ id: u.id, name: u.username }));
+    if (objectType === 'user_group') return allGroups.map(g => ({ id: g.id, name: g.name }));
+    if (objectType === 'device') return allDevices.map(d => ({ id: d.id, name: d.name }));
+    if (objectType === 'device_group') return allDeviceGroups.map(g => ({ id: g.id, name: g.name }));
+    return [];
+  }
+
+  function newCondition() {
+    return { object_type: 'user_group', operator: 'equal', value: '', referenced_object_id: null };
+  }
+
+  function renderConditionRow(cond, list, index, rerender) {
+    const isDbBacked = DATABASE_BACKED_TYPES.includes(cond.object_type);
+    const opOptions = OPERATORS_BY_OBJECT_TYPE[cond.object_type] || [];
+    const valueField = isDbBacked
+      ? `<select data-role="value" data-index="${index}">
+           <option value="">— select —</option>
+           ${referenceOptionsFor(cond.object_type).map(o => `<option value="${o.id}" ${cond.referenced_object_id === o.id ? 'selected' : ''}>${escapeHtml(o.name)}</option>`).join('')}
+         </select>`
+      : `<input type="text" data-role="value" data-index="${index}" value="${escapeHtml(cond.value)}" placeholder="${cond.operator.includes('cidr') ? '10.10.20.0/24' : '10.10.20.5'}">`;
+
+    const row = document.createElement('div');
+    row.className = 'field-row';
+    row.style.cssText = 'align-items:flex-end;margin-bottom:6px;';
+    row.innerHTML = `
+      <label class="field" style="flex:0 0 150px;">
+        <span class="field-label">Object type</span>
+        <select data-role="object_type" data-index="${index}">
+          ${Object.entries(OBJECT_TYPE_LABELS).map(([v, l]) => `<option value="${v}" ${cond.object_type === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field" style="flex:0 0 140px;">
+        <span class="field-label">Operator</span>
+        <select data-role="operator" data-index="${index}">
+          ${opOptions.map(([v, l]) => `<option value="${v}" ${cond.operator === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label">Value</span>
+        ${valueField}
+      </label>
+      <button type="button" class="btn-danger btn-small" data-role="remove" data-index="${index}" style="margin-bottom:2px;">×</button>
+    `;
+    if (cond.object_type === 'user') {
+      const hint = document.createElement('div');
+      hint.className = 'content-sub';
+      hint.style.cssText = 'margin:-4px 0 8px 0;';
+      hint.textContent = 'Evaluates correctly in the Simulator, but has no confirmed tac_plus-ng syntax — a policy using this condition is excluded from the generated config, not faked.';
+      row.appendChild(hint);
+    }
+
+    row.querySelector('[data-role="object_type"]').addEventListener('change', (e) => {
+      list[index].object_type = e.target.value;
+      list[index].operator = (OPERATORS_BY_OBJECT_TYPE[e.target.value] || [['equal']])[0][0];
+      list[index].value = '';
+      list[index].referenced_object_id = null;
+      rerender();
+    });
+    row.querySelector('[data-role="operator"]').addEventListener('change', (e) => {
+      list[index].operator = e.target.value;
+      rerender();
+    });
+    const valueEl = row.querySelector('[data-role="value"]');
+    const updateValue = () => {
+      if (isDbBacked) {
+        list[index].referenced_object_id = valueEl.value || null;
+      } else {
+        list[index].value = valueEl.value;
+      }
+    };
+    valueEl.addEventListener('change', updateValue);
+    valueEl.addEventListener('input', updateValue);
+    row.querySelector('[data-role="remove"]').addEventListener('click', () => {
+      list.splice(index, 1);
+      rerender();
+    });
+    return row;
+  }
+
+  function renderRootConditions() {
+    document.getElementById('root-logical-operator').value = currentConditionTree.logical_operator;
+    const container = document.getElementById('root-conditions-list');
+    container.innerHTML = '';
+    if (currentConditionTree.conditions.length === 0) {
+      container.innerHTML = '<div class="content-sub" style="padding:4px 0;">No conditions yet.</div>';
+    } else {
+      currentConditionTree.conditions.forEach((cond, i) => {
+        container.appendChild(renderConditionRow(cond, currentConditionTree.conditions, i, renderRootConditions));
+      });
+    }
+    renderNestedGroups();
+  }
+
+  function renderNestedGroups() {
+    const container = document.getElementById('nested-groups-list');
+    container.innerHTML = '';
+    currentConditionTree.child_groups.forEach((group, groupIndex) => {
+      const box = document.createElement('div');
+      box.className = 'panel panel-wide';
+      box.style.cssText = 'margin-bottom:12px;padding:14px;';
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;';
+      header.innerHTML = `
+        <label class="field" style="flex:0 0 220px;margin-bottom:0;">
+          <span class="field-label">Nested group match</span>
+          <select data-role="group-operator">
+            <option value="AND" ${group.logical_operator === 'AND' ? 'selected' : ''}>ALL of these (AND)</option>
+            <option value="OR" ${group.logical_operator === 'OR' ? 'selected' : ''}>ANY of these (OR)</option>
+            <option value="NOT" ${group.logical_operator === 'NOT' ? 'selected' : ''}>NONE of these (NOT)</option>
+          </select>
+        </label>
+        <button type="button" class="btn-danger btn-small" data-role="remove-group">Remove group</button>
+      `;
+      box.appendChild(header);
+      const list = document.createElement('div');
+      box.appendChild(list);
+      const rerenderThisGroup = () => renderNestedGroups();
+
+      if (group.conditions.length === 0) {
+        list.innerHTML = '<div class="content-sub" style="padding:4px 0;">No conditions yet.</div>';
+      } else {
+        group.conditions.forEach((cond, i) => {
+          list.appendChild(renderConditionRow(cond, group.conditions, i, rerenderThisGroup));
+        });
+      }
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'btn-secondary btn-small';
+      addBtn.style.width = 'auto';
+      addBtn.textContent = '+ Add Condition';
+      addBtn.addEventListener('click', () => {
+        group.conditions.push(newCondition());
+        renderNestedGroups();
+      });
+      box.appendChild(addBtn);
+
+      header.querySelector('[data-role="group-operator"]').addEventListener('change', (e) => {
+        group.logical_operator = e.target.value;
+      });
+      header.querySelector('[data-role="remove-group"]').addEventListener('click', () => {
+        currentConditionTree.child_groups.splice(groupIndex, 1);
+        renderNestedGroups();
+      });
+
+      container.appendChild(box);
+    });
+  }
+
+  function apiTreeToBuilderTree(apiTree) {
+    return {
+      logical_operator: apiTree.logical_operator,
+      conditions: apiTree.conditions.map(c => ({
+        object_type: c.object_type, operator: c.operator,
+        value: c.value_type === 'manual' ? c.value : '',
+        referenced_object_id: c.referenced_object_id,
+      })),
+      // Flattened to one level: any deeper nesting from data created
+      // outside this GUI is preserved read-only by simply not
+      // recursing further here -- editing it back down would need the
+      // fuller recursive UI noted above. child_groups are limited to
+      // their OWN conditions for the same reason.
+      child_groups: (apiTree.child_groups || []).map(g => ({
+        logical_operator: g.logical_operator,
+        conditions: g.conditions.map(c => ({
+          object_type: c.object_type, operator: c.operator,
+          value: c.value_type === 'manual' ? c.value : '',
+          referenced_object_id: c.referenced_object_id,
+        })),
+      })),
+    };
+  }
+
+  function builderTreeToApiPayload(tree) {
+    return {
+      logical_operator: tree.logical_operator,
+      conditions: tree.conditions.map(c => ({
+        object_type: c.object_type, operator: c.operator,
+        value: c.value || '', referenced_object_id: c.referenced_object_id || null,
+      })),
+      child_groups: tree.child_groups.map(g => ({
+        logical_operator: g.logical_operator,
+        conditions: g.conditions.map(c => ({
+          object_type: c.object_type, operator: c.operator,
+          value: c.value || '', referenced_object_id: c.referenced_object_id || null,
+        })),
+        child_groups: [],
+      })),
+    };
+  }
+
+  function showAdvancedConditions() {
+    document.getElementById('advanced-conditions-section').hidden = false;
+    document.getElementById('toggle-advanced-conditions-btn').hidden = true;
+    document.getElementById('policy-condition-group').closest('.field-row').style.display = 'none';
+    document.getElementById('policy-condition-device-group').style.display = 'none';
+    if (!currentConditionTree) {
+      currentConditionTree = { logical_operator: 'AND', conditions: [newCondition()], child_groups: [] };
+    }
+    renderRootConditions();
+  }
+
+  function showSimpleConditions() {
+    document.getElementById('advanced-conditions-section').hidden = true;
+    document.getElementById('toggle-advanced-conditions-btn').hidden = false;
+    document.getElementById('policy-condition-group').closest('.field-row').style.display = '';
+    document.getElementById('policy-condition-device-group').style.display = '';
+    currentConditionTree = null;
+  }
+
+  document.getElementById('toggle-advanced-conditions-btn').addEventListener('click', showAdvancedConditions);
+  document.getElementById('revert-to-simple-btn').addEventListener('click', () => {
+    if (confirm('Switch back to simple fields? Any conditions built here will be discarded when you save.')) {
+      showSimpleConditions();
+    }
+  });
+  document.getElementById('root-logical-operator').addEventListener('change', (e) => {
+    currentConditionTree.logical_operator = e.target.value;
+  });
+  document.getElementById('add-root-condition-btn').addEventListener('click', () => {
+    currentConditionTree.conditions.push(newCondition());
+    renderRootConditions();
+  });
+  document.getElementById('add-nested-group-btn').addEventListener('click', () => {
+    currentConditionTree.child_groups.push({ logical_operator: 'AND', conditions: [newCondition()] });
+    renderNestedGroups();
+  });
 
   function renderTable() {
     const wrap = document.getElementById('policies-table-wrap');
@@ -297,10 +607,11 @@
     renderTable();
   }
 
-  function openModal(policy) {
+  async function openModal(policy) {
     document.getElementById('policy-form-error').hidden = true;
     document.getElementById('policy-form').reset();
     document.getElementById('policy-change-description').value = '';
+    showSimpleConditions(); // reset to a known state before populating
 
     if (policy) {
       document.getElementById('policy-modal-title').textContent = 'Edit policy';
@@ -315,6 +626,15 @@
       document.getElementById('policy-priv-lvl').value = policy.default_priv_lvl;
       document.getElementById('policy-default-action').value = policy.default_action;
       currentCommandSetIds = policy.command_sets.map(cs => cs.id);
+
+      const treeRes = await AAAPlatform.authedFetch(`/api/policies/${policy.id}/condition-tree`);
+      if (treeRes.ok) {
+        const treeData = await treeRes.json();
+        if (treeData.has_migrated) {
+          currentConditionTree = apiTreeToBuilderTree(treeData.tree);
+          showAdvancedConditions();
+        }
+      }
     } else {
       document.getElementById('policy-modal-title').textContent = 'Add policy';
       document.getElementById('policy-id').value = '';
@@ -372,6 +692,32 @@
       errorBox.textContent = msg;
       errorBox.hidden = false;
       return;
+    }
+
+    const savedPolicy = await res.json();
+
+    // If the advanced condition builder is active, save the tree as a
+    // separate step against the now-known policy id (a brand-new
+    // policy doesn't have one until the create above returns it).
+    // The simple fields on `payload` above were already sent and
+    // saved, but resolve_condition_expression() checks for a
+    // condition tree FIRST (see app.services.condition_engine.
+    // has_condition_tree) -- so as soon as this PUT succeeds, the
+    // tree takes over from those simple fields entirely, exactly as
+    // the "Switch to advanced" hint in the GUI says it will.
+    if (currentConditionTree) {
+      const treeRes = await AAAPlatform.authedFetch(`/api/policies/${savedPolicy.id}/condition-tree`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(builderTreeToApiPayload(currentConditionTree)),
+      });
+      if (!treeRes.ok) {
+        const body = await treeRes.json().catch(() => ({}));
+        const msg = (body.detail && typeof body.detail === 'string') ? body.detail : 'Policy saved, but its conditions could not be saved.';
+        AAAPlatform.toast(msg, 'error');
+        loadPolicies();
+        return;
+      }
     }
 
     closeModal();

@@ -27,6 +27,7 @@ from ..api.routes_devices import router as devices_router
 from ..api.routes_diagnostics import router as diagnostics_router
 from ..api.routes_effective_access import router as effective_access_router
 from ..api.routes_policies import router as policies_router
+from ..api.routes_policy_conditions import router as policy_conditions_router
 from ..api.routes_policy_simulator import router as policy_simulator_router
 from ..api.routes_policy_versions import router as policy_versions_router
 from ..api.routes_tacacs_groups import router as tacacs_groups_router
@@ -42,6 +43,7 @@ _tacacs_api_router.include_router(tacacs_users_router)
 _tacacs_api_router.include_router(tacacs_groups_router)
 _tacacs_api_router.include_router(policies_router)
 _tacacs_api_router.include_router(policy_versions_router)
+_tacacs_api_router.include_router(policy_conditions_router)
 _tacacs_api_router.include_router(command_sets_router)
 _tacacs_api_router.include_router(command_categories_router)
 _tacacs_api_router.include_router(policy_simulator_router)

@@ -82,7 +82,7 @@ def init_db() -> None:
     from .models import (  # noqa: F401
         admin, system_info, module_state, device, config_version, user, group,
         device_group, policy, command_rule, command_category, command_set,
-        policy_command_set, policy_version,
+        policy_command_set, policy_version, policy_condition_group, policy_condition,
     )
 
     Base.metadata.create_all(bind=get_engine())

@@ -10,16 +10,19 @@ explicit constraint): every lookup here is a database read against
 this platform's own TacacsUser/NetworkDevice/TacacsGroup/DeviceGroup
 rows.
 
-Source IP, protocol, service, and privilege are accepted as input
-fields (matching §7's requested form fields) but are NOT yet evaluated
-against any policy condition -- app.models.policy only implements
-group/device/device-group conditions so far (see that model's
-docstring for exactly what's implemented vs. deferred, and why:
-source-IP/CIDR matching has confirmed tac_plus-ng syntax but isn't
-wired into the Policy model yet; time-of-day conditions have no
-confirmed syntax at all). Accepting the fields without using them is
-honest about current scope -- the alternative would be a form that
-silently ignores what the admin typed into it with no explanation,
+Source IP IS now evaluated -- against a policy's condition tree, if it
+has one (pasted policy-condition-builder spec; see
+app.services.condition_engine). A policy still on the legacy
+flat-field model (group/device/device-group only, implicitly AND'd --
+see app.models.policy's docstring) ignores source_ip, since that
+model has no source-IP dimension at all; migrating a policy to the
+tree model (an explicit action, not automatic) is what makes
+source_ip conditions available for it. Protocol, service, and
+privilege remain accepted-but-unevaluated fields -- no policy
+condition (legacy or tree) currently checks them. Accepting fields
+without using them is honest about current scope -- the alternative
+would be a form that silently ignores what the admin typed into it
+with no explanation,
 which is worse.
 """
 from __future__ import annotations
@@ -85,7 +88,7 @@ def simulate(
         dg = db.query(DeviceGroup).filter(DeviceGroup.id == device.device_group_id).first()
         device_group_name = dg.name if dg else None
 
-    result = policy_engine.evaluate(db, user=user, device=device, command=payload.command)
+    result = policy_engine.evaluate(db, user=user, device=device, command=payload.command, source_ip=payload.source_ip)
 
     command_sets_granted = []
     if result.matched_policy is not None:
@@ -106,10 +109,11 @@ def simulate(
             "device_group_name": device_group_name,
         },
         "unevaluated_inputs": {
-            "source_ip": payload.source_ip,
             "protocol": payload.protocol,
             "service": payload.service,
-            "note": "Accepted but not yet evaluated against any policy condition -- see this route's docstring.",
+            "note": "Accepted but not yet evaluated against any policy condition -- see this route's docstring. "
+                    "source_ip IS now evaluated (against a policy's condition tree, if it has one -- see "
+                    "app.services.condition_engine) and no longer listed here.",
         },
         "authorization": {
             "matched_policy_name": result.matched_policy.name if result.matched_policy else None,
