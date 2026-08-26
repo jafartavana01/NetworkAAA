@@ -337,27 +337,46 @@
     return row;
   }
 
-  function renderRootConditions() {
-    document.getElementById('root-logical-operator').value = currentConditionTree.logical_operator;
-    const container = document.getElementById('root-conditions-list');
-    container.innerHTML = '';
-    if (currentConditionTree.conditions.length === 0) {
-      container.innerHTML = '<div class="content-sub" style="padding:4px 0;">No conditions yet.</div>';
-    } else {
-      currentConditionTree.conditions.forEach((cond, i) => {
-        container.appendChild(renderConditionRow(cond, currentConditionTree.conditions, i, renderRootConditions));
-      });
-    }
-    renderNestedGroups();
+  function newGroup() {
+    return { logical_operator: 'AND', conditions: [newCondition()], child_groups: [] };
   }
 
-  function renderNestedGroups() {
-    const container = document.getElementById('nested-groups-list');
+  // Single recursive entry point: re-renders the ENTIRE tree from the
+  // root on any change, rather than trying to have each nested level
+  // re-render just itself. The whole tree is small in practice (a
+  // handful of conditions/groups), so this trades a little redundant
+  // DOM rebuilding for a much simpler, harder-to-get-wrong mental
+  // model -- especially once nesting is genuinely unlimited-depth,
+  // where granular per-node re-rendering would need every node to
+  // track a path back to its parent for removal.
+  function renderConditionTree() {
+    document.getElementById('root-logical-operator').value = currentConditionTree.logical_operator;
+    renderConditionRows(currentConditionTree.conditions, document.getElementById('root-conditions-list'), renderConditionTree);
+    renderChildGroups(currentConditionTree, document.getElementById('nested-groups-list'), 0, renderConditionTree);
+  }
+
+  function renderConditionRows(conditions, container, rerenderAll) {
     container.innerHTML = '';
-    currentConditionTree.child_groups.forEach((group, groupIndex) => {
+    if (conditions.length === 0) {
+      container.innerHTML = '<div class="content-sub" style="padding:4px 0;">No conditions yet.</div>';
+      return;
+    }
+    conditions.forEach((cond, i) => {
+      container.appendChild(renderConditionRow(cond, conditions, i, rerenderAll));
+    });
+  }
+
+  // Renders `parentGroup.child_groups` into `container`, recursing
+  // into each child's OWN child_groups -- genuinely unlimited nesting
+  // depth, limited only by what's practical to build a policy with,
+  // not by this code. `depth` only controls visual indentation.
+  function renderChildGroups(parentGroup, container, depth, rerenderAll) {
+    container.innerHTML = '';
+    parentGroup.child_groups.forEach((group, groupIndex) => {
       const box = document.createElement('div');
       box.className = 'panel panel-wide';
-      box.style.cssText = 'margin-bottom:12px;padding:14px;';
+      box.style.cssText = `margin-bottom:12px;padding:14px;margin-left:${Math.min(depth, 6) * 20}px;`;
+
       const header = document.createElement('div');
       header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;';
       header.innerHTML = `
@@ -372,35 +391,44 @@
         <button type="button" class="btn-danger btn-small" data-role="remove-group">Remove group</button>
       `;
       box.appendChild(header);
-      const list = document.createElement('div');
-      box.appendChild(list);
-      const rerenderThisGroup = () => renderNestedGroups();
-
-      if (group.conditions.length === 0) {
-        list.innerHTML = '<div class="content-sub" style="padding:4px 0;">No conditions yet.</div>';
-      } else {
-        group.conditions.forEach((cond, i) => {
-          list.appendChild(renderConditionRow(cond, group.conditions, i, rerenderThisGroup));
-        });
-      }
-      const addBtn = document.createElement('button');
-      addBtn.type = 'button';
-      addBtn.className = 'btn-secondary btn-small';
-      addBtn.style.width = 'auto';
-      addBtn.textContent = '+ Add Condition';
-      addBtn.addEventListener('click', () => {
-        group.conditions.push(newCondition());
-        renderNestedGroups();
-      });
-      box.appendChild(addBtn);
-
       header.querySelector('[data-role="group-operator"]').addEventListener('change', (e) => {
         group.logical_operator = e.target.value;
       });
       header.querySelector('[data-role="remove-group"]').addEventListener('click', () => {
-        currentConditionTree.child_groups.splice(groupIndex, 1);
-        renderNestedGroups();
+        parentGroup.child_groups.splice(groupIndex, 1);
+        rerenderAll();
       });
+
+      const conditionsContainer = document.createElement('div');
+      box.appendChild(conditionsContainer);
+      renderConditionRows(group.conditions, conditionsContainer, rerenderAll);
+
+      const addCondBtn = document.createElement('button');
+      addCondBtn.type = 'button';
+      addCondBtn.className = 'btn-secondary btn-small';
+      addCondBtn.style.cssText = 'width:auto;margin-right:8px;';
+      addCondBtn.textContent = '+ Add Condition';
+      addCondBtn.addEventListener('click', () => {
+        group.conditions.push(newCondition());
+        rerenderAll();
+      });
+      box.appendChild(addCondBtn);
+
+      const addGroupBtn = document.createElement('button');
+      addGroupBtn.type = 'button';
+      addGroupBtn.className = 'btn-secondary btn-small';
+      addGroupBtn.style.width = 'auto';
+      addGroupBtn.textContent = '+ Add Nested Group';
+      addGroupBtn.addEventListener('click', () => {
+        group.child_groups.push(newGroup());
+        rerenderAll();
+      });
+      box.appendChild(addGroupBtn);
+
+      const nestedContainer = document.createElement('div');
+      nestedContainer.style.marginTop = '12px';
+      box.appendChild(nestedContainer);
+      renderChildGroups(group, nestedContainer, depth + 1, rerenderAll);
 
       container.appendChild(box);
     });
@@ -414,19 +442,10 @@
         value: c.value_type === 'manual' ? c.value : '',
         referenced_object_id: c.referenced_object_id,
       })),
-      // Flattened to one level: any deeper nesting from data created
-      // outside this GUI is preserved read-only by simply not
-      // recursing further here -- editing it back down would need the
-      // fuller recursive UI noted above. child_groups are limited to
-      // their OWN conditions for the same reason.
-      child_groups: (apiTree.child_groups || []).map(g => ({
-        logical_operator: g.logical_operator,
-        conditions: g.conditions.map(c => ({
-          object_type: c.object_type, operator: c.operator,
-          value: c.value_type === 'manual' ? c.value : '',
-          referenced_object_id: c.referenced_object_id,
-        })),
-      })),
+      // Genuinely recursive -- any depth of nesting already present
+      // (whether built here previously, or created via direct API
+      // access) round-trips fully editable, not just its first level.
+      child_groups: (apiTree.child_groups || []).map(g => apiTreeToBuilderTree(g)),
     };
   }
 
@@ -437,14 +456,7 @@
         object_type: c.object_type, operator: c.operator,
         value: c.value || '', referenced_object_id: c.referenced_object_id || null,
       })),
-      child_groups: tree.child_groups.map(g => ({
-        logical_operator: g.logical_operator,
-        conditions: g.conditions.map(c => ({
-          object_type: c.object_type, operator: c.operator,
-          value: c.value || '', referenced_object_id: c.referenced_object_id || null,
-        })),
-        child_groups: [],
-      })),
+      child_groups: tree.child_groups.map(g => builderTreeToApiPayload(g)),
     };
   }
 
@@ -456,7 +468,7 @@
     if (!currentConditionTree) {
       currentConditionTree = { logical_operator: 'AND', conditions: [newCondition()], child_groups: [] };
     }
-    renderRootConditions();
+    renderConditionTree();
   }
 
   function showSimpleConditions() {
@@ -478,11 +490,11 @@
   });
   document.getElementById('add-root-condition-btn').addEventListener('click', () => {
     currentConditionTree.conditions.push(newCondition());
-    renderRootConditions();
+    renderConditionTree();
   });
   document.getElementById('add-nested-group-btn').addEventListener('click', () => {
-    currentConditionTree.child_groups.push({ logical_operator: 'AND', conditions: [newCondition()] });
-    renderNestedGroups();
+    currentConditionTree.child_groups.push(newGroup());
+    renderConditionTree();
   });
 
   function renderTable() {

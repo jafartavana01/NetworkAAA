@@ -22,6 +22,7 @@ from ..api.routes_accounting import router as accounting_router
 from ..api.routes_command_categories import router as command_categories_router
 from ..api.routes_command_sets import router as command_sets_router
 from ..api.routes_config import router as config_router
+from ..api.routes_device_access_grants import router as device_access_grants_router
 from ..api.routes_device_groups import router as device_groups_router
 from ..api.routes_devices import router as devices_router
 from ..api.routes_diagnostics import router as diagnostics_router
@@ -37,6 +38,7 @@ from .registry import Module, NavEntry, register, get_module
 
 _tacacs_api_router = APIRouter()
 _tacacs_api_router.include_router(devices_router)
+_tacacs_api_router.include_router(device_access_grants_router)
 _tacacs_api_router.include_router(device_groups_router)
 _tacacs_api_router.include_router(config_router)
 _tacacs_api_router.include_router(tacacs_users_router)

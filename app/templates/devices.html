@@ -17,7 +17,52 @@
   <div id="devices-table-wrap">
     <div class="empty-state">Loading devices…</div>
   </div>
+
+  <div class="content-head" style="margin-top:32px;">
+    <h2>Access Grants</h2>
+    <p class="content-sub">Grants a user group unrestricted privilege-15 access to a device or device group, taking precedence over anything in the Policies section — evaluated first, regardless of policy priority. For a specific individual, put them in a dedicated group with just that one member; direct per-user targeting isn't offered here since it has no confirmed way to compile into the real config.</p>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="grant-count"></span>
+    <button class="btn-primary btn-small" id="add-grant-btn" style="width:auto;">+ Add access grant</button>
+  </div>
+
+  <div id="grants-table-wrap">
+    <div class="empty-state">Loading access grants…</div>
+  </div>
 </main>
+
+<div class="modal-backdrop" id="grant-modal-backdrop" hidden>
+  <div class="modal">
+    <h2>Add access grant</h2>
+    <form id="grant-form">
+      <label class="field">
+        <span class="field-label">User group</span>
+        <select id="grant-user-group" required></select>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Target</span>
+        <select id="grant-target-type">
+          <option value="device">A specific device</option>
+          <option value="device_group">A device group</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label" id="grant-target-label">Device</span>
+        <select id="grant-target-value" required></select>
+      </label>
+
+      <div id="grant-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="grant-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Add grant</button>
+      </div>
+    </form>
+  </div>
+</div>
 
 <div class="modal-backdrop" id="device-modal-backdrop" hidden>
   <div class="modal">
@@ -268,8 +313,141 @@
     loadDevices();
   }
 
+  // ---------- Access Grants ----------
+  let accessGrants = [];
+  let allUserGroupsForGrants = [];
+
+  function renderGrantsTable() {
+    const wrap = document.getElementById('grants-table-wrap');
+    document.getElementById('grant-count').textContent = accessGrants.length + (accessGrants.length === 1 ? ' grant' : ' grants');
+
+    if (accessGrants.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No access grants — Policies alone decide access.</div>';
+      return;
+    }
+
+    const rows = accessGrants.map(g => `
+      <tr>
+        <td>${escapeHtml(g.user_group_name || '(deleted group)')}</td>
+        <td>${g.device_name ? escapeHtml(g.device_name) : `<span class="content-sub">device group:</span> ${escapeHtml(g.device_group_name || '(deleted)')}`}</td>
+        <td class="cell-mono">priv 15, unrestricted</td>
+        <td class="cell-actions">
+          <button class="btn-danger btn-small" data-delete-grant="${g.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>User group</th><th>Target</th><th>Grants</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-delete-grant]').forEach(btn => {
+      btn.addEventListener('click', () => deleteGrant(btn.dataset.deleteGrant));
+    });
+  }
+
+  async function loadGrants() {
+    const res = await AAAPlatform.authedFetch('/api/device-access-grants');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) {
+      document.getElementById('grants-table-wrap').innerHTML = '<div class="empty-state">Could not load access grants.</div>';
+      return;
+    }
+    accessGrants = await res.json();
+    renderGrantsTable();
+  }
+
+  async function loadUserGroupsForGrants() {
+    const res = await AAAPlatform.authedFetch('/api/tacacs-groups');
+    if (res.ok) allUserGroupsForGrants = await res.json();
+  }
+
+  function updateGrantTargetOptions() {
+    const type = document.getElementById('grant-target-type').value;
+    const label = document.getElementById('grant-target-label');
+    const select = document.getElementById('grant-target-value');
+    if (type === 'device') {
+      label.textContent = 'Device';
+      select.innerHTML = devices.map(d => `<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
+    } else {
+      label.textContent = 'Device group';
+      select.innerHTML = deviceGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    }
+  }
+
+  function openGrantModal() {
+    document.getElementById('grant-form-error').hidden = true;
+    document.getElementById('grant-form').reset();
+    document.getElementById('grant-user-group').innerHTML = allUserGroupsForGrants.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    updateGrantTargetOptions();
+    document.getElementById('grant-modal-backdrop').hidden = false;
+  }
+
+  document.getElementById('add-grant-btn').addEventListener('click', () => {
+    if (allUserGroupsForGrants.length === 0) {
+      AAAPlatform.toast('Create a TACACS+ group first — grants target a group, not an individual user.', 'error');
+      return;
+    }
+    openGrantModal();
+  });
+  document.getElementById('grant-cancel-btn').addEventListener('click', () => {
+    document.getElementById('grant-modal-backdrop').hidden = true;
+  });
+  document.getElementById('grant-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'grant-modal-backdrop') document.getElementById('grant-modal-backdrop').hidden = true;
+  });
+  document.getElementById('grant-target-type').addEventListener('change', updateGrantTargetOptions);
+
+  document.getElementById('grant-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('grant-form-error');
+    errorBox.hidden = true;
+
+    const targetType = document.getElementById('grant-target-type').value;
+    const targetValue = document.getElementById('grant-target-value').value;
+    const payload = {
+      user_group_id: document.getElementById('grant-user-group').value,
+      device_id: targetType === 'device' ? targetValue : null,
+      device_group_id: targetType === 'device_group' ? targetValue : null,
+    };
+
+    const res = await AAAPlatform.authedFetch('/api/device-access-grants', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Could not add grant.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+
+    document.getElementById('grant-modal-backdrop').hidden = true;
+    AAAPlatform.toast('Access grant added.');
+    loadGrants();
+  });
+
+  async function deleteGrant(id) {
+    if (!confirm('Remove this access grant?')) return;
+    const res = await AAAPlatform.authedFetch(`/api/device-access-grants/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not remove grant.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Access grant removed.');
+    loadGrants();
+  }
+
   loadDeviceGroupOptions();
   loadDevices();
+  loadUserGroupsForGrants();
+  loadGrants();
 
   AAAPlatform.setupQuickAdd(
     {

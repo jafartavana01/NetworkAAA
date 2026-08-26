@@ -1143,3 +1143,100 @@ visible list without touching `currentCommandSetIds` (unchecking
 something by filtering it out of view and back was verified to
 preserve its checked state).
 
+## Device-level access override (the last of the original big-ticket requests)
+
+"If any user group is granted for a device or device group, that
+group becomes privilege 15 without any limitation, taking precedence
+over policy" -- implemented using ONLY mechanisms already confirmed
+and shipped elsewhere in this project (`member ==`, `device ==`, the
+OR-chain pattern for device groups, and ruleset rules evaluated in
+declaration order with first-match-wins), so no new syntax research
+was needed this time.
+
+**Precedence is achieved by emission ORDER, not by manipulating
+priority numbers**: `DeviceAccessGrant` rules are written into the
+ruleset before every policy-based rule, guaranteed by
+`compile_candidate()`'s own construction, not by picking a priority
+value low enough to always win. All grants share ONE profile
+(`device_override_full_access`: priv-lvl 15, no command restrictions
+at all) emitted exactly once, regardless of how many grants exist.
+
+**Group-only, deliberately** -- not a bare user, for the same reason
+`user` isn't a compilable condition object type: no confirmed
+tac_plus-ng syntax exists for direct per-user matching anywhere found
+during this project's research. Rather than add a second "accepted in
+the GUI but silently uncompilable" trap, this feature doesn't offer
+per-user targeting at all -- the GUI says so directly, and granting
+one specific person means putting them in a dedicated group with just
+that member.
+
+**Verified with real Python execution**, mirroring the actual
+algorithm exactly (not a reimplementation): a device-specific grant,
+a device-group grant (OR-chain), and -- most importantly -- that
+override rules genuinely appear BEFORE policy rules in the rendered
+ruleset text, confirmed by checking `str.index()` ordering directly
+rather than assuming the construction is correct. Also verified: a
+grant referencing a deleted group is excluded (returns `None`), never
+compiled with a dangling reference.
+
+Since this project is clean-install-only by deliberate prior decision,
+`device_access_grants` is a new table with no migration path built for
+an already-existing database -- `create_all()` covers a fresh install
+automatically; an existing deployment needs a manual `CREATE TABLE`
+(see chat) or a fresh reinstall, consistent with every other schema
+addition made under this same decision throughout the project.
+
+**GUI**: added to the existing Devices page (per the original
+request's own framing, "in device management") as a new "Access
+Grants" section below the device table -- its own list, add modal
+(user group + device-or-device-group target picker), and delete
+action. Blocks adding a grant with a clear message if no TACACS+
+groups exist yet, rather than opening an empty, confusing picker.
+
+## Condition builder: genuinely unlimited nesting depth, and command-as-condition research conclusion
+
+**Deeper GUI nesting**: the condition builder was scoped to root +
+one level of nesting two turns ago as a deliberate time-boxed
+decision -- the backend (the recursive `PolicyConditionGroup` tree,
+`condition_engine.py`'s recursive evaluator, and the recursive
+`ConditionGroupInput` Pydantic model) already supported arbitrary
+depth from the start. Only the GUI's rendering/editing logic was
+capped. That cap is now removed: `renderChildGroups()` recurses into
+each group's own `child_groups`, so "+Add Nested Group" is available
+at every level, not just the first, with progressively increasing
+visual indentation. Rendering strategy: the whole tree re-renders from
+the root on any single change, rather than each node trying to
+re-render just itself -- simpler to reason about and avoids an entire
+class of "which node's closure am I actually mutating" bugs, at the
+cost of some redundant DOM rebuilding that's irrelevant at the scale
+a policy's condition tree actually reaches.
+
+`apiTreeToBuilderTree()` and `builderTreeToApiPayload()` were
+previously one-level-only despite the backend already returning/
+accepting arbitrary depth -- both are now genuinely recursive.
+Verified with real Node.js execution of the actual extracted
+functions against a genuine 3-level-deep tree, using an EXACT
+structural comparison (not spot-checks) confirming the round-trip
+preserves every operator, value, and reference at every depth. Also
+verified separately: adding a nested group *within* an already-nested
+group correctly attaches to that group specifically, not accidentally
+to the root -- the exact closure-correctness question this kind of
+recursive UI is most likely to get subtly wrong.
+
+**Command-as-condition: researched, and concluded against
+implementing it** -- not for lack of finding a single confirming
+example, but because of a consistent pattern across many independent
+real-world tac_plus-ng configs (personal blogs, mailing-list threads,
+vendor-specific guides): every one checks `cmd` exclusively inside a
+`profile { script { ... } }` block, and every ruleset-level `if()`
+checks only identity/location context (`member ==`, `memberof =~`,
+`acl ==`) -- never `cmd`. This isn't an isolated absence of an
+example; it's the same two-stage architecture recurring independently
+across sources: the ruleset's job is selecting a profile by WHO/WHERE,
+the profile's job is deciding WHAT by command. That matches the
+project's own existing Command Set design exactly. Inventing a
+ruleset-level `cmd` check with no supporting precedent would be
+exactly the class of mistake this project has worked to avoid since
+the `task_id` incident -- so this stays deferred, with the reasoning
+recorded here rather than silently dropped.
+

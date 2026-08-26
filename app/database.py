@@ -83,6 +83,7 @@ def init_db() -> None:
         admin, system_info, module_state, device, config_version, user, group,
         device_group, policy, command_rule, command_category, command_set,
         policy_command_set, policy_version, policy_condition_group, policy_condition,
+        device_access_grant,
     )
 
     Base.metadata.create_all(bind=get_engine())

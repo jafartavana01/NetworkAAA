@@ -30,6 +30,7 @@ from .. import security
 from ..config import BACKUPS_DIR, GENERATED_DIR, LOG_DIR
 from ..models.config_version import ConfigVersion
 from ..models.device import NetworkDevice
+from ..models.device_access_grant import DeviceAccessGrant
 from ..models.group import TacacsGroup
 from ..models.policy import Policy
 from ..models.policy_condition import PolicyCondition
@@ -492,7 +493,88 @@ def resolve_condition_expression(
     )
 
 
-def _ruleset_block(policies_with_conditions: list[tuple[Policy, str | None]]) -> str:
+_DEVICE_OVERRIDE_PROFILE_NAME = "device_override_full_access"
+
+
+def _device_override_profile_block() -> str:
+    """
+    Single shared profile for EVERY device access grant -- confirmed
+    syntax, identical structure to _policy_block's own confirmed
+    `profile { script { if (service == shell) { if (cmd == "") {
+    set priv-lvl = N } ... } } }` shape, just with priv-lvl fixed at
+    15 and no command restrictions at all (no CommandRule entries
+    anywhere in this profile), matching the feature's own "without
+    any limitation" requirement exactly.
+    """
+    return (
+        f"    profile {_DEVICE_OVERRIDE_PROFILE_NAME} {{\n"
+        "        script {\n"
+        "            if (service == shell) {\n"
+        "                if (cmd == \"\") {\n"
+        "                    set priv-lvl = 15\n"
+        "                }\n"
+        "                permit\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+    )
+
+
+def _device_override_rule_name(grant: DeviceAccessGrant) -> str:
+    return f"device_override_{str(grant.id).replace('-', '')[:12]}"
+
+
+def _compile_device_override_rule(
+    grant: DeviceAccessGrant,
+    *,
+    group_names_by_id: dict,
+    device_names_by_id: dict,
+    device_names_by_group_id: dict,
+) -> str | None:
+    """
+    Returns the rendered `rule { }` block text for one grant, or None
+    if it can't be safely resolved (the referenced group, device, or
+    device group has since been deleted) -- excluded from the
+    generated config entirely rather than referencing a name that no
+    longer exists, matching this project's consistent fail-closed
+    handling of a dangling reference (the same pattern
+    resolve_condition_expression uses for Policy conditions).
+    """
+    group_name = group_names_by_id.get(grant.user_group_id)
+    if not group_name:
+        return None
+
+    if grant.device_id is not None:
+        device_name = device_names_by_id.get(grant.device_id)
+        if not device_name:
+            return None
+        condition = f"device == {device_name}"
+    else:
+        member_names = device_names_by_group_id.get(grant.device_group_id, [])
+        if not member_names:
+            return None
+        or_chain = " || ".join(f"device == {n}" for n in member_names)
+        condition = f"({or_chain})" if len(member_names) > 1 else or_chain
+
+    rule_name = _device_override_rule_name(grant)
+    return (
+        f"        rule {rule_name} {{\n"
+        "            enabled = yes\n"
+        "            script {\n"
+        f"                if (member == {group_name} && {condition}) {{\n"
+        f"                    profile = {_DEVICE_OVERRIDE_PROFILE_NAME}\n"
+        "                    permit\n"
+        "                }\n"
+        "            }\n"
+        "        }\n"
+    )
+
+
+def _ruleset_block(
+    policies_with_conditions: list[tuple[Policy, str | None]],
+    *,
+    override_rule_texts: list[str] | None = None,
+) -> str:
     """
     Confirmed against the official upstream sample config
     (tac_plus-ng/sample/tac_plus-ng.cfg): a single top-level `ruleset
@@ -503,6 +585,15 @@ def _ruleset_block(policies_with_conditions: list[tuple[Policy, str | None]]) ->
     exclude any policy resolve_condition_expression() couldn't compile
     -- this function only renders, it doesn't decide what's compilable.
 
+    `override_rule_texts` (device access grants -- see
+    app.models.device_access_grant) are rendered FIRST, before every
+    policy-based rule -- ruleset rules are evaluated in declaration
+    order with first-match-wins (the same established fact Policy
+    priority ordering already relies on), so writing overrides first
+    is what makes them take precedence over policies, not any priority
+    number. Pre-rendered by the caller (compile_candidate), not
+    computed here -- this function only decides ORDER, not content.
+
     A policy with no conditions (condition is None) matches
     unconditionally -- its rule's script body is a bare `profile =
     <name> permit` with no `if` wrapper, rather than something
@@ -510,10 +601,12 @@ def _ruleset_block(policies_with_conditions: list[tuple[Policy, str | None]]) ->
     directly defensible translation of "always applies" into this
     scripting language.
     """
-    if not policies_with_conditions:
+    if not policies_with_conditions and not override_rule_texts:
         return ""
 
     lines = ["    ruleset {"]
+    for text in (override_rule_texts or []):
+        lines.append(text.rstrip("\n"))
     for policy, condition in policies_with_conditions:
         lines.append(f"        rule {policy.name} {{")
         lines.append("            enabled = yes")
@@ -627,14 +720,30 @@ def compile_candidate(db: Session) -> str:
             continue  # excluded -- see get_uncompilable_policies() for why, callers that need to know check that separately
         compilable_policies.append((policy, condition))
 
+    # Device access grants (app.models.device_access_grant) -- emitted
+    # into the ruleset BEFORE every policy rule, guaranteeing
+    # precedence via declaration order rather than a priority number.
+    all_grants = db.query(DeviceAccessGrant).order_by(DeviceAccessGrant.created_at.asc()).all()
+    override_rule_texts: list[str] = []
+    for grant in all_grants:
+        rendered = _compile_device_override_rule(
+            grant,
+            group_names_by_id=group_names_by_id,
+            device_names_by_id=device_names_by_id,
+            device_names_by_group_id=device_names_by_group_id,
+        )
+        if rendered is not None:
+            override_rule_texts.append(rendered)
+
     host_blocks = "".join(_host_block(d) for d in devices)
     group_blocks = "".join(_group_block(g) for g in groups)
     user_blocks = "".join(_user_block(u, group_names_by_id.get(u.group_id)) for u in users)
-    policy_blocks = "".join(
+    device_override_profile = _device_override_profile_block() if override_rule_texts else ""
+    policy_blocks = device_override_profile + "".join(
         _policy_block(p, policy_engine.get_ordered_rules_for_policy(db, p)) for p, _ in compilable_policies
     )
     acl_blocks = "".join(acl_blocks_out)
-    ruleset_block = _ruleset_block(compilable_policies)
+    ruleset_block = _ruleset_block(compilable_policies, override_rule_texts=override_rule_texts)
 
     from ..platform_settings import load_settings
     tacacs_port = load_settings()["tacacs_port"]
