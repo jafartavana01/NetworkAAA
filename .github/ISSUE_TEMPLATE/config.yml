@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: NetworkAAA Documentation
+    url: https://github.com/jafartavana01/NetworkAAA
+    about: Please check the README and docs before opening an issue.
