@@ -61,7 +61,7 @@
 
       <div class="field-row" style="align-items:flex-start;">
         <div class="field" style="flex:1;">
-          <span class="field-label">Users &amp; Groups</span>
+          <span class="field-label">User Groups</span>
           <div id="ms-users-list" style="border:1px solid var(--line);border-radius:var(--radius);padding:8px;min-height:50px;margin-bottom:8px;"></div>
           <div class="field-row" style="align-items:flex-end;margin-bottom:0;">
             <select id="ms-users-add-select" style="flex:1;"></select>
@@ -248,16 +248,24 @@
   // backend change.
 
   const OBJECT_TYPE_LABELS = {
-    user: 'User', user_group: 'User Group', device: 'Device',
+    user_group: 'User Group', device: 'Device',
     device_group: 'Device Group', source_ip: 'Source IP',
   };
   const OPERATORS_BY_OBJECT_TYPE = {
-    user: [['equal', 'Equal'], ['not_equal', 'Not Equal']],
     user_group: [['equal', 'Equal'], ['not_equal', 'Not Equal']],
     device: [['equal', 'Equal'], ['not_equal', 'Not Equal']],
     device_group: [['equal', 'Equal'], ['not_equal', 'Not Equal']],
     source_ip: [['equal', 'Equal'], ['not_equal', 'Not Equal'], ['is_in_cidr', 'Is In CIDR'], ['is_not_in_cidr', 'Is Not In CIDR']],
   };
+  // 'user' is deliberately no longer selectable anywhere in this
+  // builder -- it has no confirmed tac_plus-ng syntax and can never
+  // compile (see UncompilablePolicyError in app.services.config_compiler),
+  // so offering it as an option only ever led to a policy that saves
+  // successfully but silently contributes nothing to the real
+  // configuration. Kept here in DATABASE_BACKED_TYPES and
+  // referenceOptionsFor purely so a policy saved before this change,
+  // if one exists, still renders sensibly if reopened -- not because
+  // it can be chosen again.
   const DATABASE_BACKED_TYPES = ['user', 'user_group', 'device', 'device_group'];
 
   function referenceOptionsFor(objectType) {
@@ -568,10 +576,9 @@
 
   function renderMsUserAddSelect() {
     const chosenIds = new Set(msUserEntries.map(e => e.id));
-    const userOpts = allUsers.filter(u => !chosenIds.has(u.id)).map(u => `<option value="user:${u.id}">${escapeHtml(u.username)}</option>`).join('');
     const groupOpts = allGroups.filter(g => !chosenIds.has(g.id)).map(g => `<option value="user_group:${g.id}">${escapeHtml(g.name)}</option>`).join('');
     const select = document.getElementById('ms-users-add-select');
-    select.innerHTML = `<optgroup label="Users">${userOpts}</optgroup><optgroup label="Groups">${groupOpts}</optgroup>`;
+    select.innerHTML = groupOpts || '<option value="">— No groups available —</option>';
   }
 
   function renderMsDeviceAddSelect() {
@@ -592,7 +599,9 @@
   document.getElementById('ms-users-add-btn').addEventListener('click', () => {
     const [objectType, id] = document.getElementById('ms-users-add-select').value.split(':');
     if (!id) return;
-    const name = objectType === 'user' ? (allUsers.find(u => u.id === id) || {}).username : (allGroups.find(g => g.id === id) || {}).name;
+    // Always 'user_group' -- the picker no longer offers individual
+    // users as an option (see OBJECT_TYPE_LABELS above for why).
+    const name = (allGroups.find(g => g.id === id) || {}).name;
     msUserEntries.push({ object_type: objectType, id, name });
     renderMultiSelect();
   });

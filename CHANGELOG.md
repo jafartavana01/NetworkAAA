@@ -12,6 +12,27 @@ it was built alongside.
 
 ## 2026-08-30
 
+### Added — Device Secret Confirmation
+- The Edit Device modal now shows the **last 4 characters** of the
+  saved shared secret (e.g. "Currently ends in …7X9k") — the same
+  confirmatory-without-exposing pattern used by AWS access keys and
+  Stripe API keys. The full secret is still never displayed; this
+  addresses repeated confusion where the earlier fixes (clearer hint
+  text, then a plain "configured" badge) weren't concrete enough for
+  admins to actually confirm which secret was saved.
+
+### Changed — Policy Conditions: "User" Removed as a Selectable Type
+- Individual users are no longer offered anywhere in the condition
+  builder (the two-list picker or the Advanced tree builder) — only
+  User Groups. Direct per-user conditions have no confirmed
+  `tac_plus-ng` syntax and could never compile, so offering the option
+  only ever produced a policy that saved successfully but silently
+  contributed nothing to the real configuration. Deliberately *not*
+  removed from the backend's accepted condition types, to avoid
+  blocking a re-save of any already-existing policy that happens to
+  still have one in its tree — existing data continues to load and
+  display correctly; only the ability to create a new one is gone.
+
 ### Added — Active Directory / LDAP Integration
 - New **Platform → Active Directory** page: Domain, Username, Password
   as the three primary fields, with host/port/TLS/search-base/user-

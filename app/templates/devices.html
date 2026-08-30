@@ -335,7 +335,7 @@
       </div>
 
       <label class="field">
-        <span class="field-label">Shared secret <span class="badge badge-on" id="secret-configured-badge" hidden style="margin-left:6px;">✓ Configured</span></span>
+        <span class="field-label">Shared secret <span class="badge badge-on cell-mono" id="secret-configured-badge" hidden style="margin-left:6px;"></span></span>
         <input type="password" id="device-secret" placeholder="">
       </label>
       <div class="field-hint" id="secret-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new devices. Never displayed once saved — leave blank when editing to keep the current secret.</div>
@@ -444,8 +444,14 @@
       document.getElementById('device-group-select').value = device.device_group_id || '';
       document.getElementById('device-description').value = device.description || '';
       document.getElementById('device-enabled').checked = device.enabled;
-      document.getElementById('secret-hint').textContent = 'A shared secret is already saved for this device — it\'s never displayed again once set, the same as every password field in this platform. Leave blank to keep it, or enter a new one to replace it.';
-      document.getElementById('secret-configured-badge').hidden = !device.has_secret;
+      document.getElementById('secret-hint').textContent = 'The full secret is never displayed once set, the same as every password field in this platform — the last 4 characters above are shown only so you can confirm which secret is currently saved. Leave the field below blank to keep it, or enter a new one to replace it.';
+      const secretBadge = document.getElementById('secret-configured-badge');
+      if (device.has_secret && device.secret_suffix) {
+        secretBadge.textContent = `Currently ends in …${device.secret_suffix}`;
+        secretBadge.hidden = false;
+      } else {
+        secretBadge.hidden = true;
+      }
     } else {
       document.getElementById('device-modal-title').textContent = 'Add device';
       document.getElementById('device-id').value = '';

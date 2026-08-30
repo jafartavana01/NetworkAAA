@@ -100,6 +100,27 @@ def _group_names(db: Session) -> dict[uuid.UUID, str]:
     return {g.id: g.name for g in db.query(DeviceGroup).all()}
 
 
+def _secret_suffix(device: NetworkDevice) -> str | None:
+    """
+    The last 4 characters of the real secret, and nothing else --
+    the same "confirmatory, not exposing" pattern widely used for API
+    keys (AWS access keys, Stripe keys, etc.): enough for an admin to
+    visually confirm a secret is genuinely set and spot-check it
+    against what's actually configured on the device, without this
+    platform ever displaying the secret in full. Decryption failures
+    (a corrupted or otherwise unreadable ciphertext) return None
+    rather than raising, so one bad row can't break the whole device
+    list.
+    """
+    if not device.shared_secret_encrypted:
+        return None
+    try:
+        plaintext = security.decrypt_secret(device.shared_secret_encrypted)
+    except Exception:
+        return None
+    return plaintext[-4:] if len(plaintext) >= 4 else plaintext
+
+
 def _to_out(device: NetworkDevice, group_name: str | None = None) -> DeviceOut:
     return DeviceOut(
         id=str(device.id),
@@ -113,6 +134,7 @@ def _to_out(device: NetworkDevice, group_name: str | None = None) -> DeviceOut:
         device_group_name=group_name,
         enabled=device.enabled,
         has_secret=bool(device.shared_secret_encrypted),
+        secret_suffix=_secret_suffix(device),
     )
 
 

@@ -86,6 +86,7 @@ class DeviceOut(DeviceBase):
 
     id: str
     has_secret: bool
+    secret_suffix: str | None = None
     device_group_name: str | None = None
 
 
