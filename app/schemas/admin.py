@@ -19,6 +19,7 @@ class AdminUserBase(BaseModel):
     is_active: bool = True
     is_superadmin: bool = False
     allowed_source_ips: str | None = Field(default=None, max_length=2000)
+    role_id: str | None = None
 
     @field_validator("allowed_source_ips")
     @classmethod
@@ -46,3 +47,4 @@ class AdminUserOut(AdminUserBase):
     created_at: str
     last_login_at: str | None
     is_self: bool = False  # true when this row is the requesting admin's own account
+    role_name: str | None = None

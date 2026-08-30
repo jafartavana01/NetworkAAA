@@ -17,6 +17,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -55,6 +56,7 @@ def _to_out(group: TacacsGroup, member_count: int = 0, policy_names: list[str] |
         id=str(group.id),
         name=group.name,
         description=group.description,
+        ad_group_name=group.ad_group_name,
         member_count=member_count,
         referenced_by_policy_names=sorted(policy_names or []),
     )
@@ -77,7 +79,7 @@ def create_group(
     db: Session = Depends(get_db),
     _admin: AdminUser = Depends(get_current_admin),
 ):
-    group = TacacsGroup(name=payload.name, description=payload.description)
+    group = TacacsGroup(name=payload.name, description=payload.description, ad_group_name=payload.ad_group_name)
     db.add(group)
     try:
         db.commit()
@@ -121,6 +123,7 @@ def update_group(
     group = _get_group_or_404(db, group_id)
     group.name = payload.name
     group.description = payload.description
+    group.ad_group_name = payload.ad_group_name
     try:
         db.commit()
     except IntegrityError:
@@ -140,4 +143,77 @@ def delete_group(
 ):
     group = _get_group_or_404(db, group_id)
     db.delete(group)
+    db.commit()
+
+
+@router.get("/{group_id}/members")
+def list_members(
+    group_id: str,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(get_current_admin),
+):
+    """The other half of the member_count already shown on every
+    group -- this was previously the one thing you couldn't see or
+    manage from the Groups page itself, only indirectly by editing
+    each user's own group field one at a time."""
+    group = _get_group_or_404(db, group_id)
+    members = db.query(TacacsUser).filter(TacacsUser.group_id == group.id).order_by(TacacsUser.username.asc()).all()
+    return [{"id": str(u.id), "username": u.username, "full_name": u.full_name, "enabled": u.enabled} for u in members]
+
+
+class AddMemberRequest(BaseModel):
+    user_id: str
+
+
+@router.post("/{group_id}/members", dependencies=[Depends(verify_csrf)])
+def add_member(
+    group_id: str,
+    payload: AddMemberRequest,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(get_current_admin),
+):
+    """Adding a member here is the same underlying change as editing
+    that user's own Group field -- TacacsUser.group_id is still a
+    single FK (one group per user), so adding someone already in a
+    DIFFERENT group here reassigns them, it doesn't add a second
+    membership. The response says which happened so the GUI can be
+    clear about it, not just silently move them."""
+    group = _get_group_or_404(db, group_id)
+    try:
+        user_id = uuid.UUID(payload.user_id)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid user id.")
+    user = db.query(TacacsUser).filter(TacacsUser.id == user_id).first()
+    if not user:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="That user doesn't exist.")
+
+    reassigned_from = None
+    if user.group_id and user.group_id != group.id:
+        previous = db.query(TacacsGroup).filter(TacacsGroup.id == user.group_id).first()
+        reassigned_from = previous.name if previous else None
+
+    user.group_id = group.id
+    db.commit()
+    return {"status": "ok", "reassigned_from": reassigned_from}
+
+
+@router.delete("/{group_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(verify_csrf)])
+def remove_member(
+    group_id: str,
+    user_id: str,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(get_current_admin),
+):
+    """Ungroups the user -- does not delete their account, matching
+    how deleting the whole group itself already behaves (SET NULL,
+    never a cascading delete of the user)."""
+    group = _get_group_or_404(db, group_id)
+    try:
+        parsed_user_id = uuid.UUID(user_id)
+    except ValueError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="User not found.")
+    user = db.query(TacacsUser).filter(TacacsUser.id == parsed_user_id, TacacsUser.group_id == group.id).first()
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="That user is not a member of this group.")
+    user.group_id = None
     db.commit()

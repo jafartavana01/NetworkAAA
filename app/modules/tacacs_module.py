@@ -24,7 +24,10 @@ from ..api.routes_command_sets import router as command_sets_router
 from ..api.routes_config import router as config_router
 from ..api.routes_device_access_grants import router as device_access_grants_router
 from ..api.routes_device_groups import router as device_groups_router
+from ..api.routes_aaa_template import router as aaa_template_router
 from ..api.routes_devices import router as devices_router
+from ..api.routes_monitoring import router as monitoring_router
+from ..api.routes_network_scan import router as network_scan_router
 from ..api.routes_diagnostics import router as diagnostics_router
 from ..api.routes_effective_access import router as effective_access_router
 from ..api.routes_policies import router as policies_router
@@ -38,6 +41,9 @@ from .registry import Module, NavEntry, register, get_module
 
 _tacacs_api_router = APIRouter()
 _tacacs_api_router.include_router(devices_router)
+_tacacs_api_router.include_router(monitoring_router)
+_tacacs_api_router.include_router(network_scan_router)
+_tacacs_api_router.include_router(aaa_template_router)
 _tacacs_api_router.include_router(device_access_grants_router)
 _tacacs_api_router.include_router(device_groups_router)
 _tacacs_api_router.include_router(config_router)

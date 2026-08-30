@@ -87,3 +87,24 @@ class DeviceOut(DeviceBase):
     id: str
     has_secret: bool
     device_group_name: str | None = None
+
+
+class DeviceAaaPreviewRequest(BaseModel):
+    platform_ip: str = Field(min_length=1, max_length=64)
+
+
+class DeviceAaaPreviewOut(BaseModel):
+    commands: list[str]
+
+
+class DeviceAaaApplyRequest(BaseModel):
+    ssh_username: str = Field(min_length=1, max_length=128)
+    ssh_password: str = Field(min_length=1, max_length=256)
+    platform_ip: str = Field(min_length=1, max_length=64)
+    commands: list[str] | None = None
+
+
+class DeviceAaaApplyResult(BaseModel):
+    success: bool
+    message: str
+    command_log: list[str] = Field(default_factory=list)

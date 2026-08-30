@@ -25,7 +25,7 @@ from ..models.command_rule import CommandRule
 from ..models.command_set import CommandSet
 from ..models.policy_command_set import PolicyCommandSet
 from ..schemas.command_set import CommandRuleOut, CommandSetCreate, CommandSetOut, CommandSetUpdate
-from .deps import get_current_admin, verify_csrf
+from .deps import require_permission, verify_csrf
 
 router = APIRouter(prefix="/api/command-sets", tags=["command-sets"])
 
@@ -95,7 +95,7 @@ def _replace_rules(db: Session, command_set: CommandSet, rules_in: list) -> list
 @router.get("", response_model=list[CommandSetOut])
 def list_command_sets(
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:view")),
 ):
     sets = db.query(CommandSet).order_by(CommandSet.name.asc()).all()
     counts = _policy_counts(db)
@@ -111,7 +111,7 @@ def list_command_sets(
 def create_command_set(
     payload: CommandSetCreate,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:write")),
 ):
     command_set = CommandSet(
         name=payload.name,
@@ -147,7 +147,7 @@ def _get_command_set_or_404(db: Session, command_set_id: str) -> CommandSet:
 def get_command_set(
     command_set_id: str,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:view")),
 ):
     command_set = _get_command_set_or_404(db, command_set_id)
     rules = db.query(CommandRule).filter(CommandRule.command_set_id == command_set.id).all()
@@ -160,7 +160,7 @@ def update_command_set(
     command_set_id: str,
     payload: CommandSetUpdate,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:write")),
 ):
     command_set = _get_command_set_or_404(db, command_set_id)
     command_set.name = payload.name
@@ -185,7 +185,7 @@ def update_command_set(
 def delete_command_set(
     command_set_id: str,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:write")),
 ):
     command_set = _get_command_set_or_404(db, command_set_id)
     ref_count = db.query(func.count(PolicyCommandSet.id)).filter(PolicyCommandSet.command_set_id == command_set.id).scalar()

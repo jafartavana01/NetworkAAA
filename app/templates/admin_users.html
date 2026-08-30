@@ -53,6 +53,12 @@
       </div>
 
       <label class="field">
+        <span class="field-label">Role (optional)</span>
+        <select id="admin-role-select"><option value="">— None (full standard-admin access) —</option></select>
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;" id="admin-role-hint">Ignored for a Superadmin, who already has unrestricted access. For a Standard account with no role, access stays exactly as it's always been — full access to everything except Platform management.</div>
+
+      <label class="field">
         <span class="field-label">Trusted hosts (optional)</span>
         <input type="text" id="admin-allowed-ips" placeholder="10.0.0.5, 192.168.1.0/24">
       </label>
@@ -91,7 +97,7 @@
     const rows = admins.map(a => `
       <tr>
         <td>${escapeHtml(a.username)}${a.is_self ? ' <span class="content-sub">(you)</span>' : ''}</td>
-        <td>${a.is_superadmin ? '<span class="badge badge-on">Superadmin</span>' : '<span class="badge">Standard</span>'}</td>
+        <td>${a.is_superadmin ? '<span class="badge badge-on">Superadmin</span>' : '<span class="badge">Standard</span>'}${a.role_name ? '<br><span class="content-sub">' + escapeHtml(a.role_name) + '</span>' : ''}</td>
         <td>${a.is_active ? '<span class="badge badge-on">Active</span>' : '<span class="badge badge-off">Disabled</span>'}</td>
         <td class="cell-mono">${escapeHtml(a.allowed_source_ips || 'anywhere')}</td>
         <td class="cell-mono">${a.last_login_at ? new Date(a.last_login_at).toLocaleString() : 'never'}</td>
@@ -130,6 +136,16 @@
     renderTable();
   }
 
+  let allRoles = [];
+
+  async function loadRoleOptions() {
+    const res = await AAAPlatform.authedFetch('/api/admin-roles');
+    if (res.ok) allRoles = await res.json();
+    const select = document.getElementById('admin-role-select');
+    select.innerHTML = '<option value="">— None (full standard-admin access) —</option>' +
+      allRoles.map(r => `<option value="${r.id}">${escapeHtml(r.name)}</option>`).join('');
+  }
+
   function openModal(admin) {
     document.getElementById('admin-form-error').hidden = true;
     document.getElementById('admin-form').reset();
@@ -141,12 +157,14 @@
       document.getElementById('admin-username').value = admin.username;
       document.getElementById('admin-is-active').checked = admin.is_active;
       document.getElementById('admin-is-superadmin').checked = admin.is_superadmin;
+      document.getElementById('admin-role-select').value = admin.role_id || '';
       document.getElementById('admin-allowed-ips').value = admin.allowed_source_ips || '';
       document.getElementById('admin-password-hint').textContent = 'Leave blank to keep the current password.';
       document.getElementById('admin-is-active').disabled = admin.is_self;
     } else {
       document.getElementById('admin-modal-title').textContent = 'Add admin';
       document.getElementById('admin-id').value = '';
+      document.getElementById('admin-role-select').value = '';
       document.getElementById('admin-password-hint').textContent = 'Required for new admins (8+ characters).';
       document.getElementById('admin-is-active').disabled = false;
     }
@@ -175,6 +193,7 @@
       username: document.getElementById('admin-username').value,
       is_active: document.getElementById('admin-is-active').checked,
       is_superadmin: document.getElementById('admin-is-superadmin').checked,
+      role_id: document.getElementById('admin-role-select').value || null,
       allowed_source_ips: document.getElementById('admin-allowed-ips').value.trim() || null,
     };
     if (password) payload.password = password;
@@ -221,6 +240,7 @@
     loadAdmins();
   }
 
+  loadRoleOptions();
   loadAdmins();
 </script>
 {% endblock %}

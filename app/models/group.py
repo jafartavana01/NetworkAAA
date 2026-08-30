@@ -48,5 +48,18 @@ class TacacsGroup(Base):
 
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Optional link to a real Active Directory group (its CN, e.g.
+    # "tacacs_admins") -- lets an admin browse/select a real AD group
+    # from app.services.ad_directory rather than typing a name blind.
+    # This platform's own `name` field above is still what's actually
+    # emitted as the tac_plus-ng `group {}` identifier and what
+    # policies reference -- `ad_group_name` is a cross-reference for
+    # display/lookup, not a second identity. Whether AD group
+    # membership derived by tac_plus-ng's own MAVIS backend at
+    # authentication time lines up with THIS group's `name` depends on
+    # AdSettings.group_prefix stripping to the same string -- see
+    # app.services.config_compiler's AD integration section.
+    ad_group_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

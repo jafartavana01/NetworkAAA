@@ -22,7 +22,7 @@ from ..models.policy import Policy
 from ..models.policy_command_set import PolicyCommandSet
 from ..models.policy_version import PolicyVersion
 from ..services import policy_versioning
-from .deps import get_current_admin, verify_csrf
+from .deps import require_permission, verify_csrf
 from .routes_policies import policy_to_out
 
 router = APIRouter(prefix="/api/policies", tags=["policy-versions"])
@@ -54,7 +54,7 @@ def _get_policy_or_404(db: Session, policy_id: str) -> Policy:
 def list_policy_versions(
     policy_id: str,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:view")),
 ):
     policy = _get_policy_or_404(db, policy_id)
     versions = (
@@ -71,7 +71,7 @@ def diff_policy_version(
     policy_id: str,
     version_id: str,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:view")),
 ):
     """Diffs one version's snapshot against the policy's CURRENT live
     state (built fresh via the same build_snapshot() the version
@@ -109,7 +109,7 @@ def restore_policy_version(
     policy_id: str,
     version_id: str,
     db: Session = Depends(get_db),
-    admin: AdminUser = Depends(get_current_admin),
+    admin: AdminUser = Depends(require_permission("policies:write")),
 ):
     """Applies an old version's snapshot onto the live policy, then
     records that as a brand-new version -- history only grows, per

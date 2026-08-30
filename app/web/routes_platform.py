@@ -48,6 +48,22 @@ def admin_users_page(
     return _render(request, session_token, "admin_users.html", require_superadmin=True)
 
 
+@router.get("/platform/admin-roles", response_class=HTMLResponse)
+def admin_roles_page(
+    request: Request,
+    session_token: str | None = Cookie(default=None, alias=security.SESSION_COOKIE_NAME),
+):
+    return _render(request, session_token, "admin_roles.html", require_superadmin=True)
+
+
+@router.get("/platform/active-directory", response_class=HTMLResponse)
+def active_directory_page(
+    request: Request,
+    session_token: str | None = Cookie(default=None, alias=security.SESSION_COOKIE_NAME),
+):
+    return _render(request, session_token, "active_directory.html", require_superadmin=True)
+
+
 @router.get("/platform/settings", response_class=HTMLResponse)
 def platform_settings_page(
     request: Request,

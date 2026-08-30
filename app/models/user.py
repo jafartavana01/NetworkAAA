@@ -51,7 +51,28 @@ class TacacsUser(Base):
     # and for the same reason (app.schemas.user).
     username: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
 
-    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    # Nullable now (was NOT NULL): an "ad"-sourced user has no local
+    # password at all -- tac_plus-ng's MAVIS backend authenticates
+    # them against Active Directory directly (see
+    # app.services.config_compiler's AD integration section), so
+    # there's nothing to hash locally. Required (enforced at the
+    # schema layer, app.schemas.user) only when auth_source == "local".
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # "local" (this platform's own bcrypt-hashed password, the
+    # original and still-default model) or "ad" (authentication
+    # delegated entirely to tac_plus-ng's MAVIS AD backend; this row
+    # exists in OUR database purely so the admin can assign a group
+    # and have policies apply to this identity within this platform's
+    # own UI -- it is a REFERENCE record, not a credential store, for
+    # an "ad" user).
+    auth_source: Mapped[str] = mapped_column(String(16), nullable=False, default="local")
+
+    # The real AD identity this record refers to (a sAMAccountName or
+    # UPN, e.g. "jdoe" or "jdoe@corp.example.com") -- browsable/
+    # searchable via app.services.ad_directory, or typed manually.
+    # NULL for a "local" user.
+    ad_identity: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     full_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -69,6 +69,35 @@ def _seed_command_categories() -> None:
         db.close()
 
 
+def _seed_admin_role_templates() -> None:
+    """Seeds the starting RBAC role templates (PAM Expansion Plan §29)
+    on first boot -- a no-op on every subsequent boot once any role
+    row exists, so it never overwrites admin edits, deletions, or
+    additions. See app.api.routes_admin_roles.ensure_seeded."""
+    from .api.routes_admin_roles import ensure_seeded
+
+    session_local = get_sessionmaker()
+    db: Session = session_local()
+    try:
+        ensure_seeded(db)
+    finally:
+        db.close()
+
+
+def _seed_monitor_group() -> None:
+    """Seeds the prebuilt "monitor" DeviceGroup on first boot -- a
+    no-op once it exists, so an admin renaming or deleting it is never
+    silently undone. See app.api.routes_monitoring.ensure_monitor_group_seeded."""
+    from .api.routes_monitoring import ensure_monitor_group_seeded
+
+    session_local = get_sessionmaker()
+    db: Session = session_local()
+    try:
+        ensure_monitor_group_seeded(db)
+    finally:
+        db.close()
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="AAA Management Platform", docs_url="/api/docs", redoc_url=None)
 
@@ -86,6 +115,8 @@ def create_app() -> FastAPI:
     def _on_startup() -> None:
         _sync_module_states()
         _seed_command_categories()
+        _seed_admin_role_templates()
+        _seed_monitor_group()
         enabled = _enabled_module_keys()
         for module in registry.all_modules():
             # Mandatory modules (core / future TACACS+ core) are always

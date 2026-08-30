@@ -33,23 +33,42 @@ from sqlalchemy.orm import Session
 from .. import security
 from ..database import get_db
 from ..models.admin import AdminUser
+from ..models.admin_role import AdminRole
 from ..schemas.admin import AdminUserCreate, AdminUserOut, AdminUserUpdate
 from .deps import get_current_superadmin, verify_csrf
 
 router = APIRouter(prefix="/api/admin-users", tags=["admin-users"])
 
 
-def _to_out(admin: AdminUser, requesting_admin_id: uuid.UUID) -> AdminUserOut:
+def _to_out(db: Session, admin: AdminUser, requesting_admin_id: uuid.UUID) -> AdminUserOut:
+    role_name = None
+    if admin.role_id:
+        role = db.query(AdminRole).filter(AdminRole.id == admin.role_id).first()
+        role_name = role.name if role else None
     return AdminUserOut(
         id=str(admin.id),
         username=admin.username,
         is_active=admin.is_active,
         is_superadmin=admin.is_superadmin,
         allowed_source_ips=admin.allowed_source_ips,
+        role_id=str(admin.role_id) if admin.role_id else None,
+        role_name=role_name,
         created_at=admin.created_at.isoformat(),
         last_login_at=admin.last_login_at.isoformat() if admin.last_login_at else None,
         is_self=(admin.id == requesting_admin_id),
     )
+
+
+def _resolve_role_id(db: Session, raw_role_id: str | None) -> uuid.UUID | None:
+    if not raw_role_id:
+        return None
+    try:
+        parsed_id = uuid.UUID(raw_role_id)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid role id.")
+    if not db.query(AdminRole).filter(AdminRole.id == parsed_id).first():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="That role doesn't exist.")
+    return parsed_id
 
 
 def _active_superadmin_count(db: Session, *, excluding: uuid.UUID | None = None) -> int:
@@ -65,7 +84,7 @@ def list_admin_users(
     admin: AdminUser = Depends(get_current_superadmin),
 ):
     admins = db.query(AdminUser).order_by(AdminUser.username.asc()).all()
-    return [_to_out(a, admin.id) for a in admins]
+    return [_to_out(db, a, admin.id) for a in admins]
 
 
 @router.post("", response_model=AdminUserOut, status_code=status.HTTP_201_CREATED, dependencies=[Depends(verify_csrf)])
@@ -74,12 +93,14 @@ def create_admin_user(
     db: Session = Depends(get_db),
     admin: AdminUser = Depends(get_current_superadmin),
 ):
+    role_id = _resolve_role_id(db, payload.role_id)
     new_admin = AdminUser(
         username=payload.username,
         password_hash=security.hash_password(payload.password),
         is_active=payload.is_active,
         is_superadmin=payload.is_superadmin,
         allowed_source_ips=payload.allowed_source_ips,
+        role_id=role_id,
     )
     db.add(new_admin)
     try:
@@ -88,7 +109,7 @@ def create_admin_user(
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, detail=f"An admin named '{payload.username}' already exists.")
     db.refresh(new_admin)
-    return _to_out(new_admin, admin.id)
+    return _to_out(db, new_admin, admin.id)
 
 
 def _get_admin_or_404(db: Session, admin_id: str) -> AdminUser:
@@ -136,6 +157,7 @@ def update_admin_user(
     target.is_active = payload.is_active
     target.is_superadmin = payload.is_superadmin
     target.allowed_source_ips = payload.allowed_source_ips
+    target.role_id = _resolve_role_id(db, payload.role_id)
     if payload.password:
         target.password_hash = security.hash_password(payload.password)
 
@@ -145,7 +167,7 @@ def update_admin_user(
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, detail=f"An admin named '{payload.username}' already exists.")
     db.refresh(target)
-    return _to_out(target, admin.id)
+    return _to_out(db, target, admin.id)
 
 
 @router.delete("/{admin_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(verify_csrf)])

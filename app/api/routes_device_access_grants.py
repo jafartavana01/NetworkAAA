@@ -23,7 +23,7 @@ from ..models.device_access_grant import DeviceAccessGrant
 from ..models.device_group import DeviceGroup
 from ..models.group import TacacsGroup
 from ..schemas.device_access_grant import DeviceAccessGrantCreate, DeviceAccessGrantOut
-from .deps import get_current_admin, verify_csrf
+from .deps import require_permission, verify_csrf
 
 router = APIRouter(prefix="/api/device-access-grants", tags=["device-access-grants"])
 
@@ -55,7 +55,7 @@ def _to_out(db: Session, grant: DeviceAccessGrant) -> DeviceAccessGrantOut:
 @router.get("", response_model=list[DeviceAccessGrantOut])
 def list_grants(
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("devices:view")),
 ):
     grants = db.query(DeviceAccessGrant).order_by(DeviceAccessGrant.created_at.desc()).all()
     return [_to_out(db, g) for g in grants]
@@ -65,7 +65,7 @@ def list_grants(
 def create_grant(
     payload: DeviceAccessGrantCreate,
     db: Session = Depends(get_db),
-    admin: AdminUser = Depends(get_current_admin),
+    admin: AdminUser = Depends(require_permission("devices:write")),
 ):
     try:
         user_group_id = uuid.UUID(payload.user_group_id)
@@ -121,7 +121,7 @@ def create_grant(
 def delete_grant(
     grant_id: str,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("devices:write")),
 ):
     try:
         parsed_id = uuid.UUID(grant_id)

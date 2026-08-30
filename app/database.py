@@ -80,10 +80,10 @@ def init_db() -> None:
     """
     # Import models so they're registered on Base.metadata before create_all.
     from .models import (  # noqa: F401
-        admin, system_info, module_state, device, config_version, user, group,
+        admin, admin_role, system_info, module_state, device, config_version, user, group,
         device_group, policy, command_rule, command_category, command_set,
         policy_command_set, policy_version, policy_condition_group, policy_condition,
-        device_access_grant,
+        device_access_grant, ad_settings, monitoring_settings, aaa_template_settings,
     )
 
     Base.metadata.create_all(bind=get_engine())

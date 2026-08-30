@@ -48,6 +48,7 @@
   async function findIdByName(kind, name) {
     const endpoint = kind === 'user' ? '/api/tacacs-users' : '/api/devices';
     const res = await AAAPlatform.authedFetch(endpoint);
+    if (res.status === 401) { window.location.href = '/login'; return null; }
     if (!res.ok) return null;
     const list = await res.json();
     const field = kind === 'user' ? 'username' : 'name';
@@ -113,6 +114,7 @@
 
     const endpoint = mode === 'user' ? `/api/effective-access/user/${id}` : `/api/effective-access/device/${id}`;
     const res = await AAAPlatform.authedFetch(endpoint);
+    if (res.status === 401) { window.location.href = '/login'; return; }
     if (!res.ok) {
       errorBox.textContent = 'Could not compute effective access.';
       errorBox.hidden = false;

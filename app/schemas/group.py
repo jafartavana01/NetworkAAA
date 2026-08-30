@@ -24,6 +24,7 @@ _NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$")
 class TacacsGroupBase(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     description: str | None = Field(default=None, max_length=2000)
+    ad_group_name: str | None = Field(default=None, max_length=255)
 
     @field_validator("name")
     @classmethod

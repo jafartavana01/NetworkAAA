@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models.admin import AdminUser
 from ..models.command_category import CommandCategory
-from .deps import get_current_admin, verify_csrf
+from .deps import require_permission, verify_csrf
 
 router = APIRouter(prefix="/api/command-categories", tags=["command-categories"])
 
@@ -64,7 +64,7 @@ def _to_dict(c: CommandCategory) -> dict:
 @router.get("")
 def list_command_categories(
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:view")),
 ):
     categories = db.query(CommandCategory).order_by(CommandCategory.vendor.asc(), CommandCategory.name.asc()).all()
     return [_to_dict(c) for c in categories]
@@ -74,7 +74,7 @@ def list_command_categories(
 def create_command_category(
     payload: dict,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:write")),
 ):
     name = (payload.get("name") or "").strip()
     if not name:
@@ -103,7 +103,7 @@ def create_command_category(
 def delete_command_category(
     category_id: str,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:write")),
 ):
     try:
         parsed_id = uuid.UUID(category_id)

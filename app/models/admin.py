@@ -38,7 +38,7 @@ network access works would risk a self-lockout during initial setup.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -57,6 +57,18 @@ class AdminUser(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_superadmin: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Granular RBAC (PAM Expansion Plan §29) -- NULL means "no role
+    # assigned", which behaves EXACTLY as every account already did
+    # before this field existed: full access to anything that only
+    # requires *some* authenticated admin, gated superadmin-only where
+    # it already was. is_superadmin is checked FIRST and unconditionally
+    # bypasses role permissions (see app.api.deps.require_permission) --
+    # a role only ever narrows what a non-superadmin standard account
+    # can do beyond that baseline, never what a superadmin can do.
+    role_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("admin_roles.id", ondelete="SET NULL"), nullable=True
+    )
 
     # Comma-separated list of IPs/CIDRs (e.g. "10.0.0.5,192.168.1.0/24").
     # Stored as text rather than a normalized join table -- this is a

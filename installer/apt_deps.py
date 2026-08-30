@@ -15,15 +15,14 @@ optional `mavis` backends (LDAP/RADIUS auth backends, not the TACACS+
 core) are intentionally NOT installed by default -- they belong to a
 future LDAP/RADIUS module (spec sections 46/22), not TACACS+ core.
 
-NOTE ON NOT RUNNING `apt-get update`: deliberately removed on request.
-The tradeoff this creates: `ensure_packages()` below installs from
-whatever package index already exists on the machine, which could be
-stale or (on a genuinely brand-new VM image that has never run apt at
-all) entirely absent, in which case `apt-get install` can fail with
-"Unable to locate package". This is a real operational consequence,
-not a hidden one -- if a fresh install hits that failure, running
-`sudo apt update` once yourself before re-running this installer is
-the fix.
+NOTE ON `apt-get update`: runs once, automatically, before checking
+for missing packages -- restored after previously being removed on
+request. Deliberately `update` only, never `upgrade`: refreshing the
+package INDEX is what a fresh install typically needs (the earlier
+"Unable to locate package" failure on a brand-new VM image was caused
+by a stale/absent index, not stale installed packages), while
+upgrading already-installed packages is a separate, more disruptive
+action this installer has no reason to take on the system's behalf.
 """
 from __future__ import annotations
 
@@ -70,6 +69,18 @@ def _installed_packages() -> set[str]:
         if len(parts) >= 4 and parts[-1] == "installed":
             installed.add(parts[0])
     return installed
+
+
+def update_package_index() -> None:
+    """`apt-get update` only -- refreshes the package index so
+    `ensure_packages()` below can find current packages, especially on
+    a genuinely fresh VM image that has never run apt at all. Never
+    `apt-get upgrade`: that would touch already-installed packages
+    system-wide, a separate and more disruptive action this installer
+    has no reason to take."""
+    utils.info("Updating apt package index...")
+    utils.run(["apt-get", "update"])
+    utils.ok("apt package index updated.")
 
 
 def ensure_packages(packages: list[str]) -> list[str]:

@@ -59,6 +59,15 @@
       </label>
 
       <label class="field">
+        <span class="field-label">Authentication</span>
+        <select id="user-auth-source">
+          <option value="local">Local — password stored and verified by this platform</option>
+          <option value="ad">Active Directory — authenticates via tac_plus-ng's AD integration</option>
+        </select>
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;" id="user-auth-source-hint">Requires Active Directory to be configured and enabled under Platform → Active Directory to actually take effect in the generated configuration.</div>
+
+      <label class="field">
         <span class="field-label">Group</span>
         <select id="user-group-select">
           <option value="">— No group —</option>
@@ -83,11 +92,29 @@
         </div>
       </div>
 
-      <label class="field">
-        <span class="field-label">Password</span>
-        <input type="password" id="user-password" placeholder="">
-      </label>
-      <div class="field-hint" id="user-secret-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new users. Never displayed once saved — leave blank when editing to keep the current password.</div>
+      <div id="user-local-auth-fields">
+        <label class="field">
+          <span class="field-label">Password</span>
+          <input type="password" id="user-password" placeholder="">
+        </label>
+        <div class="field-hint" id="user-secret-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new users. Never displayed once saved — leave blank when editing to keep the current password.</div>
+      </div>
+
+      <div id="user-ad-auth-fields" hidden>
+        <label class="field">
+          <span class="field-label">AD identity (username or UPN)</span>
+          <input type="text" id="user-ad-identity" placeholder="e.g. jdoe or jdoe@corp.example.com">
+        </label>
+        <div class="field-hint" style="margin-top:-10px;">Type it directly, or search Active Directory below and select a match.</div>
+        <div class="field-row" style="align-items:flex-end;margin-bottom:6px;">
+          <label class="field">
+            <span class="field-label">Search AD users</span>
+            <input type="text" id="user-ad-search-input" placeholder="Type at least 2 characters…">
+          </label>
+          <button type="button" class="btn-secondary btn-small" id="user-ad-search-btn" style="width:auto;margin-bottom:2px;">Search</button>
+        </div>
+        <div id="user-ad-search-results" style="margin-bottom:16px;"></div>
+      </div>
 
       <label class="field">
         <span class="field-label">Description</span>
@@ -145,7 +172,7 @@
 
     const rows = tacacsUsers.map(u => `
       <tr>
-        <td>${escapeHtml(u.username)}</td>
+        <td>${escapeHtml(u.username)}${u.auth_source === 'ad' ? ' <span class="badge">AD</span>' : ''}</td>
         <td>${escapeHtml(u.full_name || '—')}</td>
         <td>${escapeHtml(u.group_name || '—')}</td>
         <td>${u.enabled ? '<span class="badge badge-on">Enabled</span>' : '<span class="badge badge-off">Disabled</span>'}</td>
@@ -181,11 +208,56 @@
     renderTable();
   }
 
+  function toggleAuthSourceFields() {
+    const isAd = document.getElementById('user-auth-source').value === 'ad';
+    document.getElementById('user-local-auth-fields').hidden = isAd;
+    document.getElementById('user-ad-auth-fields').hidden = !isAd;
+  }
+  document.getElementById('user-auth-source').addEventListener('change', toggleAuthSourceFields);
+
+  async function searchAdUsers() {
+    const query = document.getElementById('user-ad-search-input').value.trim();
+    const resultsEl = document.getElementById('user-ad-search-results');
+    if (query.length < 2) {
+      resultsEl.innerHTML = '<div class="content-sub">Type at least 2 characters.</div>';
+      return;
+    }
+    resultsEl.innerHTML = '<div class="content-sub">Searching…</div>';
+    const res = await AAAPlatform.authedFetch(`/api/ad-settings/search-users?query=${encodeURIComponent(query)}`);
+    if (!res.ok) {
+      resultsEl.innerHTML = '<div class="content-sub">Could not search AD — check the Active Directory settings page.</div>';
+      return;
+    }
+    const results = await res.json();
+    if (results.length === 0) {
+      resultsEl.innerHTML = '<div class="content-sub">No matches.</div>';
+      return;
+    }
+    resultsEl.innerHTML = results.map(r => `
+      <div class="version-row">
+        <span style="flex:1;">${escapeHtml(r.sam_account_name || r.upn)}${r.display_name ? ' <span class="content-sub">(' + escapeHtml(r.display_name) + ')</span>' : ''}</span>
+        <button type="button" class="btn-secondary btn-small" data-pick-ad-user="${escapeHtml(r.upn || r.sam_account_name)}">Use this</button>
+      </div>
+    `).join('');
+    resultsEl.querySelectorAll('[data-pick-ad-user]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.getElementById('user-ad-identity').value = btn.dataset.pickAdUser;
+        resultsEl.innerHTML = '';
+        document.getElementById('user-ad-search-input').value = '';
+      });
+    });
+  }
+  document.getElementById('user-ad-search-btn').addEventListener('click', searchAdUsers);
+  document.getElementById('user-ad-search-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); searchAdUsers(); }
+  });
+
   function openModal(user) {
     document.getElementById('user-form-error').hidden = true;
     document.getElementById('user-form').reset();
     document.getElementById('user-enabled').checked = true;
     document.getElementById('user-group-quickadd-panel').hidden = true;
+    document.getElementById('user-ad-search-results').innerHTML = '';
 
     if (user) {
       document.getElementById('user-modal-title').textContent = 'Edit user';
@@ -197,11 +269,16 @@
       document.getElementById('user-enabled').checked = user.enabled;
       document.getElementById('user-allowed-source-ips').value = user.allowed_source_ips || '';
       document.getElementById('user-secret-hint').textContent = 'Leave blank to keep the current password.';
+      document.getElementById('user-auth-source').value = user.auth_source || 'local';
+      document.getElementById('user-ad-identity').value = user.ad_identity || '';
     } else {
       document.getElementById('user-modal-title').textContent = 'Add user';
       document.getElementById('user-id').value = '';
       document.getElementById('user-secret-hint').textContent = 'Required for new users.';
+      document.getElementById('user-auth-source').value = 'local';
+      document.getElementById('user-ad-identity').value = '';
     }
+    toggleAuthSourceFields();
     document.getElementById('user-modal-backdrop').hidden = false;
   }
 
@@ -222,6 +299,7 @@
 
     const id = document.getElementById('user-id').value;
     const password = document.getElementById('user-password').value;
+    const authSource = document.getElementById('user-auth-source').value;
 
     const payload = {
       username: document.getElementById('user-username').value,
@@ -230,10 +308,12 @@
       description: document.getElementById('user-description').value || null,
       enabled: document.getElementById('user-enabled').checked,
       allowed_source_ips: document.getElementById('user-allowed-source-ips').value || null,
+      auth_source: authSource,
+      ad_identity: authSource === 'ad' ? (document.getElementById('user-ad-identity').value.trim() || null) : null,
     };
     if (password) payload.password = password;
-    if (!id && !password) {
-      errorBox.textContent = 'A password is required for new users.';
+    if (!id && authSource === 'local' && !password) {
+      errorBox.textContent = 'A password is required for new local users.';
       errorBox.hidden = false;
       return;
     }

@@ -1,0 +1,291 @@
+{% extends "app_shell.html" %}
+{% block title %}Active Directory — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Platform / Active Directory{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Active Directory</h1>
+    <p class="content-sub">Configures tac_plus-ng's MAVIS backend to authenticate TACACS+ users against Active Directory, instead of (or alongside) local passwords.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;border-color:var(--red);">
+    <div class="panel-body" style="font-size:12px;color:var(--red);">
+      ⚠ "Test Connection" below checks that <em>this platform</em> can reach and bind to AD with these settings — a real, direct LDAP connection. It does <strong>not</strong> by itself prove that tac_plus-ng's own separate MAVIS integration is working — that only takes effect once you Apply the configuration, and should be verified with a real test login afterward.
+    </div>
+  </div>
+
+  <form id="ad-form">
+    <label class="checkbox-field field" style="margin-bottom:16px;">
+      <input type="checkbox" id="ad-enabled">
+      <span>Enable Active Directory authentication</span>
+    </label>
+
+    <label class="field">
+      <span class="field-label">Domain name</span>
+      <input type="text" id="ad-domain" placeholder="corp.example.com">
+    </label>
+    <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Also used to fill in the server address and search base below — override either one in Advanced if your environment needs something different.</div>
+
+    <label class="field">
+      <span class="field-label">Username</span>
+      <input type="text" id="ad-username" placeholder="svc_tacacs">
+    </label>
+    <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">A service account with permission to read users and groups — just the name is fine (e.g. "svc_tacacs"); the domain above is appended automatically. A full UPN (name@domain) also works if you type one directly.</div>
+
+    <label class="field">
+      <span class="field-label">Password</span>
+      <input type="password" id="ad-bind-password" placeholder="">
+    </label>
+    <div class="field-hint" style="margin-top:-10px;margin-bottom:18px;" id="ad-password-hint">Leave blank to keep the current password.</div>
+
+    <button type="button" class="btn-ghost btn-small" id="ad-advanced-toggle" style="width:auto;margin-bottom:14px;">▸ Advanced settings</button>
+
+    <div id="ad-advanced-section" hidden style="margin-bottom:18px;padding:14px;border:1px solid var(--line);border-radius:var(--radius);">
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Server address</span>
+          <input type="text" id="ad-host" placeholder="ad.corp.example.com">
+        </label>
+        <label class="field" style="flex:0 0 120px;">
+          <span class="field-label">Port</span>
+          <input type="number" id="ad-port" min="1" max="65535" value="636">
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Defaults to the domain name above — override only if your domain controllers aren't directly reachable at that address.</div>
+
+      <label class="checkbox-field field" style="margin-bottom:16px;">
+        <input type="checkbox" id="ad-use-tls" checked>
+        <span>Use a secure connection (LDAPS)</span>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Search base</span>
+        <input type="text" id="ad-search-base" placeholder="dc=corp,dc=example,dc=com">
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Defaults to the domain name above, converted to dc= components.</div>
+
+      <label class="field">
+        <span class="field-label">User filter template</span>
+        <input type="text" id="ad-user-filter" placeholder="(&(objectClass=user)(sAMAccountName=%s))">
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">AD group prefix (optional)</span>
+          <input type="text" id="ad-group-prefix" placeholder="e.g. tacacs_">
+        </label>
+        <label class="checkbox-field field" style="flex:0 0 220px;align-self:flex-end;margin-bottom:10px;">
+          <input type="checkbox" id="ad-use-memberof" checked>
+          <span>Use memberOf for group lookup</span>
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-10px;">AD group membership maps into the same group-matching policies already use — a user's AD groups (optionally filtered to this prefix) become available as User Group conditions once the config is applied.</div>
+    </div>
+
+    <div id="ad-form-error" class="form-error" role="alert" hidden></div>
+    <div id="ad-test-result" class="panel panel-wide" style="margin-bottom:16px;" hidden>
+      <div class="panel-body" id="ad-test-result-body"></div>
+    </div>
+
+    <div class="modal-actions" style="justify-content:flex-start;">
+      <button type="button" class="btn-secondary" id="ad-test-btn" style="width:auto;">Test Connection</button>
+      <button type="submit" class="btn-primary" style="width:auto;">Save Settings</button>
+    </div>
+  </form>
+
+  <div class="content-head" style="margin-top:36px;">
+    <h2>Health</h2>
+    <p class="content-sub">Tests the currently saved settings on demand.</p>
+  </div>
+  <div id="ad-health-panel" class="panel panel-wide">
+    <div class="panel-body" id="ad-health-body">
+      <button type="button" class="btn-secondary btn-small" id="ad-health-check-btn" style="width:auto;">Run health check</button>
+    </div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  // ---------- Domain-derived defaults ----------
+  // Keeps the Advanced fields in sync with Domain/Username as long as
+  // the admin hasn't manually overridden them -- tracked by comparing
+  // the current field value against what auto-derivation would have
+  // produced, not a separate "touched" flag, so loading existing
+  // saved settings (which populates these same fields) doesn't get
+  // mistaken for a manual edit.
+  let lastAutoHost = '';
+  let lastAutoSearchBase = '';
+
+  function domainToSearchBase(domain) {
+    return domain.split('.').map(p => p.trim()).filter(Boolean).map(p => `dc=${p}`).join(',');
+  }
+
+  function searchBaseToDomain(searchBase) {
+    return (searchBase || '').split(',').map(p => p.trim())
+      .filter(p => p.toLowerCase().startsWith('dc='))
+      .map(p => p.slice(3)).join('.');
+  }
+
+  function applyDomainDefaults() {
+    const domain = document.getElementById('ad-domain').value.trim();
+    const hostField = document.getElementById('ad-host');
+    const searchBaseField = document.getElementById('ad-search-base');
+
+    if (!hostField.value || hostField.value === lastAutoHost) {
+      hostField.value = domain;
+      lastAutoHost = domain;
+    }
+    if (!searchBaseField.value || searchBaseField.value === lastAutoSearchBase) {
+      const derived = domain ? domainToSearchBase(domain) : '';
+      searchBaseField.value = derived;
+      lastAutoSearchBase = derived;
+    }
+  }
+  document.getElementById('ad-domain').addEventListener('input', applyDomainDefaults);
+
+  function computeBindDn() {
+    const username = document.getElementById('ad-username').value.trim();
+    const domain = document.getElementById('ad-domain').value.trim();
+    if (!username) return '';
+    if (username.includes('@')) return username; // already a full UPN -- use as typed
+    return domain ? `${username}@${domain}` : username;
+  }
+
+  document.getElementById('ad-advanced-toggle').addEventListener('click', () => {
+    const section = document.getElementById('ad-advanced-section');
+    section.hidden = !section.hidden;
+    document.getElementById('ad-advanced-toggle').textContent = section.hidden ? '▸ Advanced settings' : '▾ Advanced settings';
+  });
+
+  async function loadSettings() {
+    const res = await AAAPlatform.authedFetch('/api/ad-settings');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) return;
+    const s = await res.json();
+
+    document.getElementById('ad-enabled').checked = s.enabled;
+    document.getElementById('ad-host').value = s.host || '';
+    document.getElementById('ad-port').value = s.port || 636;
+    document.getElementById('ad-use-tls').checked = s.use_tls;
+    document.getElementById('ad-search-base').value = s.search_base || '';
+    document.getElementById('ad-user-filter').value = s.user_filter_template || '';
+    document.getElementById('ad-group-prefix').value = s.group_prefix || '';
+    document.getElementById('ad-use-memberof').checked = s.use_memberof;
+    document.getElementById('ad-password-hint').textContent = s.has_password
+      ? 'A password is already saved. Leave blank to keep it.'
+      : 'No password saved yet.';
+
+    // Best-effort reconstruction of the simple fields from what's
+    // actually stored, so returning to this page shows a coherent
+    // picture rather than blank simple fields next to filled-in
+    // advanced ones.
+    const derivedDomain = searchBaseToDomain(s.search_base);
+    document.getElementById('ad-domain').value = derivedDomain;
+    lastAutoHost = derivedDomain;
+    lastAutoSearchBase = s.search_base || '';
+    const bindDn = s.bind_dn || '';
+    document.getElementById('ad-username').value = (derivedDomain && bindDn.endsWith(`@${derivedDomain}`))
+      ? bindDn.slice(0, -(derivedDomain.length + 1))
+      : bindDn;
+  }
+
+  document.getElementById('ad-use-tls').addEventListener('change', (e) => {
+    const portField = document.getElementById('ad-port');
+    if (portField.value === '389' && e.target.checked) portField.value = '636';
+    if (portField.value === '636' && !e.target.checked) portField.value = '389';
+  });
+
+  function currentFormValues() {
+    return {
+      host: document.getElementById('ad-host').value,
+      port: parseInt(document.getElementById('ad-port').value, 10) || 636,
+      use_tls: document.getElementById('ad-use-tls').checked,
+      bind_dn: computeBindDn(),
+      bind_password: document.getElementById('ad-bind-password').value || null,
+      search_base: document.getElementById('ad-search-base').value,
+    };
+  }
+
+  function renderTestResult(elBody, elBox, result) {
+    elBox.hidden = false;
+    elBox.style.borderColor = result.success ? 'var(--signal)' : 'var(--red)';
+    elBody.innerHTML = `<span style="color:${result.success ? 'var(--signal)' : 'var(--red)'};">${result.success ? '✓' : '✗'}</span> ${escapeHtml(result.message)}`;
+  }
+
+  document.getElementById('ad-test-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('ad-test-btn');
+    btn.disabled = true;
+    btn.textContent = 'Testing…';
+    const res = await AAAPlatform.authedFetch('/api/ad-settings/test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(currentFormValues()),
+    });
+    btn.disabled = false;
+    btn.textContent = 'Test Connection';
+    const resultBox = document.getElementById('ad-test-result');
+    const resultBody = document.getElementById('ad-test-result-body');
+    if (!res.ok) {
+      renderTestResult(resultBody, resultBox, { success: false, message: 'Could not run the test.' });
+      return;
+    }
+    const result = await res.json();
+    renderTestResult(resultBody, resultBox, result);
+  });
+
+  document.getElementById('ad-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('ad-form-error');
+    errorBox.hidden = true;
+
+    const payload = {
+      enabled: document.getElementById('ad-enabled').checked,
+      ...currentFormValues(),
+      user_filter_template: document.getElementById('ad-user-filter').value,
+      group_prefix: document.getElementById('ad-group-prefix').value || null,
+      use_memberof: document.getElementById('ad-use-memberof').checked,
+    };
+
+    const res = await AAAPlatform.authedFetch('/api/ad-settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Could not save settings.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+
+    document.getElementById('ad-bind-password').value = '';
+    AAAPlatform.toast('AD settings saved. Apply the configuration from the Config page for this to take effect.');
+    await loadSettings();
+  });
+
+  async function runHealthCheck() {
+    const body = document.getElementById('ad-health-body');
+    body.innerHTML = 'Checking…';
+    const res = await AAAPlatform.authedFetch('/api/ad-settings/health');
+    if (!res.ok) {
+      body.innerHTML = '<span style="color:var(--red);">Could not run the health check.</span> <button type="button" class="btn-secondary btn-small" id="ad-health-retry-btn" style="width:auto;">Run health check</button>';
+      document.getElementById('ad-health-retry-btn').addEventListener('click', runHealthCheck);
+      return;
+    }
+    const result = await res.json();
+    body.innerHTML = `<span style="color:${result.success ? 'var(--signal)' : 'var(--red)'};">${result.success ? '✓' : '✗'}</span> ${escapeHtml(result.message)}
+      <div style="margin-top:10px;"><button type="button" class="btn-secondary btn-small" id="ad-health-retry-btn" style="width:auto;">Run again</button></div>`;
+    document.getElementById('ad-health-retry-btn').addEventListener('click', runHealthCheck);
+  }
+  document.getElementById('ad-health-check-btn').addEventListener('click', runHealthCheck);
+
+  loadSettings();
+</script>
+{% endblock %}

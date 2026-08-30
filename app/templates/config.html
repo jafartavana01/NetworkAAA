@@ -79,13 +79,41 @@
     const panel = document.getElementById('candidate-panel');
     const res = await AAAPlatform.authedFetch('/api/config/candidate');
     if (res.status === 401) { window.location.href = '/login'; return; }
+
+    if (!res.ok) {
+      // Previously this fell through to `res.json()` unconditionally,
+      // then checked `data.has_changes` -- on an error response that
+      // field is simply undefined, and `!undefined` is true, so a
+      // real server-side failure (e.g. an exception while compiling
+      // the candidate) silently rendered as "Up to date" instead of
+      // surfacing the actual problem. Never mask a failed check as a
+      // clean one.
+      const body = await res.json().catch(() => ({}));
+      const msg = (body.detail && typeof body.detail === 'string') ? body.detail : `Could not check for pending changes (HTTP ${res.status}).`;
+      panel.innerHTML = `<div class="panel-body">
+        <span class="badge badge-off" style="margin-bottom:12px;display:inline-flex;">Could not check</span>
+        <p class="content-sub" style="color:var(--red);">${escapeHtml(msg)}</p>
+      </div>`;
+      return;
+    }
+
     const data = await res.json();
+
+    function uncompilableWarningHtml() {
+      if (!data.uncompilable_policies || data.uncompilable_policies.length === 0) return '';
+      const rows = data.uncompilable_policies.map(p => `<li><strong>${escapeHtml(p.name)}</strong> — ${escapeHtml(p.reason)}</li>`).join('');
+      return `<div class="panel-body" style="border-top:1px solid var(--line);margin-top:16px;padding-top:16px;">
+        <span class="badge badge-off" style="margin-bottom:10px;display:inline-flex;">Policy excluded from config</span>
+        <p class="content-sub">The following ${data.uncompilable_policies.length === 1 ? 'policy is' : 'policies are'} enabled but can't be compiled into the real configuration, so ${data.uncompilable_policies.length === 1 ? 'it contributes' : 'they contribute'} nothing to what's applied — this is why creating or editing ${data.uncompilable_policies.length === 1 ? 'it' : 'them'} may not show up as a pending change at all:</p>
+        <ul class="content-sub" style="margin:8px 0 0 18px;">${rows}</ul>
+      </div>`;
+    }
 
     if (!data.has_changes) {
       panel.innerHTML = `<div class="panel-body">
         <span class="badge badge-on" style="margin-bottom:12px;display:inline-flex;">Up to date</span>
         <p class="content-sub">The compiled configuration matches what's currently deployed. No action needed.</p>
-      </div>`;
+      </div>${uncompilableWarningHtml()}`;
       return;
     }
 
@@ -96,6 +124,7 @@
           <button class="btn-primary" id="apply-btn" style="width:auto;">Apply configuration</button>
         </div>
       </div>
+      ${uncompilableWarningHtml()}
     `;
     document.getElementById('apply-btn').addEventListener('click', applyConfig);
   }

@@ -24,6 +24,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -37,7 +38,7 @@ from ..models.policy import Policy
 from ..models.policy_command_set import PolicyCommandSet
 from ..schemas.policy import PolicyCreate, PolicyOut, PolicyUpdate, ReferencedCommandSet
 from ..services import policy_versioning
-from .deps import get_current_admin, verify_csrf
+from .deps import require_permission, verify_csrf
 
 router = APIRouter(prefix="/api/policies", tags=["policies"])
 
@@ -119,35 +120,54 @@ def policy_to_out(db: Session, policy: Policy, command_sets: list[CommandSet] | 
     )
 
 
-def _check_priority_available(db: Session, priority: int, *, exclude_id: uuid.UUID | None = None) -> None:
+def _make_room_for_priority(db: Session, new_priority: int, *, exclude_id: uuid.UUID | None = None) -> None:
     """
-    Explicit pre-check for a clear, specific error message -- the
-    DEFERRABLE INITIALLY DEFERRED unique constraint on Policy.priority
-    (see app/models/policy.py) is the real, authoritative guarantee,
-    but it only fires at commit time with a generic IntegrityError.
-    Checking here first means a single-policy create/update gets a
-    friendly, actionable message immediately; the bulk reorder
-    endpoint below doesn't need this check at all, since it's the one
-    legitimate case where priorities are SUPPOSED to pass through
-    other policies' current values on the way to their final,
-    collectively-unique state within one transaction.
+    Ordered-list "insert/move to position N" semantics, replacing the
+    old reject-on-conflict behavior: a new policy created at an
+    already-used priority pushes that policy and everything after it
+    down the list by one slot (7 -> 8, 8 -> 9, ...), rather than being
+    rejected. An existing policy MOVED to a new priority shifts only
+    the policies strictly between its old and new position by one
+    slot, in the direction that closes the gap -- so the sequence
+    never develops a hole or a duplicate. Safe within a single
+    transaction because Policy.priority's unique constraint is
+    DEFERRABLE INITIALLY DEFERRED (see app/models/policy.py) --
+    intermediate in-transaction states are never checked, only the
+    final state at commit, exactly the same guarantee the drag-reorder
+    endpoint below already relies on.
     """
-    query = db.query(Policy).filter(Policy.priority == priority)
+    old_priority = None
     if exclude_id is not None:
-        query = query.filter(Policy.id != exclude_id)
-    conflict = query.first()
-    if conflict is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail=f"Priority {priority} is already used by policy '{conflict.name}' -- "
-                   "choose a different value, or drag rows on the Policies page to reorder automatically.",
-        )
+        moving = db.query(Policy).filter(Policy.id == exclude_id).first()
+        old_priority = moving.priority if moving else None
+
+    if old_priority is not None and old_priority != new_priority:
+        if new_priority < old_priority:
+            query = (
+                db.query(Policy)
+                .filter(Policy.id != exclude_id, Policy.priority >= new_priority, Policy.priority < old_priority)
+            )
+            for p in query.all():
+                p.priority += 1
+        else:
+            query = (
+                db.query(Policy)
+                .filter(Policy.id != exclude_id, Policy.priority > old_priority, Policy.priority <= new_priority)
+            )
+            for p in query.all():
+                p.priority -= 1
+    else:
+        query = db.query(Policy).filter(Policy.priority >= new_priority)
+        if exclude_id is not None:
+            query = query.filter(Policy.id != exclude_id)
+        for p in query.all():
+            p.priority += 1
 
 
 @router.get("", response_model=list[PolicyOut])
 def list_policies(
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:view")),
 ):
     policies = db.query(Policy).order_by(Policy.priority.asc(), Policy.created_at.asc()).all()
     return [policy_to_out(db, p) for p in policies]
@@ -157,9 +177,9 @@ def list_policies(
 def create_policy(
     payload: PolicyCreate,
     db: Session = Depends(get_db),
-    admin: AdminUser = Depends(get_current_admin),
+    admin: AdminUser = Depends(require_permission("policies:write")),
 ):
-    _check_priority_available(db, payload.priority)
+    _make_room_for_priority(db, payload.priority)
     group_id, device_id, device_group_id = _resolve_conditions(db, payload)
 
     policy = Policy(
@@ -205,7 +225,7 @@ def _get_policy_or_404(db: Session, policy_id: str) -> Policy:
 def get_policy(
     policy_id: str,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:view")),
 ):
     policy = _get_policy_or_404(db, policy_id)
     return policy_to_out(db, policy)
@@ -216,11 +236,11 @@ def update_policy(
     policy_id: str,
     payload: PolicyUpdate,
     db: Session = Depends(get_db),
-    admin: AdminUser = Depends(get_current_admin),
+    admin: AdminUser = Depends(require_permission("policies:write")),
 ):
     policy = _get_policy_or_404(db, policy_id)
     if payload.priority != policy.priority:
-        _check_priority_available(db, payload.priority, exclude_id=policy.id)
+        _make_room_for_priority(db, payload.priority, exclude_id=policy.id)
     group_id, device_id, device_group_id = _resolve_conditions(db, payload)
 
     policy.name = payload.name
@@ -249,11 +269,57 @@ def update_policy(
     return policy_to_out(db, policy, command_sets)
 
 
+@router.post("/{policy_id}/command-sets/{command_set_id}", dependencies=[Depends(verify_csrf)])
+def add_command_set_to_policy(
+    policy_id: str,
+    command_set_id: str,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("policies:write")),
+):
+    """
+    Adds ONE command set to a policy's existing references, leaving
+    everything else about the policy untouched -- deliberately
+    separate from the full update_policy() flow above. That flow
+    requires PolicyUpdate's raw condition ids, but PolicyOut only ever
+    exposes their RESOLVED display names (condition_group_name etc),
+    never the ids themselves -- so a caller with only a PolicyOut in
+    hand has no safe way to round-trip a full update without risking
+    silently clearing a policy's conditions. Backs the Accounting
+    page's "add this command directly to a policy" flow, where the
+    caller only has a policy's id and name from a picker, not its raw
+    condition state.
+
+    A no-op (not an error) if the policy already references this
+    command set -- promoting the same accounting record twice to the
+    same policy shouldn't create a duplicate association or fail.
+    """
+    policy = _get_policy_or_404(db, policy_id)
+    try:
+        cs_id = uuid.UUID(command_set_id)
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid command set id.")
+    command_set = db.query(CommandSet).filter(CommandSet.id == cs_id).first()
+    if not command_set:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="That command set doesn't exist.")
+
+    existing = db.query(PolicyCommandSet).filter(
+        PolicyCommandSet.policy_id == policy.id, PolicyCommandSet.command_set_id == cs_id
+    ).first()
+    if existing:
+        return {"status": "ok", "already_referenced": True}
+
+    max_order = db.query(func.max(PolicyCommandSet.order)).filter(PolicyCommandSet.policy_id == policy.id).scalar()
+    next_order = (max_order + 1) if max_order is not None else 0
+    db.add(PolicyCommandSet(policy_id=policy.id, command_set_id=cs_id, order=next_order))
+    db.commit()
+    return {"status": "ok", "already_referenced": False}
+
+
 @router.delete("/{policy_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(verify_csrf)])
 def delete_policy(
     policy_id: str,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:write")),
 ):
     policy = _get_policy_or_404(db, policy_id)
     db.delete(policy)
@@ -268,21 +334,22 @@ class ReorderRequest(BaseModel):
 def reorder_policies(
     payload: ReorderRequest,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:write")),
 ):
     """
-    Drag-and-drop reorder support: reassigns priority = (index+1)*10
-    for every policy in `ordered_ids`, in ONE transaction. This is
-    the one legitimate case where a policy's priority is expected to
-    pass through another policy's CURRENT value on the way to the
-    final, collectively-unique arrangement -- exactly what
-    Policy.priority's DEFERRABLE INITIALLY DEFERRED unique constraint
-    exists to allow (see app/models/policy.py): the constraint is only
-    checked once, at this function's single commit, against the fully
-    -reassigned final state, not after each individual row update.
-    `_check_priority_available()` (used by create/update above) is
-    deliberately NOT called here -- transient collisions mid-sequence
-    are expected and fine.
+    Drag-and-drop reorder support: reassigns priority = index (0,
+    1, 2, ...) for every policy in `ordered_ids`, in ONE transaction --
+    sequential from 0, matching the same numbering scheme create/update
+    now use via _make_room_for_priority. This is the one legitimate
+    case where a policy's priority is expected to pass through another
+    policy's CURRENT value on the way to the final, collectively-unique
+    arrangement -- exactly what Policy.priority's DEFERRABLE INITIALLY
+    DEFERRED unique constraint exists to allow (see app/models/policy.py):
+    the constraint is only checked once, at this function's single
+    commit, against the fully-reassigned final state, not after each
+    individual row update. `_make_room_for_priority()` (used by
+    create/update above) is deliberately NOT called here -- transient
+    collisions mid-sequence are expected and fine.
     """
     resolved_ids = []
     for raw_id in payload.ordered_ids:
@@ -298,7 +365,7 @@ def reorder_policies(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=f"Unknown policy id(s): {', '.join(missing)}")
 
     for index, pid in enumerate(resolved_ids):
-        by_id[pid].priority = (index + 1) * 10
+        by_id[pid].priority = index
 
     db.commit()
     return {"status": "ok", "reordered": len(resolved_ids)}

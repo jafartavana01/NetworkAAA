@@ -1240,3 +1240,216 @@ exactly the class of mistake this project has worked to avoid since
 the `task_id` incident -- so this stays deferred, with the reasoning
 recorded here rather than silently dropped.
 
+## Active Directory / LDAP integration
+
+Two genuinely distinct claims, kept carefully separate throughout
+(see app.services.ad_directory's docstring for the full reasoning):
+1. This management plane's own direct LDAP connectivity (test,
+   health check, future browsing) -- a real `ldap3` client this
+   project fully controls.
+2. Configuring tac_plus-ng's OWN separate MAVIS-based AD backend so
+   the DAEMON itself authenticates TACACS+ users against AD.
+
+**Research before any code**: found the official upstream project's
+own AD integration guide, plus a real tac_plus-ng-specific config on
+the project's own mailing list (shebang literally
+`#!/usr/local/sbin/tac_plus-ng`) confirming the full structure:
+`mavis module = external { setenv ... exec = ... }` nested directly
+inside `id = tac_plus-ng {}`, with `login backend = mavis` / `user
+backend = mavis` as sibling directives. `LDAP_SERVER_TYPE`,
+`LDAP_HOSTS`, `LDAP_BASE`, `LDAP_USER`, `LDAP_PASSWD`, `LDAP_FILTER`,
+`LDAP_SCOPE`, `FLAG_USE_MEMBEROF`, `AD_GROUP_PREFIX` all appeared
+consistently across multiple independent real configs. Deliberately
+NOT emitting a `REQUIRE_*_GROUP_PREFIX` directive -- sources
+disagreed on its exact name (`REQUIRE_AD_GROUP_PREFIX` vs
+`REQUIRE_TACACS_GROUP_PREFIX`); since it's optional, omitting it
+avoids picking between two names found in different sources and
+hoping. `mavistest` (a real, confirmed CLI tool for testing MAVIS
+connectivity directly) was deliberately NOT wired up as the "Test
+Connection" feature -- its exact argument semantics weren't fully
+confirmed, and guessing at CLI invocation details is exactly the risk
+class this project avoids. "Test Connection" is a real, direct
+`ldap3` bind+search instead, honestly scoped in the GUI as testing
+platform-to-AD reachability, not tac_plus-ng's own separate
+integration.
+
+**Backward compatible by construction**: `_mavis_block()` returns an
+empty string whenever AD isn't enabled or has no host configured --
+an install that never touches this feature compiles a byte-identical
+config to before AD integration existed. Verified with real execution
+across disabled/incomplete/fully-configured scenarios, including that
+a password containing a literal quote character is safely escaped via
+the same `_quote()` helper already used for device shared secrets.
+
+**Data model**: `AdSettings` (singleton, encrypted bind password via
+the same Fernet pattern as `NetworkDevice.shared_secret_encrypted`),
+plus additive fields -- `TacacsGroup.ad_group_name` and
+`TacacsUser.auth_source`/`ad_identity` (with `password_hash` now
+nullable). An AD-linked (`auth_source="ad"`) user has no local
+password at all -- authentication is delegated entirely to
+tac_plus-ng's MAVIS backend; the local row exists purely so this
+platform's own group assignment and policy references have something
+to point at. `password_hash` being nullable (previously NOT NULL) is
+a real schema change: fresh installs get it automatically, but an
+already-existing deployment needs a manual
+`ALTER TABLE tacacs_users ALTER COLUMN password_hash DROP NOT NULL`,
+consistent with every other schema addition made under this project's
+clean-install-only policy. `routes_tacacs_users.py` catches and
+rejects (with a clear 400, verified with a real test) the one genuine
+broken-state edge case: switching a user from AD-linked back to local
+without providing a new password, which would otherwise leave them
+with `auth_source="local"` and no password hash at all.
+
+**GUI**: a new Platform → Active Directory page (settings form, Test
+Connection, on-demand Health check) and the group-members management
+fix (see below) are both live. **Not yet built**: the group/user
+"browse and pick from AD" pickers themselves (`search_groups` /
+`search_users` exist and are tested in `ad_directory.py`, but no GUI
+calls them yet), and the full page-by-page "modern GUI" consistency
+audit requested alongside this work.
+
+## Group membership management (previously missing entirely)
+
+Flagged directly: the Groups page showed a member count with no way
+to see who those members were or add someone, short of editing each
+user's own record individually. Fixed: `GET/POST/DELETE
+/api/tacacs-groups/{id}/members`, plus a "Members" button and modal
+on the Groups page. Adding a user already in a different group
+reassigns them (a user has exactly one group -- there was never a
+concept of a second, additive membership), and the GUI says so
+explicitly via a returned `reassigned_from` field rather than silently
+moving them. Removing a member ungroups them without deleting their
+account, matching how deleting a whole group already behaved.
+
+## Monitoring mode and Network Scan & Provision — built this session, deep verification still pending
+
+Two large features added in the same session, per explicit instruction
+to finish the GUI and defer full verification to a following pass.
+Both received real safety-relevant design work even though the usual
+full Jinja/ID/Node.js verification suite was NOT run yet -- that is
+the next step, not skipped permanently.
+
+**Monitoring mode**: `MonitoringSettings` (singleton) + a catch-all
+`host world { address = ::/0 }` block, emitted ONLY when enabled and
+ALWAYS last, after every specific device host block. This is safe
+regardless of which host-matching precedence tac_plus-ng actually uses
+(genuinely not confirmed either way) -- verified by direct text-
+position check that specific blocks always precede the catch-all.
+Detection (`find_unrecognized_connections`) scans the access log for
+IP-shaped substrings not matching any configured device -- a
+deliberately weaker claim than a structured parse, consistent with
+this project's existing honesty about that log's unconfirmed format.
+Verified against a real temp log file. The shared key is never shown
+(and never could be -- TACACS+ doesn't transmit it). Devices added via
+quick-add join a seeded "monitor" DeviceGroup.
+
+**Network Scan & Provision**: SSH-port reachability scan
+(`app.services.network_scan`, no ICMP/root privilege needed) plus
+SSH-based Cisco IOS TACACS+ client provisioning
+(`app.services.ssh_provision`) -- single or bulk "Apply AAA", with a
+device-group picker (+ inline create) before anything is pushed.
+Cisco IOS AAA commands are stated as exactly that -- not vendor-
+detected or vendor-generic -- and always include `local` as an
+authentication/authorization fallback so a misconfigured push can't
+lock out local device access. SSH credentials are never persisted --
+used only for the duration of the scan/apply request. Each device gets
+its own randomly-generated shared secret (never one secret reused
+across devices). A genuine bug was caught and fixed while writing this
+(not through testing, through re-reading the code): the Apply button
+was converted from `type="submit"` to `type="button"` after a
+successful apply so it could close the modal, but was never reset back
+on reopen -- a second scan/apply would have silently stopped
+submitting.
+
+**New device-overlap validation** (a separate, explicitly requested
+piece): creating or updating a device whose network overlaps an
+already-configured device's network is now rejected outright, in
+either direction -- verified against the exact example given
+(192.168.0.0/24 configured, then 192.168.0.32 rejected). Same
+underlying concern as monitoring's catch-all: two host blocks that
+could both match the same address is an unconfirmed precedence
+question, refused rather than left to chance.
+
+**Explicitly not yet done, per this session's own instruction to defer
+it**: the full Jinja/ID-cross-check/Node.js-syntax verification suite
+on `devices.html` (substantial new HTML/JS was added this session and
+has not been syntax-validated beyond a bare Jinja parse check), and no
+real SSH/paramiko execution has been tested against an actual device
+in this sandbox (not possible here -- needs a real target).
+
+## Bug fix, AAA template improvements, CSS/UX changes, ESC handling, live progress
+
+**Critical bug fixed and root-caused**: "String should have at least 1
+character" on every Policy save via the default Multi-select view.
+Confirmed cause: `ConditionInput.value` had `min_length=1`, but the
+backend never reads that field for database-backed object types at
+all (it resolves the real display name independently from the
+referenced row) -- the Multi-select builder correctly sends an empty
+string for those, and the constraint rejected its own valid input.
+Fixed with a model-level validator that only requires a non-empty
+value for the one type where it's actually used (`source_ip`'s manual
+value). Verified with 4 real scenarios.
+
+**AAA template**: added `aaa authorization config-commands` and
+`if-authenticated` as a further authorization fallback -- both
+standard, well-documented Cisco IOS syntax, placed correctly (not on
+the authentication line). Made the template admin-editable and
+persistent (`AaaTemplateSettings`, singleton) rather than only
+per-apply -- `build_cisco_ios_aaa_commands` now accepts an optional
+saved template, falling back to the built-in default unchanged for
+any install that never customizes it. Caught and fixed a real
+robustness issue myself while building this: originally used
+`.format()` for `{platform_ip}`/`{shared_secret}` substitution, which
+would throw on any stray brace an admin typed into an edit -- switched
+to plain `.replace()`, verified safe with a real test including that
+exact case.
+
+**CSS**: modern scrollbars (webkit + Firefox), a new `--bg-input`/
+`--line-bright` distinction so textboxes and form edges are visually
+differentiated from their surroundings, and modals sized to content
+(`width: fit-content`, capped `min-width`/`max-width`) instead of
+always rendering at a fixed width. Brace-balance verified; visual
+rendering itself could not be checked in this sandbox.
+
+**ESC-to-close, with unsaved-changes protection**: a single shared
+mechanism in `app.js` (not per-modal) covering every `.modal-backdrop`
+project-wide, including ones added later by SPA view navigation (a
+`MutationObserver` on `document.body` with `subtree: true`
+automatically covers new descendants without needing to re-attach
+anything). A custom shared confirm modal is used instead of native
+`confirm()`, specifically because native dialogs can't have a custom
+default/focused button, and defaulting to NOT silently discarding
+real edits needed one. Deliberately scoped to Escape only -- the
+existing click-outside-to-close handlers on every modal are
+unchanged. Verified with a real Node.js test against the actual
+extracted code (clean-modal-closes-directly,
+dirty-modal-shows-confirm, both confirm outcomes) using a minimal DOM
+stub; the MutationObserver-based "reset dirty on fresh open" behavior
+could not be exercised the same way without a real browser (jsdom
+isn't available in this sandbox).
+
+**Live "Applying..." progress for bulk apply**: `apply-all` is now a
+background task (`BackgroundTasks`, with its own DB session via
+`get_sessionmaker()` directly -- the request-scoped session is already
+closed by the time a background task actually runs) rather than a
+single blocking request, since a blocking response has no way to
+report partial progress before the whole batch finishes. Progress is
+tracked in-memory (`app.services.apply_progress`, deliberately not a
+database table -- transient, single-session state with no reason to
+outlive the browser tab watching it) and polled by the frontend every
+800ms. The GUI shows exactly the last 2 log lines, color-coded
+(green Pass / red FAIL), no user scrollbar -- verified with a real
+execution test of the actual rendering function, including the
+2-line cap holding correctly against 5 accumulated lines. Single-
+device Apply is unchanged (still synchronous) -- live progress was
+scoped to the bulk case specifically, matching the "which device and
+which command" framing of the request.
+
+**Not done**: "Demo mode" (apply a config for a timed duration with
+automatic revert) was deliberately not attempted this turn. It's the
+most complex remaining item and carries real safety weight if the
+auto-revert mechanism has a bug -- an admin could be left with an
+unintended or broken configuration with no clear indication why. This
+deserves its own careful design pass, not a rushed implementation
+appended to an already-large set of changes.
+

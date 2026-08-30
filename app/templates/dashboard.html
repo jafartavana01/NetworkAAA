@@ -38,6 +38,19 @@
     <p class="content-sub">Computed from the same parsed accounting log the Accounting and AAA Health pages read — nothing here is a separately-tracked metric. See <a href="/tacacs/aaa-health">AAA Health</a> for the full failure-analysis breakdown.</p>
   </div>
 
+  <section class="panel-grid" style="grid-template-columns: 1fr 2fr;">
+    <div class="panel panel-wide" style="display:flex;flex-direction:column;justify-content:center;align-items:center;padding:28px 20px;">
+      <div id="active-sessions-count" style="font-size:56px;font-weight:700;font-family:var(--font-mono);color:var(--signal);line-height:1;">—</div>
+      <div class="content-sub" style="margin-top:10px;text-transform:uppercase;letter-spacing:0.05em;">Active Sessions</div>
+    </div>
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Active in the last <span id="recent-activity-minutes">5</span> minutes</div>
+      <div id="recent-activity-table">
+        <div class="panel-loading">Loading…</div>
+      </div>
+    </div>
+  </section>
+
   <section class="panel-grid" id="activity-summary-grid">
     <div class="panel"><div class="panel-loading">Loading…</div></div>
   </section>
@@ -57,6 +70,18 @@
     </div>
   </section>
 </main>
+
+<div class="modal-backdrop" id="device-activity-modal-backdrop" hidden>
+  <div class="modal" style="max-width: min(90vw, 720px); max-height: 82vh; overflow-y: auto;">
+    <h2 id="device-activity-modal-title">Device Activity</h2>
+    <div id="device-activity-list">
+      <div class="panel-loading">Loading…</div>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="device-activity-close-btn">Close</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block view_scripts %}
@@ -197,11 +222,117 @@
     });
   }
 
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function formatRelativeTime(isoString) {
+    const then = new Date(isoString);
+    const seconds = Math.floor((Date.now() - then.getTime()) / 1000);
+    if (seconds < 5) return 'just now';
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours}h ago`;
+  }
+
+  async function loadActiveSessions() {
+    const res = await AAAPlatform.authedFetch('/api/tacacs-accounting/sessions?active_only=true&limit=2000');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) return;
+    const data = await res.json();
+    document.getElementById('active-sessions-count').textContent = data.active_count;
+  }
+
+  async function loadRecentActivity() {
+    const wrap = document.getElementById('recent-activity-table');
+    const res = await AAAPlatform.authedFetch('/api/tacacs-accounting/recent-activity?minutes=5');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) {
+      wrap.innerHTML = '<div class="panel-body">Could not load recent activity.</div>';
+      return;
+    }
+    const data = await res.json();
+    document.getElementById('recent-activity-minutes').textContent = data.minutes;
+
+    if (data.rows.length === 0) {
+      wrap.innerHTML = `<div class="panel-body content-sub">No activity in the last ${data.minutes} minutes.</div>`;
+      return;
+    }
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Device</th><th>User</th><th>Last Seen</th><th>Events</th></tr></thead>
+        <tbody>${data.rows.map(r => `
+          <tr data-device="${escapeHtml(r.device)}" style="cursor:pointer;">
+            <td>${escapeHtml(r.device)}</td>
+            <td>${escapeHtml(r.user)}</td>
+            <td class="cell-mono content-sub" title="${escapeHtml(new Date(r.last_seen).toLocaleString())}">${formatRelativeTime(r.last_seen)}</td>
+            <td class="cell-mono">${r.event_count}</td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+    wrap.querySelectorAll('[data-device]').forEach(row => {
+      row.addEventListener('click', () => openDeviceActivityModal(row.dataset.device));
+    });
+  }
+
+  async function openDeviceActivityModal(deviceName) {
+    document.getElementById('device-activity-modal-title').textContent = `Activity — ${deviceName}`;
+    const list = document.getElementById('device-activity-list');
+    list.innerHTML = '<div class="panel-loading">Loading…</div>';
+    document.getElementById('device-activity-modal-backdrop').hidden = false;
+
+    const res = await AAAPlatform.authedFetch(`/api/tacacs-accounting?device=${encodeURIComponent(deviceName)}&limit=200`);
+    if (!res.ok) {
+      list.innerHTML = '<div class="panel-body">Could not load activity for this device.</div>';
+      return;
+    }
+    const data = await res.json();
+    if (data.records.length === 0) {
+      list.innerHTML = '<div class="empty-state">No recorded activity for this device.</div>';
+      return;
+    }
+    // read_records() (the underlying source) returns newest-first
+    // already -- the same time-sorted order every other accounting
+    // view in this project relies on, not re-sorted here.
+    list.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Time</th><th>User</th><th>Type</th><th>Service</th><th>Command</th><th>Result</th></tr></thead>
+        <tbody>${data.records.map(r => `
+          <tr>
+            <td class="cell-mono content-sub">${r.timestamp ? escapeHtml(new Date(r.timestamp).toLocaleString()) : (r.raw_prefix ? escapeHtml(r.raw_prefix) + ' (unparsed)' : '—')}</td>
+            <td>${escapeHtml(r.user || '—')}</td>
+            <td>${escapeHtml(r.accttype || '—')}</td>
+            <td>${escapeHtml(r.service || '—')}</td>
+            <td class="cell-mono">${escapeHtml(r.cmd || '—')}</td>
+            <td>${escapeHtml(r.result || '—')}</td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+  }
+
+  document.getElementById('device-activity-close-btn').addEventListener('click', () => {
+    document.getElementById('device-activity-modal-backdrop').hidden = true;
+  });
+  document.getElementById('device-activity-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'device-activity-modal-backdrop') document.getElementById('device-activity-modal-backdrop').hidden = true;
+  });
+
   loadActivity();
   const dashboardActivityInterval = setInterval(loadActivity, 30000);
+  loadActiveSessions();
+  loadRecentActivity();
+  const dashboardLiveInterval = setInterval(() => { loadActiveSessions(); loadRecentActivity(); }, 15000);
   if (window.AAAPlatform && AAAPlatform.onViewLeave) {
     AAAPlatform.onViewLeave(() => {
       clearInterval(dashboardActivityInterval);
+      clearInterval(dashboardLiveInterval);
       if (activityChart) activityChart.destroy();
       if (resultsChart) resultsChart.destroy();
     });

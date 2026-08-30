@@ -28,6 +28,7 @@ class CandidateOut(BaseModel):
     diff: str
     candidate: str
     active: str
+    uncompilable_policies: list[dict] = []
 
 
 class ApplyRequest(BaseModel):
@@ -64,7 +65,18 @@ def get_candidate(
     active = config_compiler.get_active_config()
     candidate = config_compiler.compile_candidate(db)
     diff = config_compiler.compute_diff(active, candidate)
-    return CandidateOut(has_changes=bool(diff), diff=diff, candidate=candidate, active=active)
+    # Surfaced here, not only at actual apply time (see /apply below) --
+    # a policy that's excluded from compilation contributes NOTHING to
+    # the candidate text, so if it's the ONLY pending change, `diff`
+    # comes back empty and the admin would otherwise never learn why
+    # their new/edited policy never shows up as a pending change at
+    # all, since they'd never even reach the Apply step to see the
+    # recorded exclusion event.
+    uncompilable = config_compiler.get_uncompilable_policies(db)
+    return CandidateOut(
+        has_changes=bool(diff), diff=diff, candidate=candidate, active=active,
+        uncompilable_policies=[{"name": p.name, "reason": reason} for p, reason in uncompilable],
+    )
 
 
 @router.post("/apply", response_model=VersionOut, dependencies=[Depends(verify_csrf)])

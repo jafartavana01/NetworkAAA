@@ -78,9 +78,22 @@
     <p class="content-sub" style="margin-top:-8px;margin-bottom:18px;">Observed command: <span class="cell-mono" id="promote-observed-command"></span></p>
     <form id="promote-form">
       <label class="field">
+        <span class="field-label">Add to</span>
+        <select id="promote-target-type">
+          <option value="command-set">An existing command set</option>
+          <option value="policy">A policy directly</option>
+        </select>
+      </label>
+
+      <label class="field" id="promote-set-field">
         <span class="field-label">Command set</span>
         <select id="promote-set-select" required></select>
       </label>
+      <label class="field" id="promote-policy-field" hidden>
+        <span class="field-label">Policy</span>
+        <select id="promote-policy-select"></select>
+      </label>
+      <div class="field-hint" id="promote-policy-hint" style="margin-top:-10px;margin-bottom:14px;" hidden></div>
 
       <div class="field-row">
         <label class="field" style="flex:0 0 130px;">
@@ -263,6 +276,18 @@
 
   let promoteTargetCommand = '';
 
+  function updatePromoteTargetVisibility() {
+    const targetType = document.getElementById('promote-target-type').value;
+    const isPolicy = targetType === 'policy';
+    document.getElementById('promote-set-field').hidden = isPolicy;
+    document.getElementById('promote-policy-field').hidden = !isPolicy;
+    const hint = document.getElementById('promote-policy-hint');
+    hint.hidden = !isPolicy;
+    if (isPolicy) hint.textContent = 'If this policy has no command set yet, one is created and attached automatically. If it already references more than one, the rule is added to the first.';
+    document.getElementById('promote-set-select').required = !isPolicy;
+  }
+  document.getElementById('promote-target-type').addEventListener('change', updatePromoteTargetVisibility);
+
   async function openPromoteModal(record) {
     if (!record || !record.cmd) return;
     promoteTargetCommand = record.cmd;
@@ -272,7 +297,9 @@
     document.getElementById('promote-match-mode').value = 'exact';
     document.getElementById('promote-value').value = record.cmd;
     document.getElementById('promote-action').value = 'deny';
+    document.getElementById('promote-target-type').value = 'command-set';
     updatePromotePreview();
+    updatePromoteTargetVisibility();
 
     const select = document.getElementById('promote-set-select');
     select.innerHTML = '<option>Loading…</option>';
@@ -284,6 +311,18 @@
         : '<option value="">— No command sets exist yet —</option>';
     } else {
       select.innerHTML = '<option value="">— Could not load command sets —</option>';
+    }
+
+    const policySelect = document.getElementById('promote-policy-select');
+    policySelect.innerHTML = '<option>Loading…</option>';
+    const policyRes = await AAAPlatform.authedFetch('/api/policies');
+    if (policyRes.ok) {
+      const policies = await policyRes.json();
+      policySelect.innerHTML = policies.length
+        ? policies.map(p => `<option value="${p.id}" data-name="${escapeHtml(p.name)}" data-set-count="${p.command_sets.length}">${escapeHtml(p.name)}${p.command_sets.length > 0 ? ` (${p.command_sets.length} command set${p.command_sets.length === 1 ? '' : 's'})` : ' (no command set yet — one will be created)'}</option>`).join('')
+        : '<option value="">— No policies exist yet —</option>';
+    } else {
+      policySelect.innerHTML = '<option value="">— Could not load policies —</option>';
     }
 
     document.getElementById('promote-modal-backdrop').hidden = false;
@@ -305,43 +344,14 @@
     if (e.target.id === 'promote-modal-backdrop') document.getElementById('promote-modal-backdrop').hidden = true;
   });
 
-  document.getElementById('promote-form').addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const errorBox = document.getElementById('promote-form-error');
-    errorBox.hidden = true;
-
-    const setId = document.getElementById('promote-set-select').value;
-    if (!setId) {
-      errorBox.textContent = 'Choose a command set — create one on the Command Sets page first if none exist.';
-      errorBox.hidden = false;
-      return;
-    }
-    const mode = document.getElementById('promote-match-mode').value;
-    const value = document.getElementById('promote-value').value.trim();
-    if (!value) {
-      errorBox.textContent = 'Enter a value.';
-      errorBox.hidden = false;
-      return;
-    }
-    const pattern = modeAndValueToPattern(mode, value);
-    try { new RegExp(pattern); } catch (err) {
-      errorBox.textContent = `"${value}" is not a valid regular expression.`;
-      errorBox.hidden = false;
-      return;
-    }
-    const action = document.getElementById('promote-action').value;
-
+  async function addRuleToCommandSetById(setId, action, pattern) {
     // Command Sets are replaced wholesale on save (no "add one rule"
     // endpoint exists -- see app.api.routes_command_sets), so this
     // fetches the target set's CURRENT full state, appends the new
     // rule, and PUTs the whole thing back -- reusing the existing API
     // exactly as command_sets.html itself does, no backend changes.
     const getRes = await AAAPlatform.authedFetch(`/api/command-sets/${setId}`);
-    if (!getRes.ok) {
-      errorBox.textContent = 'Could not load that command set.';
-      errorBox.hidden = false;
-      return;
-    }
+    if (!getRes.ok) return { success: false, error: 'Could not load that command set.' };
     const commandSet = await getRes.json();
 
     const existingRules = commandSet.rules.map((r, i) => ({
@@ -361,16 +371,114 @@
         enabled: commandSet.enabled, rules: existingRules,
       }),
     });
-
     if (!putRes.ok) {
       const body = await putRes.json().catch(() => ({}));
-      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not add this rule.';
+      return { success: false, error: (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not add this rule.' };
+    }
+    return { success: true, commandSetName: commandSet.name };
+  }
+
+  document.getElementById('promote-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('promote-form-error');
+    errorBox.hidden = true;
+
+    const targetType = document.getElementById('promote-target-type').value;
+    const mode = document.getElementById('promote-match-mode').value;
+    const value = document.getElementById('promote-value').value.trim();
+    if (!value) {
+      errorBox.textContent = 'Enter a value.';
       errorBox.hidden = false;
       return;
     }
+    const pattern = modeAndValueToPattern(mode, value);
+    try { new RegExp(pattern); } catch (err) {
+      errorBox.textContent = `"${value}" is not a valid regular expression.`;
+      errorBox.hidden = false;
+      return;
+    }
+    const action = document.getElementById('promote-action').value;
 
+    if (targetType === 'command-set') {
+      const setId = document.getElementById('promote-set-select').value;
+      if (!setId) {
+        errorBox.textContent = 'Choose a command set — create one on the Command Sets page first if none exist.';
+        errorBox.hidden = false;
+        return;
+      }
+      const result = await addRuleToCommandSetById(setId, action, pattern);
+      if (!result.success) {
+        errorBox.textContent = result.error;
+        errorBox.hidden = false;
+        return;
+      }
+      document.getElementById('promote-modal-backdrop').hidden = true;
+      AAAPlatform.toast(`Added to "${result.commandSetName}".`);
+      return;
+    }
+
+    // targetType === 'policy'
+    const policyOption = document.getElementById('promote-policy-select').selectedOptions[0];
+    const policyId = policyOption ? policyOption.value : '';
+    if (!policyId) {
+      errorBox.textContent = 'Choose a policy — create one on the Policies page first if none exist.';
+      errorBox.hidden = false;
+      return;
+    }
+    const policyName = policyOption.dataset.name;
+    const existingSetCount = parseInt(policyOption.dataset.setCount, 10) || 0;
+
+    let setId;
+    if (existingSetCount > 0) {
+      // Re-fetch the policy for its actual command_sets -- the option's
+      // own data-set-count is only a display hint from when the modal
+      // opened, not something to build IDs from directly.
+      const policyRes = await AAAPlatform.authedFetch(`/api/policies/${policyId}`);
+      if (!policyRes.ok) {
+        errorBox.textContent = 'Could not load that policy.';
+        errorBox.hidden = false;
+        return;
+      }
+      const policyData = await policyRes.json();
+      setId = policyData.command_sets[0].id;
+    } else {
+      // No command set on this policy yet -- create one, named after
+      // the policy (truncated so "<name>_commands" never exceeds the
+      // 64-char limit shared by both policy and command-set names).
+      const newSetName = `${policyName.slice(0, 55)}_commands`;
+      const createRes = await AAAPlatform.authedFetch('/api/command-sets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newSetName, description: `Created from Accounting for policy "${policyName}".`,
+          vendor: 'cisco_ios', enabled: true, rules: [],
+        }),
+      });
+      if (!createRes.ok) {
+        const body = await createRes.json().catch(() => ({}));
+        errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not create a command set for this policy.';
+        errorBox.hidden = false;
+        return;
+      }
+      const newSet = await createRes.json();
+      setId = newSet.id;
+
+      const linkRes = await AAAPlatform.authedFetch(`/api/policies/${policyId}/command-sets/${setId}`, { method: 'POST' });
+      if (!linkRes.ok) {
+        errorBox.textContent = 'Created the command set, but could not attach it to the policy.';
+        errorBox.hidden = false;
+        return;
+      }
+    }
+
+    const result = await addRuleToCommandSetById(setId, action, pattern);
+    if (!result.success) {
+      errorBox.textContent = result.error;
+      errorBox.hidden = false;
+      return;
+    }
     document.getElementById('promote-modal-backdrop').hidden = true;
-    AAAPlatform.toast(`Added to "${commandSet.name}".`);
+    AAAPlatform.toast(`Added to policy "${policyName}" (command set "${result.commandSetName}").`);
   });
 </script>
 {% endblock %}

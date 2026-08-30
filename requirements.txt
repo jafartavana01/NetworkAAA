@@ -55,3 +55,18 @@ cryptography>=44.0.0,<48.0
 itsdangerous>=2.2.0,<3.0
 jinja2>=3.1.4,<4.0
 python-multipart>=0.0.19,<1.0
+# ldap3, not python-ldap: pure-Python LDAP implementation, no
+# dependency on system OpenLDAP client libraries -- consistent with
+# this project's general preference (see the notes above) for
+# avoiding C-extension/system-library complications where a pure-
+# Python alternative exists. Used for Active Directory connectivity
+# testing and health checks FROM the management plane itself -- a
+# separate thing from tac_plus-ng's own MAVIS-based AD authentication
+# (see app/services/ad_directory.py's docstring for why these are two
+# distinct claims, not one).
+ldap3>=2.9.1,<3.0
+# paramiko: SSH client, used by the network-scan-and-onboard feature
+# (app/services/ssh_provision.py) to reach newly-discovered devices
+# and push their TACACS+ client configuration. Credentials for this
+# are never persisted -- see that module's docstring.
+paramiko>=3.4.0,<4.0

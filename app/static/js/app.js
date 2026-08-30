@@ -190,5 +190,103 @@ window.AAAPlatform = (function () {
     });
   }
 
+  /*
+   * Global ESC-to-close for every .modal-backdrop, with unsaved-
+   * changes protection -- scoped deliberately to Escape only, not
+   * the existing click-outside-to-close handlers each modal already
+   * has (those stay exactly as they are; this doesn't touch them).
+   *
+   * "Dirty" tracking: any input/change event bubbling up from inside
+   * a currently-visible modal marks it dirty; a MutationObserver on
+   * `document.body` (subtree: true, so it automatically covers
+   * modal-backdrops added later by SPA view navigation without
+   * needing to re-attach anything) resets that flag the moment a
+   * modal's `hidden` attribute is cleared -- i.e. every time a modal
+   * is freshly opened, regardless of which page's own openXModal()
+   * function did it.
+   *
+   * A custom shared confirm modal (#unsaved-changes-modal-backdrop,
+   * in app_shell.html) is used instead of the native confirm() --
+   * native dialogs cannot have a custom default/focused button, and
+   * the safe default here (defaulting to keep-editing, not silently
+   * discarding real edits) needs one.
+   */
+  (function setupEscToClose() {
+    const dirtyModals = new WeakSet();
+
+    function isRealModal(el) {
+      return el && el.classList && el.classList.contains('modal-backdrop')
+        && el.id !== 'unsaved-changes-modal-backdrop';
+    }
+
+    document.addEventListener('input', (e) => {
+      const backdrop = e.target.closest && e.target.closest('.modal-backdrop');
+      if (isRealModal(backdrop) && !backdrop.hidden) dirtyModals.add(backdrop);
+    }, true);
+    document.addEventListener('change', (e) => {
+      const backdrop = e.target.closest && e.target.closest('.modal-backdrop');
+      if (isRealModal(backdrop) && !backdrop.hidden) dirtyModals.add(backdrop);
+    }, true);
+
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((m) => {
+        if (m.attributeName === 'hidden' && isRealModal(m.target) && !m.target.hidden) {
+          dirtyModals.delete(m.target); // just opened (or re-opened) -- start clean
+        }
+      });
+    });
+    observer.observe(document.body, { attributes: true, attributeFilter: ['hidden'], subtree: true });
+
+    function topVisibleModal() {
+      const visible = Array.from(document.querySelectorAll('.modal-backdrop')).filter((el) => isRealModal(el) && !el.hidden);
+      return visible.length ? visible[visible.length - 1] : null;
+    }
+
+    let pendingCloseTarget = null;
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+
+      const unsavedModal = document.getElementById('unsaved-changes-modal-backdrop');
+      if (unsavedModal && !unsavedModal.hidden) {
+        // Escape on the confirm prompt itself acts like "Keep
+        // editing" -- the same safe default as its focused button,
+        // not another level of confirmation.
+        unsavedModal.hidden = true;
+        pendingCloseTarget = null;
+        return;
+      }
+
+      const target = topVisibleModal();
+      if (!target) return;
+
+      if (dirtyModals.has(target) && unsavedModal) {
+        pendingCloseTarget = target;
+        unsavedModal.hidden = false;
+      } else {
+        target.hidden = true;
+      }
+    });
+
+    const keepEditingBtn = document.getElementById('unsaved-changes-keep-editing-btn');
+    const discardBtn = document.getElementById('unsaved-changes-discard-btn');
+    if (keepEditingBtn) {
+      keepEditingBtn.addEventListener('click', () => {
+        document.getElementById('unsaved-changes-modal-backdrop').hidden = true;
+        pendingCloseTarget = null;
+      });
+    }
+    if (discardBtn) {
+      discardBtn.addEventListener('click', () => {
+        document.getElementById('unsaved-changes-modal-backdrop').hidden = true;
+        if (pendingCloseTarget) {
+          pendingCloseTarget.hidden = true;
+          dirtyModals.delete(pendingCloseTarget);
+          pendingCloseTarget = null;
+        }
+      });
+    }
+  })();
+
   return { readCookie, authedFetch, toast, setupQuickAdd, onViewLeave, runViewCleanup };
 })();

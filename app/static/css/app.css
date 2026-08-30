@@ -12,8 +12,10 @@
   --bg-void: #0b0e11;
   --bg-panel: #12161b;
   --bg-panel-raised: #161b21;
+  --bg-input: #1c222a;
   --line: #232932;
   --line-soft: #1a1f26;
+  --line-bright: #3a4350;
 
   --text-primary: #e6eaee;
   --text-dim: #8a94a0;
@@ -31,6 +33,31 @@
 }
 
 * { box-sizing: border-box; }
+
+/* ---------- modern scrollbars (webkit + firefox) ---------- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-bright) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: var(--line-bright);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-faint);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
 
 html, body {
   margin: 0;
@@ -119,7 +146,7 @@ button {
 .field-label { font-size: 12px; color: var(--text-dim); letter-spacing: 0.03em; text-transform: uppercase; }
 
 input[type="text"], input[type="password"], input[type="number"], input[type="datetime-local"], textarea {
-  background: var(--bg-void);
+  background: var(--bg-input);
   border: 1px solid var(--line);
   color: var(--text-primary);
   padding: 10px 12px;
@@ -150,7 +177,7 @@ select {
   appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
-  background-color: var(--bg-void);
+  background-color: var(--bg-input);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none'%3E%3Cpath d='M1 1.5L6 6.5L11 1.5' stroke='%237a8a86' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 12px center;
@@ -494,20 +521,28 @@ table.data-table tr:hover td { background: var(--bg-panel-raised); }
 .modal-backdrop[hidden] { display: none; }
 .modal {
   background: var(--bg-panel);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-bright);
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
-  width: 100%;
-  max-width: 480px;
-  padding: 24px;
+  width: fit-content;
+  min-width: 400px;
+  max-width: min(92vw, 480px);
+  max-height: min(90vh, 100%);
+  padding: 24px 24px 0 24px;
+  overflow-y: auto;
   animation: modal-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .modal h2 { margin: 0 0 18px; font-size: 15px; }
 .modal .field { margin-bottom: 14px; }
+.modal .field, .modal .field-row { width: 100%; }
 .modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
   margin-top: 20px;
+  position: sticky;
+  bottom: 0;
+  background: var(--bg-panel);
+  padding: 16px 0 24px 0;
 }
 .field-hint { font-size: 11px; color: var(--text-faint); margin-top: 4px; }
 .field-row { display: flex; gap: 12px; }

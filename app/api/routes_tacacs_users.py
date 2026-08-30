@@ -61,6 +61,8 @@ def _to_out(user: TacacsUser, group_name: str | None = None) -> TacacsUserOut:
         group_name=group_name,
         enabled=user.enabled,
         allowed_source_ips=user.allowed_source_ips,
+        auth_source=user.auth_source,
+        ad_identity=user.ad_identity,
     )
 
 
@@ -92,7 +94,12 @@ def create_user(
         group_id=group.id if group else None,
         enabled=payload.enabled,
         allowed_source_ips=payload.allowed_source_ips,
-        password_hash=security.hash_password(payload.password),
+        auth_source=payload.auth_source,
+        ad_identity=payload.ad_identity if payload.auth_source == "ad" else None,
+        # payload.password is guaranteed set when auth_source == "local"
+        # (enforced by TacacsUserCreate's own validator) -- an "ad" user
+        # gets no local password hash at all, matching its whole point.
+        password_hash=security.hash_password(payload.password) if payload.auth_source == "local" else None,
     )
     db.add(user)
     try:
@@ -136,14 +143,26 @@ def update_user(
     user = _get_user_or_404(db, user_id)
     group = _resolve_group(db, payload.group_id)
 
+    if user.auth_source == "ad" and payload.auth_source == "local" and not payload.password:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="Switching from AD-linked to local requires setting a password -- there's no existing local password to fall back to.",
+        )
+
     user.username = payload.username
     user.full_name = payload.full_name
     user.description = payload.description
     user.group_id = group.id if group else None
     user.enabled = payload.enabled
     user.allowed_source_ips = payload.allowed_source_ips
-    if payload.password:
+    user.auth_source = payload.auth_source
+    user.ad_identity = payload.ad_identity if payload.auth_source == "ad" else None
+    if payload.auth_source == "local" and payload.password:
         user.password_hash = security.hash_password(payload.password)
+    elif payload.auth_source == "ad":
+        # Switching (or already set) to AD-delegated auth -- no local
+        # password should linger from a prior "local" state.
+        user.password_hash = None
 
     try:
         db.commit()

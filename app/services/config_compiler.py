@@ -28,10 +28,12 @@ from sqlalchemy.orm import Session
 
 from .. import security
 from ..config import BACKUPS_DIR, GENERATED_DIR, LOG_DIR
+from ..models.ad_settings import AdSettings
 from ..models.config_version import ConfigVersion
 from ..models.device import NetworkDevice
 from ..models.device_access_grant import DeviceAccessGrant
 from ..models.group import TacacsGroup
+from ..models.monitoring_settings import MonitoringSettings
 from ..models.policy import Policy
 from ..models.policy_condition import PolicyCondition
 from ..models.policy_condition_group import PolicyConditionGroup
@@ -81,6 +83,7 @@ id = tac_plus-ng {{
     authorization log = authorlog
     accounting log = acctlog
 
+{mavis_block}\
 {host_blocks}\
 {group_blocks}\
 {user_blocks}\
@@ -127,6 +130,63 @@ def _quote(value: str) -> str:
     return f'"{escaped}"'
 
 
+def _mavis_block(settings: AdSettings | None) -> str:
+    """
+    Active Directory / MAVIS integration (confirmed real syntax --
+    directly confirmed via a real tac_plus-ng-specific config, shebang
+    literally `#!/usr/local/sbin/tac_plus-ng`, on the project's own
+    mailing list: `mavis module = external { setenv ... exec = ... }`
+    nested directly inside `id = tac_plus-ng {}`, with `login backend
+    = mavis` / `user backend = mavis` as sibling top-level directives.
+    LDAP_SERVER_TYPE / LDAP_HOSTS / LDAP_BASE / LDAP_USER / LDAP_PASSWD
+    / LDAP_FILTER / LDAP_SCOPE / FLAG_USE_MEMBEROF / AD_GROUP_PREFIX
+    all appeared consistently across multiple independent real
+    configs. Deliberately NOT emitting a REQUIRE_*_GROUP_PREFIX
+    directive: sources disagreed on its exact name
+    (REQUIRE_AD_GROUP_PREFIX vs REQUIRE_TACACS_GROUP_PREFIX) and it's
+    optional, so omitting it avoids guessing between two names found
+    in different sources rather than picking one and hoping.
+
+    Returns "" (no MAVIS block at all, local-only authentication
+    continues exactly as before) when AD integration isn't enabled or
+    has no host configured -- this is what makes AD integration purely
+    additive: an install that never touches this setting compiles an
+    identical config to before this feature existed.
+    """
+    if settings is None or not settings.enabled or not settings.host:
+        return ""
+
+    password = ""
+    if settings.bind_password_encrypted:
+        password = security.decrypt_secret(settings.bind_password_encrypted)
+
+    lines = ["    mavis module = external {"]
+    lines.append('        setenv LDAP_SERVER_TYPE = "microsoft"')
+    scheme = "ldaps" if settings.use_tls else "ldap"
+    lines.append(f'        setenv LDAP_HOSTS = "{scheme}://{settings.host}:{settings.port}"')
+    lines.append("        setenv LDAP_SCOPE = sub")
+    if settings.search_base:
+        lines.append(f"        setenv LDAP_BASE = {_quote(settings.search_base)}")
+    if settings.user_filter_template:
+        lines.append(f"        setenv LDAP_FILTER = {_quote(settings.user_filter_template)}")
+    if settings.bind_dn:
+        lines.append(f"        setenv LDAP_USER = {_quote(settings.bind_dn)}")
+    if password:
+        lines.append(f"        setenv LDAP_PASSWD = {_quote(password)}")
+    if settings.group_prefix:
+        lines.append(f"        setenv AD_GROUP_PREFIX = {_quote(settings.group_prefix)}")
+    if settings.use_memberof:
+        lines.append("        setenv FLAG_USE_MEMBEROF = 1")
+    lines.append("        exec = /usr/local/lib/mavis/mavis_tacplus_ads.pl")
+    lines.append("    }")
+    lines.append("")
+    lines.append("    login backend = mavis")
+    lines.append("    user backend = mavis")
+    lines.append("")
+
+    return "\n".join(lines) + "\n"
+
+
 def _host_block(device: NetworkDevice) -> str:
     secret = security.decrypt_secret(device.shared_secret_encrypted)
     lines = [f"    host {device.name} {{"]
@@ -142,6 +202,41 @@ def _host_block(device: NetworkDevice) -> str:
         # the generated file, pending confirmation of real syntax.
         lines.append(f"        # ipv6_address on file (not yet emitted, syntax unconfirmed): {device.ipv6_address}")
     lines.append(f"        key = {_quote(secret)}")
+    lines.append("    }")
+    return "\n".join(lines) + "\n"
+
+
+_MONITORING_CATCHALL_NAME = "world"
+
+
+def _monitoring_host_block(placeholder_key: str) -> str:
+    """
+    "Monitoring mode" (see app.models.monitoring_settings for the full
+    design reasoning). `address = ::/0` as a catch-all is confirmed
+    real syntax -- seen in a real tac_plus-ng-specific working config
+    on the project's own mailing list (shebang literally
+    `#!/usr/local/sbin/tac_plus-ng`), and reused here with this
+    project's own already-proven `host NAME { }` block structure
+    (without `=` before the name -- this project's existing device
+    host blocks confirmed that convention independently; some legacy
+    tac_plus examples found elsewhere use `host = world { }`, but this
+    project trusts its own already-working syntax over a possibly
+    different generation's convention).
+
+    ALWAYS emitted LAST relative to every specific device host block
+    (see compile_candidate's call site) -- see the model docstring for
+    why this makes the feature safe regardless of which host-matching
+    precedence tac_plus-ng actually uses, which was not independently
+    confirmed either way.
+
+    `placeholder_key` is never a real device's actual secret -- a real
+    device connecting through this catch-all will fail decryption
+    against it, which is expected and is exactly what makes the
+    attempt detectable (see app.services.monitoring).
+    """
+    lines = [f"    host {_MONITORING_CATCHALL_NAME} {{"]
+    lines.append("        address = ::/0")
+    lines.append(f"        key = {_quote(placeholder_key)}")
     lines.append("    }")
     return "\n".join(lines) + "\n"
 
@@ -683,6 +778,7 @@ def compile_candidate(db: Session) -> str:
     users = (
         db.query(TacacsUser)
         .filter(TacacsUser.enabled.is_(True))
+        .filter(TacacsUser.auth_source == "local")  # AD-linked users have no local password to emit -- see _mavis_block
         .order_by(TacacsUser.username.asc())
         .all()
     )
@@ -736,6 +832,13 @@ def compile_candidate(db: Session) -> str:
             override_rule_texts.append(rendered)
 
     host_blocks = "".join(_host_block(d) for d in devices)
+    monitoring_settings = db.query(MonitoringSettings).first()
+    if monitoring_settings and monitoring_settings.enabled:
+        # Always LAST, after every specific device host block -- see
+        # _monitoring_host_block's docstring for why this is what
+        # makes the feature safe regardless of tac_plus-ng's actual
+        # host-matching precedence.
+        host_blocks += _monitoring_host_block(monitoring_settings.placeholder_key)
     group_blocks = "".join(_group_block(g) for g in groups)
     user_blocks = "".join(_user_block(u, group_names_by_id.get(u.group_id)) for u in users)
     device_override_profile = _device_override_profile_block() if override_rule_texts else ""
@@ -744,6 +847,7 @@ def compile_candidate(db: Session) -> str:
     )
     acl_blocks = "".join(acl_blocks_out)
     ruleset_block = _ruleset_block(compilable_policies, override_rule_texts=override_rule_texts)
+    mavis_block = _mavis_block(db.query(AdSettings).first())
 
     from ..platform_settings import load_settings
     tacacs_port = load_settings()["tacacs_port"]
@@ -752,6 +856,7 @@ def compile_candidate(db: Session) -> str:
         log_dir=LOG_DIR,
         fs=ACCOUNTING_FIELD_SEPARATOR,
         tacacs_port=tacacs_port,
+        mavis_block=mavis_block,
         host_blocks=host_blocks,
         group_blocks=group_blocks,
         user_blocks=user_blocks,

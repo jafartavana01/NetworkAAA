@@ -30,7 +30,7 @@
 </main>
 
 <div class="modal-backdrop" id="policy-modal-backdrop" hidden>
-  <div class="modal" style="max-width: 640px; max-height: 88vh; overflow-y: auto;">
+  <div class="modal" style="max-width: min(95vw, 820px); max-height: 90vh; overflow-y: auto;">
     <h2 id="policy-modal-title">Add policy</h2>
     <form id="policy-form">
       <input type="hidden" id="policy-id">
@@ -41,10 +41,10 @@
         </label>
         <label class="field">
           <span class="field-label">Priority</span>
-          <input type="number" id="policy-priority" min="0" max="100000" value="100" required>
+          <input type="number" id="policy-priority" min="0" max="100000" value="0" required>
         </label>
       </div>
-      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Lower numbers are evaluated first. Must be unique — two policies can't share the same priority. Letters/digits/hyphens/underscores only in the name — used directly as the tac_plus-ng profile identifier.</div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Lower numbers are evaluated first, starting at 0. Entering an already-used priority inserts this policy there and shifts that policy (and everything after it) down by one — nothing is rejected or overwritten. Letters/digits/hyphens/underscores only in the name — used directly as the tac_plus-ng profile identifier.</div>
 
       <label class="field">
         <span class="field-label">Description</span>
@@ -56,31 +56,39 @@
         <span>Enabled</span>
       </label>
 
-      <div class="field-label" style="margin-bottom:8px;">Conditions</div>
-      <div class="field-row">
-        <label class="field">
-          <span class="field-label">Group</span>
-          <select id="policy-condition-group"><option value="">— Any —</option></select>
-        </label>
-        <label class="field">
-          <span class="field-label">Device</span>
-          <select id="policy-condition-device"><option value="">— Any —</option></select>
-        </label>
+      <div class="field-label" style="margin-bottom:6px;">Conditions</div>
+      <p class="field-hint" style="margin-top:0;margin-bottom:14px;">This policy applies when the connecting user (or their group) is one of the entries on the left, AND the target device (or its device group) is one of the entries on the right. Leave a list empty to match any.</p>
+
+      <div class="field-row" style="align-items:flex-start;">
+        <div class="field" style="flex:1;">
+          <span class="field-label">Users &amp; Groups</span>
+          <div id="ms-users-list" style="border:1px solid var(--line);border-radius:var(--radius);padding:8px;min-height:50px;margin-bottom:8px;"></div>
+          <div class="field-row" style="align-items:flex-end;margin-bottom:0;">
+            <select id="ms-users-add-select" style="flex:1;"></select>
+            <button type="button" class="btn-secondary btn-small" id="ms-users-add-btn" style="width:auto;">Add</button>
+          </div>
+        </div>
+        <div class="field" style="flex:1;">
+          <span class="field-label">Devices &amp; Device Groups</span>
+          <div id="ms-devices-list" style="border:1px solid var(--line);border-radius:var(--radius);padding:8px;min-height:50px;margin-bottom:8px;"></div>
+          <div class="field-row" style="align-items:flex-end;margin-bottom:0;">
+            <select id="ms-devices-add-select" style="flex:1;"></select>
+            <button type="button" class="btn-secondary btn-small" id="ms-devices-add-btn" style="width:auto;">Add</button>
+          </div>
+        </div>
       </div>
-      <label class="field">
-        <span class="field-label">Device group</span>
-        <select id="policy-condition-device-group"><option value="">— Any —</option></select>
-      </label>
-      <div class="field-hint" style="margin-top:-10px;margin-bottom:10px;">Multiple conditions combine with AND — e.g. Group + Device Group together means "this group, only on these devices."</div>
-      <button type="button" class="btn-secondary btn-small" id="toggle-advanced-conditions-btn" style="width:auto;margin-bottom:18px;">Switch to advanced condition builder →</button>
+
+      <div class="field-row" style="margin:16px 0 18px 0;">
+        <button type="button" class="btn-primary btn-small" id="simple-tab-btn" style="width:auto;">Simple</button>
+        <button type="button" class="btn-secondary btn-small" id="advanced-tab-btn" style="width:auto;">Advanced</button>
+      </div>
 
       <div id="advanced-conditions-section" hidden style="margin-bottom:18px;">
         <div class="panel panel-wide" style="margin-bottom:14px;">
           <div class="panel-body" style="font-size:12px;color:var(--text-dim);">
-            Replaces the simple fields above entirely — saving with conditions here ignores Group/Device/Device group. Supports up to one level of nested groups (e.g. "this user group AND (this device group OR that device group)"), matching every example in the spec. Source IP is checked exactly or as a CIDR range.
+            Replaces the Users/Groups and Devices lists above entirely — saving from here uses only what's built below. Source IP and NOT conditions are only available here; NOT conditions evaluate correctly in the Simulator but can't compile into the real configuration yet.
           </div>
         </div>
-        <button type="button" class="btn-ghost btn-small" id="revert-to-simple-btn" style="width:auto;margin-bottom:14px;">← Back to simple fields</button>
 
         <label class="field" style="flex:0 0 220px;margin-bottom:10px;">
           <span class="field-label">Match</span>
@@ -151,8 +159,10 @@
   let allDeviceGroups = [];
   let allCommandSets = [];
   let allUsers = [];
-  let currentConditionTree = null; // null = using the simple legacy fields; an object = using the advanced builder
+  let currentConditionTree = null; // used by BOTH the multi-select lists and the advanced tree builder -- see msEntriesToConditionTree/conditionTreeToMsEntries
   let currentCommandSetIds = [];
+  let msUserEntries = [];   // [{object_type: 'user'|'user_group', id, name}]
+  let msDeviceEntries = []; // [{object_type: 'device'|'device_group', id, name}]
 
   function escapeHtml(s) {
     const div = document.createElement('div');
@@ -173,13 +183,6 @@
     allDeviceGroups = deviceGroupsRes.ok ? await deviceGroupsRes.json() : [];
     allCommandSets = setsRes.ok ? await setsRes.json() : [];
     allUsers = usersRes.ok ? await usersRes.json() : [];
-
-    document.getElementById('policy-condition-group').innerHTML =
-      '<option value="">— Any —</option>' + allGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
-    document.getElementById('policy-condition-device').innerHTML =
-      '<option value="">— Any —</option>' + allDevices.map(d => `<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
-    document.getElementById('policy-condition-device-group').innerHTML =
-      '<option value="">— Any —</option>' + allDeviceGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
   }
 
   function renderCommandSetsChecklist() {
@@ -301,12 +304,17 @@
       </label>
       <button type="button" class="btn-danger btn-small" data-role="remove" data-index="${index}" style="margin-bottom:2px;">×</button>
     `;
+    let conditionRowHint = null;
     if (cond.object_type === 'user') {
       const hint = document.createElement('div');
       hint.className = 'content-sub';
       hint.style.cssText = 'margin:-4px 0 8px 0;';
       hint.textContent = 'Evaluates correctly in the Simulator, but has no confirmed tac_plus-ng syntax — a policy using this condition is excluded from the generated config, not faked.';
-      row.appendChild(hint);
+      // A separate, stacked block-level wrapper -- NOT row.appendChild(hint),
+      // which would add the hint as ANOTHER flex child of `row` itself
+      // (row is `.field-row`, display:flex), rendering it as a column
+      // to the right instead of a line below.
+      conditionRowHint = hint;
     }
 
     row.querySelector('[data-role="object_type"]').addEventListener('change', (e) => {
@@ -334,6 +342,13 @@
       list.splice(index, 1);
       rerender();
     });
+
+    if (conditionRowHint) {
+      const wrapper = document.createElement('div');
+      wrapper.appendChild(row);
+      wrapper.appendChild(conditionRowHint);
+      return wrapper;
+    }
     return row;
   }
 
@@ -460,30 +475,177 @@
     };
   }
 
+  // ---------- Multi-select conditions (the default view) ----------
+  // Internally still builds the SAME condition tree the advanced
+  // builder uses -- "Users & Groups" becomes an OR-group of
+  // user/user_group conditions, "Devices" becomes an OR-group of
+  // device/device_group conditions, combined with AND at the root.
+  // Saving from here always goes through the tree-based save path
+  // (never the legacy 3 fields), since representing more than one
+  // entry per list needs the OR-group shape the legacy flat fields
+  // can't express.
+
+  function msEntriesToConditionTree(userEntries, deviceEntries) {
+    const childGroups = [];
+    if (userEntries.length > 0) {
+      childGroups.push({
+        logical_operator: 'OR',
+        conditions: userEntries.map(e => ({ object_type: e.object_type, operator: 'equal', value: '', referenced_object_id: e.id })),
+        child_groups: [],
+      });
+    }
+    if (deviceEntries.length > 0) {
+      childGroups.push({
+        logical_operator: 'OR',
+        conditions: deviceEntries.map(e => ({ object_type: e.object_type, operator: 'equal', value: '', referenced_object_id: e.id })),
+        child_groups: [],
+      });
+    }
+    return { logical_operator: 'AND', conditions: [], child_groups: childGroups };
+  }
+
+  // Reverse conversion, for editing an existing policy. Only certain
+  // shapes are representable in the simple two-list view -- a root
+  // AND with no direct conditions, at most one OR-group of pure
+  // user/user_group conditions and at most one OR-group of pure
+  // device/device_group conditions, neither group nested further.
+  // Anything else (custom nesting, NOT, mixed groups, source_ip)
+  // opens in Advanced instead, with a note explaining why.
+  function conditionTreeToMsEntries(tree) {
+    const nameFor = (objectType, id) => {
+      if (objectType === 'user') return (allUsers.find(u => u.id === id) || {}).username;
+      if (objectType === 'user_group') return (allGroups.find(g => g.id === id) || {}).name;
+      if (objectType === 'device') return (allDevices.find(d => d.id === id) || {}).name;
+      if (objectType === 'device_group') return (allDeviceGroups.find(g => g.id === id) || {}).name;
+      return undefined;
+    };
+
+    if (tree.logical_operator !== 'AND' || tree.conditions.length > 0 || tree.child_groups.length > 2) {
+      return { representable: false };
+    }
+    let userEntries = [];
+    let deviceEntries = [];
+    for (const group of tree.child_groups) {
+      if (group.logical_operator !== 'OR' || group.child_groups.length > 0 || group.conditions.length === 0) {
+        return { representable: false };
+      }
+      const types = new Set(group.conditions.map(c => c.object_type));
+      const isUserGroup = [...types].every(t => t === 'user' || t === 'user_group');
+      const isDeviceGroup = [...types].every(t => t === 'device' || t === 'device_group');
+      if (isUserGroup && userEntries.length === 0) {
+        userEntries = group.conditions.map(c => ({ object_type: c.object_type, id: c.referenced_object_id, name: nameFor(c.object_type, c.referenced_object_id) }));
+      } else if (isDeviceGroup && deviceEntries.length === 0) {
+        deviceEntries = group.conditions.map(c => ({ object_type: c.object_type, id: c.referenced_object_id, name: nameFor(c.object_type, c.referenced_object_id) }));
+      } else {
+        return { representable: false };
+      }
+      if (group.conditions.some(c => c.operator !== 'equal')) return { representable: false };
+    }
+    return { representable: true, userEntries, deviceEntries };
+  }
+
+  function msEntryLabel(entry) {
+    const typeLabel = { user: 'User', user_group: 'Group', device: 'Device', device_group: 'Device Group' }[entry.object_type] || entry.object_type;
+    return `${escapeHtml(entry.name || '(deleted)')} <span class="content-sub">— ${typeLabel}</span>`;
+  }
+
+  function renderMsList(listElId, entries, onRemove) {
+    const el = document.getElementById(listElId);
+    if (entries.length === 0) {
+      el.innerHTML = '<div class="content-sub">Any (no restriction)</div>';
+      return;
+    }
+    el.innerHTML = entries.map((e, i) => `
+      <div class="version-row" style="padding:4px 0;">
+        <span style="flex:1;">${msEntryLabel(e)}</span>
+        <button type="button" class="btn-danger btn-small" data-ms-remove="${i}">×</button>
+      </div>
+    `).join('');
+    el.querySelectorAll('[data-ms-remove]').forEach(btn => {
+      btn.addEventListener('click', () => { onRemove(parseInt(btn.dataset.msRemove, 10)); });
+    });
+  }
+
+  function renderMsUserAddSelect() {
+    const chosenIds = new Set(msUserEntries.map(e => e.id));
+    const userOpts = allUsers.filter(u => !chosenIds.has(u.id)).map(u => `<option value="user:${u.id}">${escapeHtml(u.username)}</option>`).join('');
+    const groupOpts = allGroups.filter(g => !chosenIds.has(g.id)).map(g => `<option value="user_group:${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    const select = document.getElementById('ms-users-add-select');
+    select.innerHTML = `<optgroup label="Users">${userOpts}</optgroup><optgroup label="Groups">${groupOpts}</optgroup>`;
+  }
+
+  function renderMsDeviceAddSelect() {
+    const chosenIds = new Set(msDeviceEntries.map(e => e.id));
+    const deviceOpts = allDevices.filter(d => !chosenIds.has(d.id)).map(d => `<option value="device:${d.id}">${escapeHtml(d.name)}</option>`).join('');
+    const groupOpts = allDeviceGroups.filter(g => !chosenIds.has(g.id)).map(g => `<option value="device_group:${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    const select = document.getElementById('ms-devices-add-select');
+    select.innerHTML = `<optgroup label="Devices">${deviceOpts}</optgroup><optgroup label="Device Groups">${groupOpts}</optgroup>`;
+  }
+
+  function renderMultiSelect() {
+    renderMsList('ms-users-list', msUserEntries, (i) => { msUserEntries.splice(i, 1); renderMultiSelect(); });
+    renderMsList('ms-devices-list', msDeviceEntries, (i) => { msDeviceEntries.splice(i, 1); renderMultiSelect(); });
+    renderMsUserAddSelect();
+    renderMsDeviceAddSelect();
+  }
+
+  document.getElementById('ms-users-add-btn').addEventListener('click', () => {
+    const [objectType, id] = document.getElementById('ms-users-add-select').value.split(':');
+    if (!id) return;
+    const name = objectType === 'user' ? (allUsers.find(u => u.id === id) || {}).username : (allGroups.find(g => g.id === id) || {}).name;
+    msUserEntries.push({ object_type: objectType, id, name });
+    renderMultiSelect();
+  });
+  document.getElementById('ms-devices-add-btn').addEventListener('click', () => {
+    const [objectType, id] = document.getElementById('ms-devices-add-select').value.split(':');
+    if (!id) return;
+    const name = objectType === 'device' ? (allDevices.find(d => d.id === id) || {}).name : (allDeviceGroups.find(g => g.id === id) || {}).name;
+    msDeviceEntries.push({ object_type: objectType, id, name });
+    renderMultiSelect();
+  });
+
+  function setTabButtonState(activeId, inactiveId) {
+    document.getElementById(activeId).className = 'btn-primary btn-small';
+    document.getElementById(inactiveId).className = 'btn-secondary btn-small';
+  }
+
+  function showMultiSelectConditions() {
+    document.getElementById('advanced-conditions-section').hidden = true;
+    document.getElementById('ms-users-list').closest('.field-row').style.display = '';
+    setTabButtonState('simple-tab-btn', 'advanced-tab-btn');
+    renderMultiSelect();
+  }
+
   function showAdvancedConditions() {
     document.getElementById('advanced-conditions-section').hidden = false;
-    document.getElementById('toggle-advanced-conditions-btn').hidden = true;
-    document.getElementById('policy-condition-group').closest('.field-row').style.display = 'none';
-    document.getElementById('policy-condition-device-group').style.display = 'none';
+    document.getElementById('ms-users-list').closest('.field-row').style.display = 'none';
+    setTabButtonState('advanced-tab-btn', 'simple-tab-btn');
     if (!currentConditionTree) {
-      currentConditionTree = { logical_operator: 'AND', conditions: [newCondition()], child_groups: [] };
+      // Carry over whatever was already built in the simple lists,
+      // so switching to Advanced never silently discards it.
+      currentConditionTree = msEntriesToConditionTree(msUserEntries, msDeviceEntries);
+      if (currentConditionTree.child_groups.length === 0) {
+        currentConditionTree.conditions.push(newCondition());
+      }
     }
     renderConditionTree();
   }
 
-  function showSimpleConditions() {
-    document.getElementById('advanced-conditions-section').hidden = true;
-    document.getElementById('toggle-advanced-conditions-btn').hidden = false;
-    document.getElementById('policy-condition-group').closest('.field-row').style.display = '';
-    document.getElementById('policy-condition-device-group').style.display = '';
-    currentConditionTree = null;
-  }
-
-  document.getElementById('toggle-advanced-conditions-btn').addEventListener('click', showAdvancedConditions);
-  document.getElementById('revert-to-simple-btn').addEventListener('click', () => {
-    if (confirm('Switch back to simple fields? Any conditions built here will be discarded when you save.')) {
-      showSimpleConditions();
+  document.getElementById('advanced-tab-btn').addEventListener('click', showAdvancedConditions);
+  document.getElementById('simple-tab-btn').addEventListener('click', () => {
+    // A straight tab switch, not a destructive action -- carries
+    // whatever's representable back into the simple lists rather than
+    // asking for confirmation first. Anything that doesn't fit two
+    // flat lists (custom nesting, NOT, source_ip) is dropped from the
+    // simple view, but only takes effect if the admin then saves from
+    // here -- switching tabs alone changes nothing on the server.
+    if (currentConditionTree) {
+      const converted = conditionTreeToMsEntries(currentConditionTree);
+      msUserEntries = converted.representable ? converted.userEntries : [];
+      msDeviceEntries = converted.representable ? converted.deviceEntries : [];
+      currentConditionTree = null;
     }
+    showMultiSelectConditions();
   });
   document.getElementById('root-logical-operator').addEventListener('change', (e) => {
     currentConditionTree.logical_operator = e.target.value;
@@ -623,7 +785,9 @@
     document.getElementById('policy-form-error').hidden = true;
     document.getElementById('policy-form').reset();
     document.getElementById('policy-change-description').value = '';
-    showSimpleConditions(); // reset to a known state before populating
+    msUserEntries = [];
+    msDeviceEntries = [];
+    currentConditionTree = null;
 
     if (policy) {
       document.getElementById('policy-modal-title').textContent = 'Edit policy';
@@ -632,28 +796,62 @@
       document.getElementById('policy-priority').value = policy.priority;
       document.getElementById('policy-description').value = policy.description || '';
       document.getElementById('policy-enabled').checked = policy.enabled;
-      document.getElementById('policy-condition-group').value = policy.condition_group_id || '';
-      document.getElementById('policy-condition-device').value = policy.condition_device_id || '';
-      document.getElementById('policy-condition-device-group').value = policy.condition_device_group_id || '';
       document.getElementById('policy-priv-lvl').value = policy.default_priv_lvl;
       document.getElementById('policy-default-action').value = policy.default_action;
       currentCommandSetIds = policy.command_sets.map(cs => cs.id);
 
       const treeRes = await AAAPlatform.authedFetch(`/api/policies/${policy.id}/condition-tree`);
+      let opensInAdvanced = false;
       if (treeRes.ok) {
         const treeData = await treeRes.json();
         if (treeData.has_migrated) {
-          currentConditionTree = apiTreeToBuilderTree(treeData.tree);
-          showAdvancedConditions();
+          const builderTree = apiTreeToBuilderTree(treeData.tree);
+          const converted = conditionTreeToMsEntries(builderTree);
+          if (converted.representable) {
+            msUserEntries = converted.userEntries;
+            msDeviceEntries = converted.deviceEntries;
+          } else {
+            currentConditionTree = builderTree;
+            opensInAdvanced = true;
+          }
+        } else {
+          // Not yet migrated -- legacy flat fields. Each becomes at
+          // most one entry in the matching list; saving from the
+          // multi-select view migrates the policy to the tree model,
+          // same as saving from Advanced already did.
+          if (policy.condition_group_id) {
+            const foundGroup = allGroups.find(x => x.id === policy.condition_group_id);
+            if (foundGroup) msUserEntries.push({ object_type: 'user_group', id: foundGroup.id, name: foundGroup.name });
+          }
+          if (policy.condition_device_id) {
+            const foundDevice = allDevices.find(x => x.id === policy.condition_device_id);
+            if (foundDevice) msDeviceEntries.push({ object_type: 'device', id: foundDevice.id, name: foundDevice.name });
+          }
+          if (policy.condition_device_group_id) {
+            const foundDeviceGroup = allDeviceGroups.find(x => x.id === policy.condition_device_group_id);
+            if (foundDeviceGroup) msDeviceEntries.push({ object_type: 'device_group', id: foundDeviceGroup.id, name: foundDeviceGroup.name });
+          }
         }
+      }
+      if (opensInAdvanced) {
+        showAdvancedConditions();
+      } else {
+        showMultiSelectConditions();
       }
     } else {
       document.getElementById('policy-modal-title').textContent = 'Add policy';
       document.getElementById('policy-id').value = '';
-      document.getElementById('policy-priority').value = 100;
+      // Appends after the current highest priority, not 0 -- a brand
+      // new policy defaulting to the TOP of evaluation order (priority
+      // 0, pushing every existing policy down) would be a surprising
+      // default; most new policies are meant to be evaluated after
+      // the ones already there, not before them.
+      const maxPriority = policies.reduce((max, p) => Math.max(max, p.priority), -1);
+      document.getElementById('policy-priority').value = maxPriority + 1;
       document.getElementById('policy-priv-lvl').value = 1;
       document.getElementById('policy-default-action').value = 'deny';
       currentCommandSetIds = [];
+      showMultiSelectConditions();
     }
     renderCommandSetsChecklist();
     document.getElementById('policy-modal-backdrop').hidden = false;
@@ -680,9 +878,6 @@
       description: document.getElementById('policy-description').value || null,
       enabled: document.getElementById('policy-enabled').checked,
       priority: parseInt(document.getElementById('policy-priority').value, 10),
-      condition_group_id: document.getElementById('policy-condition-group').value || null,
-      condition_device_id: document.getElementById('policy-condition-device').value || null,
-      condition_device_group_id: document.getElementById('policy-condition-device-group').value || null,
       default_priv_lvl: parseInt(document.getElementById('policy-priv-lvl').value, 10),
       default_action: document.getElementById('policy-default-action').value,
       command_set_ids: currentCommandSetIds,
@@ -725,7 +920,24 @@
       });
       if (!treeRes.ok) {
         const body = await treeRes.json().catch(() => ({}));
-        const msg = (body.detail && typeof body.detail === 'string') ? body.detail : 'Policy saved, but its conditions could not be saved.';
+        let msg = 'Policy saved, but its conditions could not be saved.';
+        if (body.detail && typeof body.detail === 'string') msg = body.detail;
+        else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+        AAAPlatform.toast(msg, 'error');
+        loadPolicies();
+        return;
+      }
+    } else if (msUserEntries.length > 0 || msDeviceEntries.length > 0) {
+      const treeRes = await AAAPlatform.authedFetch(`/api/policies/${savedPolicy.id}/condition-tree`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(builderTreeToApiPayload(msEntriesToConditionTree(msUserEntries, msDeviceEntries))),
+      });
+      if (!treeRes.ok) {
+        const body = await treeRes.json().catch(() => ({}));
+        let msg = 'Policy saved, but its conditions could not be saved.';
+        if (body.detail && typeof body.detail === 'string') msg = body.detail;
+        else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
         AAAPlatform.toast(msg, 'error');
         loadPolicies();
         return;

@@ -78,12 +78,10 @@ def phase_system_detection() -> system_checks.SystemReport:
 
 def phase_dependencies() -> None:
     utils.header("Installing System Dependencies")
-    utils.info(
-        "Not running 'apt-get update' -- installing from whatever package "
-        "index already exists on this machine. If a package fails to be "
-        "located below, run 'sudo apt update' once yourself and re-run "
-        "this installer."
-    )
+    if utils.confirm("Run 'apt-get update' to refresh the package index first?", default_yes=True):
+        apt_deps.update_package_index()
+    else:
+        utils.info("Skipping 'apt-get update' -- installing from whatever package index already exists.")
     apt_deps.ensure_packages(apt_deps.ALL_PACKAGES)
 
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
@@ -192,6 +192,54 @@ def list_sessions(
         "active_count": sum(1 for s in sessions if s.is_active),
         "sessions": [s.to_dict() for s in sessions],
     }
+
+
+@router.get("/recent-activity")
+def recent_activity(
+    minutes: int = Query(default=5, ge=1, le=1440),
+    limit: int = Query(default=2000, ge=1, le=10000),
+    _admin: AdminUser = Depends(get_current_admin),
+):
+    """Dashboard's "who accessed what, just now" table -- every
+    (device, user) pair with at least one accounting event in the
+    last `minutes` minutes, most-recently-active pair first. Reads
+    the same parsed accounting log every other view here reads;
+    "activated" is any accounting event (start, command, or stop) --
+    not just a session start, since a device with only mid-session
+    command records but no start in the tail (a start that scrolled
+    out of the read window) is still real, current activity worth
+    surfacing, not something to hide for lack of a start record."""
+    records = accounting_log.read_records(limit=limit)
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=minutes)
+
+    latest_by_pair: dict[tuple[str, str], accounting_log.AccountingRecord] = {}
+    counts_by_pair: dict[tuple[str, str], int] = {}
+    for r in records:
+        if not r.parsed or not r.nas or not r.user or not r.parsed_at:
+            continue
+        if r.parsed_at < cutoff:
+            continue
+        key = (r.nas, r.user)
+        counts_by_pair[key] = counts_by_pair.get(key, 0) + 1
+        # records are newest-first, so the FIRST one seen per key is
+        # already the most recent -- no comparison needed.
+        if key not in latest_by_pair:
+            latest_by_pair[key] = r
+
+    rows = [
+        {
+            "device": device,
+            "user": user,
+            "last_seen": r.parsed_at.isoformat(),
+            "last_service": r.service,
+            "last_cmd": r.cmd,
+            "last_result": r.result,
+            "event_count": counts_by_pair[(device, user)],
+        }
+        for (device, user), r in latest_by_pair.items()
+    ]
+    rows.sort(key=lambda row: row["last_seen"], reverse=True)
+    return {"minutes": minutes, "rows": rows}
 
 
 @router.get("/health")

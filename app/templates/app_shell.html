@@ -36,6 +36,7 @@
         <span id="breadcrumb-text">{{ breadcrumb_text }}</span>
       </div>
       <div class="topbar-right">
+        <button id="global-apply-config-btn" class="btn-primary btn-small" style="width:auto;" hidden>Apply Configuration</button>
         <span class="admin-name">{{ admin_username }}</span>
         <button id="logout-btn" class="btn-ghost">Sign out</button>
       </div>
@@ -43,6 +44,19 @@
 
     <div id="view-root" data-breadcrumb="{{ breadcrumb_text }}">
       {% block view_content %}{% endblock %}
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="global-apply-modal-backdrop" hidden>
+  <div class="modal" style="max-width: min(90vw, 900px); width: 90vw; max-height: 85vh; overflow-y: auto;">
+    <h2>Apply Configuration</h2>
+    <p class="content-sub" style="margin-top:-8px;">The changes below will be written to <span class="cell-mono">tac_plus-ng</span> and the daemon reloaded.</p>
+    <div id="global-apply-diff" class="cell-mono content-sub" style="white-space:pre-wrap;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:12px;max-height:55vh;overflow-y:auto;margin-bottom:16px;"></div>
+    <div id="global-apply-error" class="form-error" role="alert" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="global-apply-cancel-btn">Cancel</button>
+      <button type="button" class="btn-primary" style="width:auto;" id="global-apply-confirm-btn">Apply</button>
     </div>
   </div>
 </div>
@@ -85,6 +99,118 @@
     poll();
     setInterval(poll, 20000);
   })();
+
+  // Global "Apply Configuration" affordance -- persistent shell chrome,
+  // independent of whichever view is loaded, same reasoning as the
+  // daemon-status poll above. Reuses the exact same
+  // GET /api/config/candidate (has_changes + diff) and
+  // POST /api/config/apply the Config page's own Apply button already
+  // uses -- this is a second entry point to the identical flow, not a
+  // separate one.
+  (function () {
+    const applyBtn = document.getElementById('global-apply-config-btn');
+    const modalBackdrop = document.getElementById('global-apply-modal-backdrop');
+    if (!applyBtn || !modalBackdrop) return;
+
+    const diffBox = document.getElementById('global-apply-diff');
+    const errorBox = document.getElementById('global-apply-error');
+    const confirmBtn = document.getElementById('global-apply-confirm-btn');
+    const cancelBtn = document.getElementById('global-apply-cancel-btn');
+
+    async function checkPending() {
+      try {
+        const res = await AAAPlatform.authedFetch('/api/config/candidate');
+        if (!res.ok) return;
+        const data = await res.json();
+        const hasUncompilable = data.uncompilable_policies && data.uncompilable_policies.length > 0;
+        if (data.has_changes) {
+          applyBtn.hidden = false;
+          applyBtn.textContent = 'Apply Configuration';
+          applyBtn.className = 'btn-primary btn-small';
+        } else if (hasUncompilable) {
+          // Nothing to apply (the excluded policy contributes zero
+          // bytes to the candidate), but something still needs the
+          // admin's attention -- a visible signal from ANY page,
+          // not only if they happen to navigate to Config, which is
+          // exactly the gap that made this kind of exclusion silent
+          // and confusing before.
+          applyBtn.hidden = false;
+          applyBtn.textContent = '⚠ Policy Excluded';
+          applyBtn.className = 'btn-secondary btn-small';
+        } else {
+          applyBtn.hidden = true;
+        }
+      } catch (err) {
+        // A transient failure here just leaves the button in its last
+        // known state -- the Config page itself is the authoritative
+        // place to see a real error.
+      }
+    }
+
+    async function openModal() {
+      errorBox.hidden = true;
+      diffBox.textContent = 'Loading…';
+      confirmBtn.disabled = false;
+      confirmBtn.hidden = false;
+      confirmBtn.textContent = 'Apply';
+      modalBackdrop.hidden = false;
+
+      const res = await AAAPlatform.authedFetch('/api/config/candidate');
+      if (!res.ok) {
+        diffBox.textContent = '';
+        errorBox.textContent = 'Could not load the pending changes.';
+        errorBox.hidden = false;
+        return;
+      }
+      const data = await res.json();
+      const hasUncompilable = data.uncompilable_policies && data.uncompilable_policies.length > 0;
+      if (!data.has_changes) {
+        if (hasUncompilable) {
+          const rows = data.uncompilable_policies.map(p => `${p.name}: ${p.reason}`).join('\n\n');
+          diffBox.textContent = `No pending changes to apply — but the following ${data.uncompilable_policies.length === 1 ? 'policy is' : 'policies are'} enabled and can't be compiled into the real configuration, so ${data.uncompilable_policies.length === 1 ? 'it contributes' : 'they contribute'} nothing to what's applied:\n\n${rows}`;
+        } else {
+          diffBox.textContent = 'No pending changes.';
+        }
+        confirmBtn.hidden = true;
+        applyBtn.hidden = !hasUncompilable;
+        return;
+      }
+      diffBox.textContent = data.diff;
+    }
+
+    applyBtn.addEventListener('click', openModal);
+    cancelBtn.addEventListener('click', () => { modalBackdrop.hidden = true; });
+    modalBackdrop.addEventListener('click', (e) => {
+      if (e.target.id === 'global-apply-modal-backdrop') modalBackdrop.hidden = true;
+    });
+
+    confirmBtn.addEventListener('click', async () => {
+      errorBox.hidden = true;
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Applying…';
+      const res = await AAAPlatform.authedFetch('/api/config/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const detail = body.detail;
+        const msg = (detail && typeof detail === 'object' && detail.message) ? detail.message
+          : (typeof detail === 'string') ? detail
+          : 'Apply failed.';
+        errorBox.textContent = msg;
+        errorBox.hidden = false;
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Apply';
+        return;
+      }
+      modalBackdrop.hidden = true;
+      applyBtn.hidden = true;
+      AAAPlatform.toast('Configuration applied.');
+    });
+
+    checkPending();
+    setInterval(checkPending, 20000);
+  })();
 </script>
 <!--
   view-scripts-container exists purely as a precise query target for
@@ -100,5 +226,16 @@
 -->
 <div id="view-scripts-container">
 {% block view_scripts %}{% endblock %}
+</div>
+
+<div class="modal-backdrop" id="unsaved-changes-modal-backdrop" hidden style="z-index: 10001;">
+  <div class="modal" style="min-width: 340px;">
+    <h2>Unsaved changes</h2>
+    <p class="content-sub" style="margin-top:-8px;">This form has changes that haven't been saved. Discard them and close?</p>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="unsaved-changes-keep-editing-btn">Keep editing</button>
+      <button type="button" class="btn-danger" id="unsaved-changes-discard-btn">Discard and close</button>
+    </div>
+  </div>
 </div>
 {% endblock %}

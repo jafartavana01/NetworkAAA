@@ -32,7 +32,7 @@ class PolicyBase(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     description: str | None = Field(default=None, max_length=2000)
     enabled: bool = True
-    priority: int = Field(default=100, ge=0, le=100000)
+    priority: int = Field(default=0, ge=0, le=100000)
 
     # Conditions -- None means "matches anything" for that dimension.
     # See app/models/policy.py's docstring for which are implemented

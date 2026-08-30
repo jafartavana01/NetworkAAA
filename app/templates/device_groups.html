@@ -44,6 +44,27 @@
     </form>
   </div>
 </div>
+
+<div class="modal-backdrop" id="device-members-modal-backdrop" hidden>
+  <div class="modal" style="max-width: 560px;">
+    <h2 id="device-members-modal-title">Members</h2>
+
+    <div class="field-row" style="align-items:flex-end;margin-bottom:16px;">
+      <label class="field">
+        <span class="field-label">Add a device</span>
+        <select id="device-members-add-select"></select>
+      </label>
+      <button type="button" class="btn-primary btn-small" id="device-members-add-btn" style="width:auto;margin-bottom:2px;">Add</button>
+    </div>
+    <div id="device-members-add-note" class="content-sub" style="margin:-10px 0 14px 0;" hidden></div>
+
+    <div id="device-members-list"></div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="device-members-close-btn">Close</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block view_scripts %}
@@ -71,6 +92,7 @@
         <td>${escapeHtml(g.description || '—')}</td>
         <td class="cell-mono">${g.member_count} ${g.member_count === 1 ? 'member' : 'members'}</td>
         <td class="cell-actions">
+          <button class="btn-secondary btn-small" data-members="${g.id}">Members</button>
           <button class="btn-secondary btn-small" data-edit="${g.id}">Edit</button>
           <button class="btn-danger btn-small" data-delete="${g.id}">Delete</button>
         </td>
@@ -91,6 +113,9 @@
     });
     wrap.querySelectorAll('[data-delete]').forEach(btn => {
       btn.addEventListener('click', () => deleteGroup(btn.dataset.delete));
+    });
+    wrap.querySelectorAll('[data-members]').forEach(btn => {
+      btn.addEventListener('click', () => openMembersModal(deviceGroups.find(g => g.id === btn.dataset.members)));
     });
   }
 
@@ -170,6 +195,99 @@
     AAAPlatform.toast('Group deleted.');
     loadGroups();
   }
+
+  // ---------- Members ----------
+  let currentMembersGroup = null;
+  let allDevicesForMembers = [];
+
+  async function openMembersModal(group) {
+    if (!group) return;
+    currentMembersGroup = group;
+    document.getElementById('device-members-modal-title').textContent = `Members — ${group.name}`;
+    document.getElementById('device-members-add-note').hidden = true;
+    await refreshDeviceMembers();
+    document.getElementById('device-members-modal-backdrop').hidden = false;
+  }
+
+  async function refreshDeviceMembers() {
+    const listEl = document.getElementById('device-members-list');
+    listEl.innerHTML = '<div class="content-sub">Loading…</div>';
+
+    const [membersRes, devicesRes] = await Promise.all([
+      AAAPlatform.authedFetch(`/api/device-groups/${currentMembersGroup.id}/members`),
+      AAAPlatform.authedFetch('/api/devices'),
+    ]);
+
+    const members = membersRes.ok ? await membersRes.json() : [];
+    allDevicesForMembers = devicesRes.ok ? await devicesRes.json() : [];
+
+    if (members.length === 0) {
+      listEl.innerHTML = '<div class="empty-state">No members yet.</div>';
+    } else {
+      listEl.innerHTML = members.map(m => `
+        <div class="version-row">
+          <span style="flex:1;">${escapeHtml(m.name)}${m.ip_address ? ' <span class="content-sub cell-mono">(' + escapeHtml(m.ip_address) + ')</span>' : ''}${!m.enabled ? ' <span class="badge badge-off">Disabled</span>' : ''}</span>
+          <button class="btn-danger btn-small" data-remove-device-member="${m.id}">Remove</button>
+        </div>
+      `).join('');
+      listEl.querySelectorAll('[data-remove-device-member]').forEach(btn => {
+        btn.addEventListener('click', () => removeDeviceMember(btn.dataset.removeDeviceMember));
+      });
+    }
+
+    const memberIds = new Set(members.map(m => m.id));
+    const candidates = allDevicesForMembers.filter(d => !memberIds.has(d.id));
+    const addSelect = document.getElementById('device-members-add-select');
+    addSelect.innerHTML = candidates.length
+      ? candidates.map(d => `<option value="${d.id}">${escapeHtml(d.name)}${d.device_group_name ? ' (currently: ' + escapeHtml(d.device_group_name) + ')' : ''}</option>`).join('')
+      : '<option value="">— No other devices —</option>';
+  }
+
+  async function addDeviceMember() {
+    const select = document.getElementById('device-members-add-select');
+    const deviceId = select.value;
+    if (!deviceId) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/device-groups/${currentMembersGroup.id}/members`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device_id: deviceId }),
+    });
+
+    if (!res.ok) {
+      AAAPlatform.toast('Could not add member.', 'error');
+      return;
+    }
+    const data = await res.json();
+    const note = document.getElementById('device-members-add-note');
+    if (data.reassigned_from) {
+      note.textContent = `Moved from "${data.reassigned_from}" — a device can only be in one group at a time.`;
+      note.hidden = false;
+    } else {
+      note.hidden = true;
+    }
+    AAAPlatform.toast('Member added.');
+    await refreshDeviceMembers();
+    loadGroups();
+  }
+
+  async function removeDeviceMember(deviceId) {
+    if (!confirm('Remove this device from the group? The device itself is not deleted, just ungrouped.')) return;
+    const res = await AAAPlatform.authedFetch(`/api/device-groups/${currentMembersGroup.id}/members/${deviceId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not remove member.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Member removed.');
+    await refreshDeviceMembers();
+    loadGroups();
+  }
+
+  document.getElementById('device-members-add-btn').addEventListener('click', addDeviceMember);
+  document.getElementById('device-members-close-btn').addEventListener('click', () => {
+    document.getElementById('device-members-modal-backdrop').hidden = true;
+  });
+  document.getElementById('device-members-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'device-members-modal-backdrop') document.getElementById('device-members-modal-backdrop').hidden = true;
+  });
 
   loadGroups();
 </script>

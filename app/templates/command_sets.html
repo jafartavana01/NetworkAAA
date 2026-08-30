@@ -28,7 +28,7 @@
 </main>
 
 <div class="modal-backdrop" id="set-modal-backdrop" hidden>
-  <div class="modal" style="max-width: 680px; max-height: 88vh; overflow-y: auto;">
+  <div class="modal" style="max-width: min(95vw, 900px); max-height: 90vh; overflow-y: auto;">
     <h2 id="set-modal-title">Add command set</h2>
 
     <div style="margin-bottom:18px;">
@@ -200,18 +200,40 @@
   // a safe, correct fallback: nothing about existing data is ever
   // lost or silently reinterpreted, it just doesn't get the friendly
   // editing view.
+  function unescapeRegexLiteral(escaped) {
+    return escaped.replace(/\\(.)/g, '$1');
+  }
   function patternToModeAndValue(pattern) {
-    const hasRegexMeta = (s) => /[.*+?()[\]{}|\\^$]/.test(s);
+    // A round-trip check, not a "does this contain a metacharacter"
+    // check: the old version tested the STILL-ESCAPED inner string
+    // for metacharacters, but the escaping backslash IS one -- so any
+    // command containing a literal "." (extremely common: IP
+    // addresses, "192.168.x.x", version numbers) always failed this
+    // check and was shown as "Custom regex" with the raw escaped
+    // pattern in the box, not the original plain text. Un-escaping
+    // first, then re-escaping, and comparing against the original
+    // correctly recognizes a pattern as a simple match whenever it's
+    // EXACTLY what this project's own escaping would produce --
+    // genuine hand-written regex (metacharacters used meaningfully,
+    // not as escaped literals) still correctly falls through to
+    // "custom".
+    function tryUnescape(inner) {
+      const unescaped = unescapeRegexLiteral(inner);
+      return escapeRegexLiteral(unescaped) === inner ? unescaped : null;
+    }
     if (pattern.startsWith('^') && pattern.endsWith('$') && pattern.length > 1) {
       const inner = pattern.slice(1, -1);
-      if (!hasRegexMeta(inner)) return { match_mode: 'exact', match_value: inner };
+      const unescaped = tryUnescape(inner);
+      if (unescaped !== null) return { match_mode: 'exact', match_value: unescaped };
     }
     if (pattern.startsWith('^') && !pattern.endsWith('$')) {
       const inner = pattern.slice(1);
-      if (!hasRegexMeta(inner)) return { match_mode: 'starts_with', match_value: inner };
+      const unescaped = tryUnescape(inner);
+      if (unescaped !== null) return { match_mode: 'starts_with', match_value: unescaped };
     }
-    if (!pattern.startsWith('^') && !pattern.endsWith('$') && !hasRegexMeta(pattern)) {
-      return { match_mode: 'contains', match_value: pattern };
+    if (!pattern.startsWith('^') && !pattern.endsWith('$')) {
+      const unescaped = tryUnescape(pattern);
+      if (unescaped !== null) return { match_mode: 'contains', match_value: unescaped };
     }
     return { match_mode: 'custom', match_value: pattern };
   }

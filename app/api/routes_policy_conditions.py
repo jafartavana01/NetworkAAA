@@ -26,7 +26,7 @@ import ipaddress
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -44,7 +44,7 @@ from ..models.policy_condition import (
 from ..models.policy_condition_group import VALID_LOGICAL_OPERATORS, PolicyConditionGroup
 from ..models.user import TacacsUser
 from ..services import condition_engine
-from .deps import get_current_admin, verify_csrf
+from .deps import require_permission, verify_csrf
 
 router = APIRouter(prefix="/api/policies", tags=["policy-conditions"])
 
@@ -59,7 +59,19 @@ _OBJECT_TYPE_TO_MODEL = {
 class ConditionInput(BaseModel):
     object_type: str
     operator: str
-    value: str = Field(min_length=1, max_length=500)
+    # NOT min_length=1 -- for a database-backed object_type (user,
+    # user_group, device, device_group), the backend never reads this
+    # field at all (see _validate_and_build_condition below: it
+    # resolves the real display name fresh from the referenced row),
+    # so the GUI legitimately sends an empty string for those --
+    # exactly what the Multi-select condition builder does for every
+    # entry. A min_length constraint here was rejecting that ordinary,
+    # correct payload with a raw Pydantic error ("String should have
+    # at least 1 character") instead of the backend's own clearer
+    # messages. Still validated as genuinely required, but only for
+    # the one object_type where it's actually used -- source_ip's
+    # manual value -- via the model_validator below.
+    value: str = Field(default="", max_length=500)
     referenced_object_id: str | None = None
 
     @field_validator("object_type")
@@ -68,6 +80,12 @@ class ConditionInput(BaseModel):
         if v not in VALID_OBJECT_TYPES:
             raise ValueError(f"'{v}' is not a supported condition object type.")
         return v
+
+    @model_validator(mode="after")
+    def validate_value_required_for_manual_types(self) -> "ConditionInput":
+        if self.object_type not in DATABASE_BACKED_OBJECT_TYPES and not self.value.strip():
+            raise ValueError(f"A {self.object_type} condition needs a value.")
+        return self
 
 
 class ConditionGroupInput(BaseModel):
@@ -191,7 +209,7 @@ def _build_tree(db: Session, policy_id: uuid.UUID, parent_group_id: uuid.UUID | 
 def get_condition_tree(
     policy_id: str,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:view")),
 ):
     """Returns the policy's condition tree if it has one (has_migrated
     = true), or its legacy flat-field summary otherwise -- so the
@@ -218,7 +236,7 @@ def replace_condition_tree(
     policy_id: str,
     payload: ConditionGroupInput,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:write")),
 ):
     """
     Atomically replaces this policy's entire condition tree with
@@ -250,7 +268,7 @@ def replace_condition_tree(
 def migrate_conditions(
     policy_id: str,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:write")),
 ):
     """Explicitly converts this policy's legacy conditions into an
     equivalent condition tree -- lossless, and refused with a clear

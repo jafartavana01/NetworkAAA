@@ -15,16 +15,23 @@ exactly why (per-user, not per-group, source-IP restriction has no
 directly confirmed tac_plus-ng syntax for this project's current
 one-group-per-user data model). Stored and validated now so the
 GUI/API/Simulator can exist ahead of that compiler work.
+
+`auth_source` ("local" | "ad") governs which other fields are
+required: a "local" user needs a password (on create); an "ad" user
+needs `ad_identity` instead and has no local password at all --
+tac_plus-ng's MAVIS backend authenticates them against Active
+Directory directly (see app.models.user's docstring).
 """
 from __future__ import annotations
 
 import re
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ..security import parse_allowed_source_ips
 
 _USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$")
+_VALID_AUTH_SOURCES = ("local", "ad")
 
 
 class TacacsUserBase(BaseModel):
@@ -34,6 +41,8 @@ class TacacsUserBase(BaseModel):
     group_id: str | None = None
     enabled: bool = True
     allowed_source_ips: str | None = Field(default=None, max_length=2000)
+    auth_source: str = Field(default="local")
+    ad_identity: str | None = Field(default=None, max_length=255)
 
     @field_validator("username")
     @classmethod
@@ -54,14 +63,37 @@ class TacacsUserBase(BaseModel):
         parse_allowed_source_ips(v)  # raises ValueError on the first bad entry
         return v
 
+    @field_validator("auth_source")
+    @classmethod
+    def validate_auth_source(cls, v: str) -> str:
+        if v not in _VALID_AUTH_SOURCES:
+            raise ValueError(f"auth_source must be one of {_VALID_AUTH_SOURCES}.")
+        return v
+
+    @model_validator(mode="after")
+    def validate_ad_identity_required(self) -> "TacacsUserBase":
+        if self.auth_source == "ad" and not (self.ad_identity or "").strip():
+            raise ValueError("An AD-linked user needs an AD identity (username or UPN).")
+        return self
+
 
 class TacacsUserCreate(TacacsUserBase):
-    password: str = Field(min_length=1, max_length=256)
+    # Required only for a "local" user -- validated below, not via
+    # Field(...), since whether it's required depends on auth_source.
+    password: str | None = Field(default=None, min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def validate_password_required_for_local(self) -> "TacacsUserCreate":
+        if self.auth_source == "local" and not self.password:
+            raise ValueError("A password is required for a local user.")
+        return self
 
 
 class TacacsUserUpdate(TacacsUserBase):
     # Leave password unset (None) to keep the existing password -- the
     # GUI never round-trips the hash or plaintext back to the client.
+    # Not required even for a "local" user here (unlike create) --
+    # omitting it just means "don't change the password."
     password: str | None = Field(default=None, min_length=1, max_length=256)
 
 
@@ -70,3 +102,4 @@ class TacacsUserOut(TacacsUserBase):
 
     id: str
     group_name: str | None = None
+

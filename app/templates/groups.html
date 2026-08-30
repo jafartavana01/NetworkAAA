@@ -41,6 +41,20 @@
         <input type="text" id="group-description">
       </label>
 
+      <label class="field">
+        <span class="field-label">Linked AD group (optional)</span>
+        <input type="text" id="group-ad-name" placeholder="e.g. tacacs_admins — the AD group's exact CN">
+      </label>
+      <div class="field-hint" style="margin-top:-10px;">Type a name directly, or search Active Directory below and select a match. This is a cross-reference for lookup — the Name field above is still what's actually used in the generated configuration.</div>
+      <div class="field-row" style="align-items:flex-end;margin-bottom:6px;">
+        <label class="field">
+          <span class="field-label">Search AD groups</span>
+          <input type="text" id="group-ad-search-input" placeholder="Type at least 2 characters…">
+        </label>
+        <button type="button" class="btn-secondary btn-small" id="group-ad-search-btn" style="width:auto;margin-bottom:2px;">Search</button>
+      </div>
+      <div id="group-ad-search-results" style="margin-bottom:16px;"></div>
+
       <div id="group-form-error" class="form-error" role="alert" hidden></div>
 
       <div class="modal-actions">
@@ -48,6 +62,27 @@
         <button type="submit" class="btn-primary" style="width:auto;">Save group</button>
       </div>
     </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="members-modal-backdrop" hidden>
+  <div class="modal" style="max-width: 560px;">
+    <h2 id="members-modal-title">Members</h2>
+
+    <div class="field-row" style="align-items:flex-end;margin-bottom:16px;">
+      <label class="field">
+        <span class="field-label">Add a user</span>
+        <select id="members-add-select"></select>
+      </label>
+      <button type="button" class="btn-primary btn-small" id="members-add-btn" style="width:auto;margin-bottom:2px;">Add</button>
+    </div>
+    <div id="members-add-note" class="content-sub" style="margin:-10px 0 14px 0;" hidden></div>
+
+    <div id="members-list"></div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="members-close-btn">Close</button>
+    </div>
   </div>
 </div>
 {% endblock %}
@@ -78,6 +113,7 @@
         <td>${g.referenced_by_policy_names.length ? g.referenced_by_policy_names.map(escapeHtml).join(', ') : '<span class="content-sub">none</span>'}</td>
         <td class="cell-mono">${g.member_count} ${g.member_count === 1 ? 'member' : 'members'}</td>
         <td class="cell-actions">
+          <button class="btn-secondary btn-small" data-members="${g.id}">Members</button>
           <button class="btn-secondary btn-small" data-edit="${g.id}">Edit</button>
           <button class="btn-danger btn-small" data-delete="${g.id}">Delete</button>
         </td>
@@ -99,6 +135,9 @@
     wrap.querySelectorAll('[data-delete]').forEach(btn => {
       btn.addEventListener('click', () => deleteGroup(btn.dataset.delete));
     });
+    wrap.querySelectorAll('[data-members]').forEach(btn => {
+      btn.addEventListener('click', () => openMembersModal(tacacsGroups.find(g => g.id === btn.dataset.members)));
+    });
   }
 
   async function loadGroups() {
@@ -111,12 +150,14 @@
   function openModal(group) {
     document.getElementById('group-form-error').hidden = true;
     document.getElementById('group-form').reset();
+    document.getElementById('group-ad-search-results').innerHTML = '';
 
     if (group) {
       document.getElementById('group-modal-title').textContent = 'Edit group';
       document.getElementById('group-id').value = group.id;
       document.getElementById('group-name').value = group.name;
       document.getElementById('group-description').value = group.description || '';
+      document.getElementById('group-ad-name').value = group.ad_group_name || '';
     } else {
       document.getElementById('group-modal-title').textContent = 'Add group';
       document.getElementById('group-id').value = '';
@@ -134,6 +175,43 @@
     if (e.target.id === 'group-modal-backdrop') closeModal();
   });
 
+  async function searchAdGroups() {
+    const query = document.getElementById('group-ad-search-input').value.trim();
+    const resultsEl = document.getElementById('group-ad-search-results');
+    if (query.length < 2) {
+      resultsEl.innerHTML = '<div class="content-sub">Type at least 2 characters.</div>';
+      return;
+    }
+    resultsEl.innerHTML = '<div class="content-sub">Searching…</div>';
+    const res = await AAAPlatform.authedFetch(`/api/ad-settings/search-groups?query=${encodeURIComponent(query)}`);
+    if (!res.ok) {
+      resultsEl.innerHTML = '<div class="content-sub">Could not search AD — check the Active Directory settings page.</div>';
+      return;
+    }
+    const results = await res.json();
+    if (results.length === 0) {
+      resultsEl.innerHTML = '<div class="content-sub">No matches.</div>';
+      return;
+    }
+    resultsEl.innerHTML = results.map(r => `
+      <div class="version-row">
+        <span style="flex:1;">${escapeHtml(r.cn)}</span>
+        <button type="button" class="btn-secondary btn-small" data-pick-ad-group="${escapeHtml(r.cn)}">Use this</button>
+      </div>
+    `).join('');
+    resultsEl.querySelectorAll('[data-pick-ad-group]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.getElementById('group-ad-name').value = btn.dataset.pickAdGroup;
+        resultsEl.innerHTML = '';
+        document.getElementById('group-ad-search-input').value = '';
+      });
+    });
+  }
+  document.getElementById('group-ad-search-btn').addEventListener('click', searchAdGroups);
+  document.getElementById('group-ad-search-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); searchAdGroups(); }
+  });
+
   document.getElementById('group-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const errorBox = document.getElementById('group-form-error');
@@ -143,6 +221,7 @@
     const payload = {
       name: document.getElementById('group-name').value,
       description: document.getElementById('group-description').value || null,
+      ad_group_name: document.getElementById('group-ad-name').value.trim() || null,
     };
 
     const url = id ? `/api/tacacs-groups/${id}` : '/api/tacacs-groups';
@@ -177,6 +256,101 @@
     AAAPlatform.toast('Group deleted.');
     loadGroups();
   }
+
+  // ---------- Members ----------
+  let currentMembersGroup = null;
+  let allUsersForMembers = [];
+
+  async function openMembersModal(group) {
+    if (!group) return;
+    currentMembersGroup = group;
+    document.getElementById('members-modal-title').textContent = `Members — ${group.name}`;
+    document.getElementById('members-add-note').hidden = true;
+    await refreshMembers();
+    document.getElementById('members-modal-backdrop').hidden = false;
+  }
+
+  async function refreshMembers() {
+    const listEl = document.getElementById('members-list');
+    listEl.innerHTML = '<div class="content-sub">Loading…</div>';
+
+    const [membersRes, usersRes] = await Promise.all([
+      AAAPlatform.authedFetch(`/api/tacacs-groups/${currentMembersGroup.id}/members`),
+      AAAPlatform.authedFetch('/api/tacacs-users'),
+    ]);
+
+    const members = membersRes.ok ? await membersRes.json() : [];
+    allUsersForMembers = usersRes.ok ? await usersRes.json() : [];
+
+    if (members.length === 0) {
+      listEl.innerHTML = '<div class="empty-state">No members yet.</div>';
+    } else {
+      listEl.innerHTML = members.map(m => `
+        <div class="version-row">
+          <span style="flex:1;">${escapeHtml(m.username)}${m.full_name ? ' <span class="content-sub">(' + escapeHtml(m.full_name) + ')</span>' : ''}${!m.enabled ? ' <span class="badge badge-off">Disabled</span>' : ''}</span>
+          <button class="btn-danger btn-small" data-remove-member="${m.id}">Remove</button>
+        </div>
+      `).join('');
+      listEl.querySelectorAll('[data-remove-member]').forEach(btn => {
+        btn.addEventListener('click', () => removeMember(btn.dataset.removeMember));
+      });
+    }
+
+    // Add-picker: every user NOT already in this group (a user already
+    // in this group has nothing to "add" -- they're already a member).
+    const memberIds = new Set(members.map(m => m.id));
+    const candidates = allUsersForMembers.filter(u => !memberIds.has(u.id));
+    const addSelect = document.getElementById('members-add-select');
+    addSelect.innerHTML = candidates.length
+      ? candidates.map(u => `<option value="${u.id}" data-current-group="${u.group_name || ''}">${escapeHtml(u.username)}${u.group_name ? ' (currently: ' + escapeHtml(u.group_name) + ')' : ''}</option>`).join('')
+      : '<option value="">— No other users —</option>';
+  }
+
+  async function addMember() {
+    const select = document.getElementById('members-add-select');
+    const userId = select.value;
+    if (!userId) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/tacacs-groups/${currentMembersGroup.id}/members`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId }),
+    });
+
+    if (!res.ok) {
+      AAAPlatform.toast('Could not add member.', 'error');
+      return;
+    }
+    const data = await res.json();
+    const note = document.getElementById('members-add-note');
+    if (data.reassigned_from) {
+      note.textContent = `Moved from "${data.reassigned_from}" — a user can only be in one group at a time.`;
+      note.hidden = false;
+    } else {
+      note.hidden = true;
+    }
+    AAAPlatform.toast('Member added.');
+    await refreshMembers();
+    loadGroups(); // member_count on the main table is now stale
+  }
+
+  async function removeMember(userId) {
+    if (!confirm('Remove this member from the group? Their account is not deleted, just ungrouped.')) return;
+    const res = await AAAPlatform.authedFetch(`/api/tacacs-groups/${currentMembersGroup.id}/members/${userId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not remove member.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Member removed.');
+    await refreshMembers();
+    loadGroups();
+  }
+
+  document.getElementById('members-add-btn').addEventListener('click', addMember);
+  document.getElementById('members-close-btn').addEventListener('click', () => {
+    document.getElementById('members-modal-backdrop').hidden = true;
+  });
+  document.getElementById('members-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'members-modal-backdrop') document.getElementById('members-modal-backdrop').hidden = true;
+  });
 
   loadGroups();
 </script>

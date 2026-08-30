@@ -38,7 +38,7 @@ from ..models.device import NetworkDevice
 from ..models.group import TacacsGroup
 from ..models.user import TacacsUser
 from ..services import policy_engine
-from .deps import get_current_admin, verify_csrf
+from .deps import require_permission, verify_csrf
 
 router = APIRouter(prefix="/api/policy-simulator", tags=["policy-simulator"])
 
@@ -57,7 +57,7 @@ class SimulationRequest(BaseModel):
 def simulate(
     payload: SimulationRequest,
     db: Session = Depends(get_db),
-    _admin: AdminUser = Depends(get_current_admin),
+    _admin: AdminUser = Depends(require_permission("policies:view")),
 ):
     user = db.query(TacacsUser).filter(TacacsUser.username == payload.username).first()
     device = None
