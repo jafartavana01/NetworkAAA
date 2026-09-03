@@ -30,30 +30,45 @@
     <h2 id="group-modal-title">Add group</h2>
     <form id="group-form">
       <input type="hidden" id="group-id">
+
+      <label class="field">
+        <span class="field-label">Type</span>
+        <select id="group-type">
+          <option value="local">Local — you add members directly</option>
+          <option value="ad">Active Directory — matches a real AD group's own membership</option>
+        </select>
+      </label>
+      <div class="panel panel-wide" style="margin:-4px 0 16px 0;" id="group-type-hint-panel">
+        <div class="panel-body" style="font-size:12px;" id="group-type-hint"></div>
+      </div>
+
+      <div id="group-ad-fields" hidden>
+        <label class="field">
+          <span class="field-label">Search AD groups</span>
+          <input type="text" id="group-ad-search-input" placeholder="Type at least 2 characters…" autocomplete="off">
+        </label>
+        <div id="group-ad-search-results" style="margin-bottom:8px;"></div>
+        <div class="field-hint" style="margin-top:-2px;margin-bottom:14px;">Searches as you type. Selecting a match fills in Name and Linked AD Group below automatically.</div>
+      </div>
+
       <label class="field">
         <span class="field-label">Name</span>
         <input type="text" id="group-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
       </label>
-      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng group identifier.</div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;" id="group-name-hint">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng group identifier.</div>
 
       <label class="field">
         <span class="field-label">Description</span>
         <input type="text" id="group-description">
       </label>
 
-      <label class="field">
-        <span class="field-label">Linked AD group (optional)</span>
-        <input type="text" id="group-ad-name" placeholder="e.g. tacacs_admins — the AD group's exact CN">
-      </label>
-      <div class="field-hint" style="margin-top:-10px;">Type a name directly, or search Active Directory below and select a match. This is a cross-reference for lookup — the Name field above is still what's actually used in the generated configuration.</div>
-      <div class="field-row" style="align-items:flex-end;margin-bottom:6px;">
+      <div id="group-ad-linked-field" hidden>
         <label class="field">
-          <span class="field-label">Search AD groups</span>
-          <input type="text" id="group-ad-search-input" placeholder="Type at least 2 characters…">
+          <span class="field-label">Linked AD group</span>
+          <input type="text" id="group-ad-name" placeholder="e.g. tacacs_admins — the AD group's exact CN">
         </label>
-        <button type="button" class="btn-secondary btn-small" id="group-ad-search-btn" style="width:auto;margin-bottom:2px;">Search</button>
+        <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">The AD group's exact CN — filled in automatically above, or type one directly if you already know it. Kept as a reference alongside Name, which is the prefix-stripped form tac_plus-ng actually matches.</div>
       </div>
-      <div id="group-ad-search-results" style="margin-bottom:16px;"></div>
 
       <div id="group-form-error" class="form-error" role="alert" hidden></div>
 
@@ -147,6 +162,28 @@
     renderTable();
   }
 
+  function toggleGroupTypeFields() {
+    const isAd = document.getElementById('group-type').value === 'ad';
+    document.getElementById('group-ad-fields').hidden = !isAd;
+    document.getElementById('group-ad-linked-field').hidden = !isAd;
+
+    const hintPanel = document.getElementById('group-type-hint-panel');
+    const hint = document.getElementById('group-type-hint');
+    const nameHint = document.getElementById('group-name-hint');
+    if (isAd) {
+      hintPanel.style.borderColor = 'var(--red)';
+      hint.style.color = 'var(--red)';
+      hint.textContent = '⚠ For Active Directory groups, membership is determined ENTIRELY by real AD group membership — an AD user must actually belong to this exact group in Active Directory for a policy to permit them. Adding members with the Members button on the group list has no effect here.';
+      nameHint.textContent = 'Must exactly match what tac_plus-ng reports for AD users in this group — the AD group\'s CN with any configured prefix stripped. Search below and select a match rather than typing this by hand.';
+    } else {
+      hintPanel.style.borderColor = 'var(--line)';
+      hint.style.color = 'var(--text-dim)';
+      hint.textContent = 'Add members with the Members button after saving. This drives authorization for locally-authenticated users only — it has no effect on Active Directory users (use the Active Directory type instead for them).';
+      nameHint.textContent = 'Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng group identifier.';
+    }
+  }
+  document.getElementById('group-type').addEventListener('change', toggleGroupTypeFields);
+
   function openModal(group) {
     document.getElementById('group-form-error').hidden = true;
     document.getElementById('group-form').reset();
@@ -158,15 +195,20 @@
       document.getElementById('group-name').value = group.name;
       document.getElementById('group-description').value = group.description || '';
       document.getElementById('group-ad-name').value = group.ad_group_name || '';
+      document.getElementById('group-type').value = group.ad_group_name ? 'ad' : 'local';
     } else {
       document.getElementById('group-modal-title').textContent = 'Add group';
       document.getElementById('group-id').value = '';
+      document.getElementById('group-type').value = 'local';
     }
+    toggleGroupTypeFields();
     document.getElementById('group-modal-backdrop').hidden = false;
   }
 
   function closeModal() {
     document.getElementById('group-modal-backdrop').hidden = true;
+    if (groupAdSearchDebounceTimer) clearTimeout(groupAdSearchDebounceTimer);
+    groupAdSearchRequestId++; // invalidates any AD search response still in flight from this modal session
   }
 
   document.getElementById('add-group-btn').addEventListener('click', () => openModal(null));
@@ -175,22 +217,45 @@
     if (e.target.id === 'group-modal-backdrop') closeModal();
   });
 
+  let cachedAdGroupPrefix = null;
+  async function getAdGroupPrefix() {
+    if (cachedAdGroupPrefix !== null) return cachedAdGroupPrefix;
+    const res = await AAAPlatform.authedFetch('/api/ad-settings');
+    cachedAdGroupPrefix = (res.ok ? (await res.json()).group_prefix : null) || '';
+    return cachedAdGroupPrefix;
+  }
+
+  const LOCAL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+  let groupAdSearchRequestId = 0;
   async function searchAdGroups() {
     const query = document.getElementById('group-ad-search-input').value.trim();
     const resultsEl = document.getElementById('group-ad-search-results');
+    if (query.length === 0) {
+      resultsEl.innerHTML = '';
+      return;
+    }
     if (query.length < 2) {
       resultsEl.innerHTML = '<div class="content-sub">Type at least 2 characters.</div>';
       return;
     }
     resultsEl.innerHTML = '<div class="content-sub">Searching…</div>';
+    const requestId = ++groupAdSearchRequestId;
     const res = await AAAPlatform.authedFetch(`/api/ad-settings/search-groups?query=${encodeURIComponent(query)}`);
+    if (requestId !== groupAdSearchRequestId) return; // a newer keystroke already started a later search; discard this stale response
     if (!res.ok) {
       resultsEl.innerHTML = '<div class="content-sub">Could not search AD — check the Active Directory settings page.</div>';
       return;
     }
-    const results = await res.json();
+    const data = await res.json();
+    if (requestId !== groupAdSearchRequestId) return;
+    if (data.error) {
+      resultsEl.innerHTML = `<div class="content-sub" style="color:var(--red);">Search failed: ${escapeHtml(data.error)}</div>`;
+      return;
+    }
+    const results = data.results;
     if (results.length === 0) {
-      resultsEl.innerHTML = '<div class="content-sub">No matches.</div>';
+      resultsEl.innerHTML = '<div class="content-sub">No matches. If you expect this group to exist, it may live outside the configured search base — check the Active Directory settings page.</div>';
       return;
     }
     resultsEl.innerHTML = results.map(r => `
@@ -200,16 +265,44 @@
       </div>
     `).join('');
     resultsEl.querySelectorAll('[data-pick-ad-group]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        document.getElementById('group-ad-name').value = btn.dataset.pickAdGroup;
+      btn.addEventListener('click', async () => {
+        const cn = btn.dataset.pickAdGroup;
+        document.getElementById('group-ad-name').value = cn;
+
+        // Suggest the LOCAL name as the prefix-stripped CN -- this is
+        // what tac_plus-ng actually reports for `member ==` matching
+        // (confirmed: "with AD_GROUP_PREFIX = GTC_ the TACACS+ group
+        // membership for 'CN=GTC_ad-admins' will be 'ad-admins'" --
+        // stripped, not the full CN). Only fills the Name field if
+        // it's currently empty, so a name the admin already typed
+        // deliberately is never overwritten; only fills it at all if
+        // the result is a valid tac_plus-ng identifier, since an AD
+        // group CN can contain spaces or characters this platform's
+        // own name validation doesn't allow.
+        const nameField = document.getElementById('group-name');
+        if (!nameField.value.trim()) {
+          const prefix = await getAdGroupPrefix();
+          let suggested = cn;
+          if (prefix && cn.toLowerCase().startsWith(prefix.toLowerCase())) {
+            suggested = cn.slice(prefix.length);
+          }
+          if (LOCAL_NAME_PATTERN.test(suggested)) {
+            nameField.value = suggested;
+          }
+        }
+
         resultsEl.innerHTML = '';
         document.getElementById('group-ad-search-input').value = '';
       });
     });
   }
-  document.getElementById('group-ad-search-btn').addEventListener('click', searchAdGroups);
-  document.getElementById('group-ad-search-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); searchAdGroups(); }
+
+  // Auto-search as the admin types, debounced -- same pattern as the
+  // Users page AD search, for the same reason: no separate button.
+  let groupAdSearchDebounceTimer = null;
+  document.getElementById('group-ad-search-input').addEventListener('input', () => {
+    if (groupAdSearchDebounceTimer) clearTimeout(groupAdSearchDebounceTimer);
+    groupAdSearchDebounceTimer = setTimeout(searchAdGroups, 400);
   });
 
   document.getElementById('group-form').addEventListener('submit', async (e) => {

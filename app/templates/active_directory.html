@@ -25,19 +25,19 @@
       <span class="field-label">Domain name</span>
       <input type="text" id="ad-domain" placeholder="corp.example.com">
     </label>
-    <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Also used to fill in the server address and search base below — override either one in Advanced if your environment needs something different.</div>
+    <div class="field-hint" style="margin-bottom:14px;">Also used to fill in the server address and search base below — override either one in Advanced if your environment needs something different.</div>
 
     <label class="field">
       <span class="field-label">Username</span>
       <input type="text" id="ad-username" placeholder="svc_tacacs">
     </label>
-    <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">A service account with permission to read users and groups — just the name is fine (e.g. "svc_tacacs"); the domain above is appended automatically. A full UPN (name@domain) also works if you type one directly.</div>
+    <div class="field-hint" style="margin-bottom:14px;">A service account with permission to read users and groups — just the name is fine (e.g. "svc_tacacs"); the domain above is appended automatically. A full UPN (name@domain) also works if you type one directly.</div>
 
     <label class="field">
       <span class="field-label">Password</span>
-      <input type="password" id="ad-bind-password" placeholder="">
+      <input type="password" id="ad-bind-password" placeholder="" autocomplete="new-password">
     </label>
-    <div class="field-hint" style="margin-top:-10px;margin-bottom:18px;" id="ad-password-hint">Leave blank to keep the current password.</div>
+    <div class="field-hint" style="margin-bottom:18px;" id="ad-password-hint">Leave blank to keep the current password.</div>
 
     <button type="button" class="btn-ghost btn-small" id="ad-advanced-toggle" style="width:auto;margin-bottom:14px;">▸ Advanced settings</button>
 
@@ -52,18 +52,23 @@
           <input type="number" id="ad-port" min="1" max="65535" value="636">
         </label>
       </div>
-      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Defaults to the domain name above — override only if your domain controllers aren't directly reachable at that address.</div>
+      <div class="field-hint" style="margin-bottom:14px;">Defaults to the domain name above — override only if your domain controllers aren't directly reachable at that address.</div>
 
-      <label class="checkbox-field field" style="margin-bottom:16px;">
-        <input type="checkbox" id="ad-use-tls" checked>
-        <span>Use a secure connection (LDAPS)</span>
+      <label class="field">
+        <span class="field-label">Encryption</span>
+        <select id="ad-encryption-mode">
+          <option value="ldaps">LDAPS — secure from the moment the connection opens (conventionally port 636)</option>
+          <option value="starttls">StartTLS — connect in the clear, then explicitly upgrade before sending any credentials (conventionally port 389)</option>
+          <option value="none">None — plain, unencrypted LDAP</option>
+        </select>
       </label>
+      <div class="field-hint" style="margin-bottom:16px;">These are two genuinely different mechanisms, not interchangeable settings for the same thing — if one fails to connect, the other is a real, separate thing to try, not just a retry. Both still depend on your domain controller having a working TLS/certificate setup at all; if neither connects, that's usually the underlying cause. "None" sends credentials unencrypted and should only be used if your directory genuinely doesn't support either.</div>
 
       <label class="field">
         <span class="field-label">Search base</span>
         <input type="text" id="ad-search-base" placeholder="dc=corp,dc=example,dc=com">
       </label>
-      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Defaults to the domain name above, converted to dc= components.</div>
+      <div class="field-hint" style="margin-bottom:14px;">Defaults to the domain name above, converted to dc= components.</div>
 
       <label class="field">
         <span class="field-label">User filter template</span>
@@ -79,7 +84,7 @@
           <span>Use memberOf for group lookup</span>
         </label>
       </div>
-      <div class="field-hint" style="margin-top:-10px;">AD group membership maps into the same group-matching policies already use — a user's AD groups (optionally filtered to this prefix) become available as User Group conditions once the config is applied.</div>
+      <div class="field-hint">AD group membership maps into the same group-matching policies already use — a user's AD groups (optionally filtered to this prefix) become available as User Group conditions once the config is applied. Leave this blank to report every group unfiltered — confirmed via a real, live test that this is genuinely required for any group information to be returned at all, not merely optional filtering.</div>
     </div>
 
     <div id="ad-form-error" class="form-error" role="alert" hidden></div>
@@ -154,7 +159,11 @@
     const username = document.getElementById('ad-username').value.trim();
     const domain = document.getElementById('ad-domain').value.trim();
     if (!username) return '';
-    if (username.includes('@')) return username; // already a full UPN -- use as typed
+    // Already a full UPN (user@domain) or NetBIOS/down-level logon
+    // format (DOMAIN\user) -- either way, the admin typed a complete
+    // identity, so use it exactly as typed rather than appending the
+    // domain again, which would silently produce a malformed value.
+    if (username.includes('@') || username.includes('\\')) return username;
     return domain ? `${username}@${domain}` : username;
   }
 
@@ -173,7 +182,7 @@
     document.getElementById('ad-enabled').checked = s.enabled;
     document.getElementById('ad-host').value = s.host || '';
     document.getElementById('ad-port').value = s.port || 636;
-    document.getElementById('ad-use-tls').checked = s.use_tls;
+    document.getElementById('ad-encryption-mode').value = s.use_starttls ? 'starttls' : (s.use_tls ? 'ldaps' : 'none');
     document.getElementById('ad-search-base').value = s.search_base || '';
     document.getElementById('ad-user-filter').value = s.user_filter_template || '';
     document.getElementById('ad-group-prefix').value = s.group_prefix || '';
@@ -196,17 +205,20 @@
       : bindDn;
   }
 
-  document.getElementById('ad-use-tls').addEventListener('change', (e) => {
+  document.getElementById('ad-encryption-mode').addEventListener('change', (e) => {
     const portField = document.getElementById('ad-port');
-    if (portField.value === '389' && e.target.checked) portField.value = '636';
-    if (portField.value === '636' && !e.target.checked) portField.value = '389';
+    const wantsLdaps = e.target.value === 'ldaps';
+    if (portField.value === '389' && wantsLdaps) portField.value = '636';
+    if (portField.value === '636' && !wantsLdaps) portField.value = '389';
   });
 
   function currentFormValues() {
+    const encryptionMode = document.getElementById('ad-encryption-mode').value;
     return {
       host: document.getElementById('ad-host').value,
       port: parseInt(document.getElementById('ad-port').value, 10) || 636,
-      use_tls: document.getElementById('ad-use-tls').checked,
+      use_tls: encryptionMode === 'ldaps',
+      use_starttls: encryptionMode === 'starttls',
       bind_dn: computeBindDn(),
       bind_password: document.getElementById('ad-bind-password').value || null,
       search_base: document.getElementById('ad-search-base').value,

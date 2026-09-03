@@ -86,4 +86,5 @@ class PolicyOut(PolicyBase):
     condition_group_name: str | None = None
     condition_device_name: str | None = None
     condition_device_group_name: str | None = None
+    has_condition_tree: bool = False
     command_sets: list[ReferencedCommandSet] = Field(default_factory=list)

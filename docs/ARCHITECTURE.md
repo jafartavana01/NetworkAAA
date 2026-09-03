@@ -1453,3 +1453,276 @@ unintended or broken configuration with no clear indication why. This
 deserves its own careful design pass, not a rushed implementation
 appended to an already-large set of changes.
 
+## Network Operations & Assurance Engine — Phase 1 (Command Jobs)
+
+The first increment of a much larger, explicitly-phased capability
+(the full spec covers 12 phases: Command Jobs, Templates, a Check
+engine, an Audit engine, integrating two existing standalone Cisco
+security-auditor projects, remediation with approval workflow,
+compliance mapping, scheduling, a fleet-wide "Finder", and
+visualization). The spec itself instructs against implementing this
+in one giant change ("Do not try to implement all advanced
+functionality in one giant unreviewable change") -- Phase 1 only is
+built here; Phases 2-12 are not started.
+
+### Architecture assessment (produced before any code, per the spec's
+own explicit requirement to understand the existing project first)
+
+**Reused, untouched:** `app.modules.registry` (`Module`/`NavEntry`/
+`register()`), `app.api.deps.require_permission()`'s additive RBAC
+mechanism, `app.security.encrypt_secret`/`decrypt_secret`,
+`NetworkDevice`/`DeviceGroup` (read directly for target resolution,
+no changes), the `app.web.routes_tacacs._render()` page-route
+pattern, the existing `BackgroundTasks` + poll pattern already proven
+by `app.api.routes_network_scan.apply_aaa_all`.
+
+**Deliberately NOT reused:** `app.services.ssh_provision`'s internals.
+That module is live and tested (Network Scan & Provision depends on
+it); rather than risk a regression by refactoring it to share
+internals with a brand-new engine, `app.services.network_ops_execution`
+defines its own small, independently-testable SSH mechanics
+(paramiko connect + interactive-shell drain). The duplication is a
+handful of lines; the risk of touching working code was judged not
+worth avoiding it.
+
+**New, distinct from an existing similarly-named concept:**
+`CommandTemplate` is NOT the same thing as the existing `CommandSet`
+(PAM Expansion Plan §5) -- confirmed by reading `command_set.py`/
+`command_rule.py` before writing anything. `CommandSet` is a list of
+permit/deny AUTHORIZATION rules the TACACS+ policy engine evaluates.
+`CommandTemplate` is a list of commands THIS PLATFORM actively
+executes over SSH to collect output. Conflating them was explicitly
+warned against by the spec ("Do not collapse these objects into one
+generic 'command' object") and would also have been a real
+correctness bug.
+
+### Data model
+
+`CommandTemplate` (reusable, named command list), `CommandJob` (one
+admin-initiated run), `CommandJobTarget` (the RESOLVED, DEDUPLICATED,
+SNAPSHOTTED device list a specific job actually targeted -- captured
+at execution time, never recomputed from current group membership
+later, so "this job ran against 142 devices" stays permanently true
+even after the group's membership changes), `CommandExecution` (one
+row per device-command pair, raw output always preserved, never only
+a parsed representation).
+
+State machines (spec section 7) are stored as plain strings, not
+PostgreSQL ENUM types, so adding a new state later is a data value,
+not a schema migration -- consistent with how `CommandCategory.vendor`
+already avoids a DB-level enum for the same reason.
+
+**Schema deployment**: this project has an explicit clean-install-only
+policy (`app/database.py`'s own docstring) -- `Base.metadata.create_all()`
+runs on every boot, and by SQLAlchemy's own default (`checkfirst=True`)
+only creates tables that don't already exist yet. The four new tables
+here are entirely new, not alterations to existing ones, so an
+*already-running* deployment needs no manual SQL step at all --
+pulling this code and restarting `aaa-platform.service` is sufficient;
+`create_all()` creates the new tables on that restart and leaves every
+existing table untouched.
+
+### Target resolution and deduplication (spec section 4)
+
+`app.services.network_ops_execution.resolve_targets()` -- individual
+device selections are resolved first and take precedence (a device
+selected both individually and via a group appears once, tagged as
+"Individual selection", not lost or duplicated). Verified with a real
+executable test against all 6 scenarios the spec explicitly lists as
+required test cases (one device, one group, multiple groups,
+overlapping selection, empty group, deleted/nonexistent device id),
+including the exact "SW-01 in two groups" example from section 4
+itself.
+
+### Command classification (spec section 49)
+
+`classify_command()` -- a Cisco IOS-specific heuristic (READ_ONLY /
+CONFIGURATION / DESTRUCTIVE / UNKNOWN), explicitly documented as a
+heuristic aid for the confirmation UI, not a guarantee. Unknown
+commands are never assumed safe, per the spec's own explicit
+instruction. Verified against 13 realistic Cisco IOS commands
+spanning all four categories. A real bug was caught by that test
+before shipping: `write memory` was reasoned about in a docstring as
+belonging in CONFIGURATION, but the actual prefix list was never
+updated to match, so it fell through to UNKNOWN -- found by the test
+failing, not by re-reading the code.
+
+### Execution and orchestration
+
+`run_commands_on_device()` connects once per device and runs every
+command over one interactive shell (needed for stateful sequences).
+One command producing IOS-error-looking output does not stop the
+remaining commands for that device, nor does it fail the device-level
+result -- "one bad show command" and "could not reach the device at
+all" are different failure classes, matching how a human operator
+would treat them.
+
+`run_job()` is the background-task entry point (same `BackgroundTasks`
+pattern as `routes_network_scan.py`'s bulk apply). Sequential mode
+runs targets in order; controlled-parallel mode uses a bounded
+`ThreadPoolExecutor` (paramiko's SSH I/O releases the GIL while
+waiting on the network, so real concurrency is achieved despite
+Python's GIL -- the same reasoning `app.services.network_scan`'s own
+parallel port-scan already relies on). Each execution unit opens its
+own database session (required for thread safety; SQLAlchemy sessions
+aren't safe for concurrent cross-thread use) and commits after each
+target completes, which is what makes the live dashboard's polling
+see progressive updates -- persistent DB rows are the source of
+truth here, not an in-memory session like `apply_progress` uses for
+the (deliberately ephemeral) Network Scan flow, since job history
+must be permanent per spec section 37.
+
+Job-level status rollup (COMPLETED / PARTIAL / FAILED) is computed
+from the set of final target statuses and was verified with a direct
+test of that exact logic.
+
+### Security
+
+SSH credentials for a job are never persisted -- supplied per-request
+and passed directly to the background task, the same discipline
+`app.services.ssh_provision` already established for Network Scan &
+Provision. Commands run only against devices already in this
+platform's own inventory (`NetworkDevice`/`DeviceGroup` rows) --
+never an arbitrary user-supplied host. Nothing in the execution path
+uses `subprocess` or a server-side shell with device- or command-
+derived strings; all execution is over paramiko SSH sessions against
+the *target* device, never the NetworkAAA host itself.
+
+### RBAC
+
+Three new permission keys, following the existing catalog's exact
+`resource:action` convention: `network_ops:view`, `network_ops:execute`,
+`network_ops:templates` -- kept separate because "can see job
+history", "can push commands to live devices", and "can change what a
+saved template runs for everyone next time" are genuinely different
+privilege levels. Confirmed to integrate cleanly with the existing
+Read-Only Auditor role template (which pulls in every `:view`
+permission automatically).
+
+### Module
+
+Registered as **non-mandatory** (`mandatory=False`) -- unlike the
+TACACS+ core, this is genuinely optional capability, so it
+participates in the existing enable/disable module mechanism exactly
+like any other non-core module, seeded enabled by default on first
+boot.
+
+### GUI
+
+Three pages: **Command Jobs** (creation form matching the spec's own
+mockup shape -- target multi-select, template-or-raw-commands,
+execution settings, Preview Targets; plus job history), **Job Detail**
+(a live-polling dashboard, 2.5s interval, auto-stopping once the job
+reaches a terminal state, with per-device and per-command drill-down
+into raw output), and **Templates** (CRUD for the reusable command
+library).
+
+### Not done in Phase 1, honestly
+
+Command Template versioning (a `CommandTemplateVersion` table was
+explicitly deferred -- same "don't build schema for a phase that
+hasn't arrived" discipline as everything else in this project); job
+cancellation (the CANCELLED state exists in the schema but nothing
+currently transitions a job into it); any parsing of raw command
+output into structured facts (that's the Check engine, Phase 3);
+anything related to Audits, Findings, remediation, compliance,
+scheduling, or the Finder (Phases 3-12, not started); multi-vendor
+support (Cisco IOS only, stated plainly, matching the exact same
+scope limit `app.services.ssh_provision`'s AAA-provisioning commands
+already carry).
+
+
+## Network Operations & Assurance Engine — Phase 3 (Check Engine)
+
+Builds on Phase 1's already-collected `CommandExecution` output --
+running a check never triggers a new SSH connection to a device; it
+only evaluates evidence a Command Job already gathered.
+
+### Parser
+
+`app.services.cisco_config_parser` -- a small, independently-written
+structural parser for `show running-config` text, built from the same
+well-documented property the referenced `cisco-ios-security-auditor`
+project's own parser relies on (inspected via its public README
+before writing this, not copied): every config stanza is a column-0
+header line followed by indented children. Deliberately NOT a copy of
+that project's own parser -- a fresh implementation scoped to what
+Phase 3's starter checks actually need. Verified with a real
+executable test against a realistic multi-stanza config, including
+the exact `re.MULTILINE` bug class that project's own README documents
+having hit and fixed (`^`/`$` must mean line boundaries, not string
+boundaries, when searching multi-line text) -- confirmed correct here
+from the start, not discovered as a bug afterward.
+
+### Checks
+
+`app.services.network_ops_checks` -- a small, CODE-DEFINED registry
+of evaluators (`aaa_new_model`, `password_encryption`, `vty_ssh_only`,
+`http_server_disabled`), all well-documented, standard Cisco IOS
+hardening checks chosen specifically for high confidence -- comparable
+to this project's confidence level for Cisco IOS syntax generally, not
+`tac_plus-ng`'s own less-documented scripting language. Deliberately
+NOT an admin-scriptable rule system in Phase 3 -- every evaluator is a
+reviewed, tested Python function.
+
+**Honesty discipline, enforced centrally, not per-evaluator**: if a
+device's collected output doesn't include anything matching a
+running-config dump (matched by PREFIX PATTERN -- `show run`, `sh
+run`, `show running-config` are all recognized as the same command,
+since IOS allows abbreviation), `run_check()` returns NOT_APPLICABLE
+before an evaluator function ever runs, rather than letting each
+evaluator guess. This matches spec section 12's explicit instruction
+("do not falsely mark something as PASS or FAIL when the collected
+evidence is insufficient") and the same philosophy the referenced
+auditor's own MANUAL_REVIEW/N-A statuses embody.
+
+Verified with 6 real execution tests: a fully-hardened config (all 4
+checks PASS), a weak config (all 4 FAIL), a device with no
+running-config output collected at all (NOT_APPLICABLE, not a guess),
+command abbreviation recognition, an unregistered check_key
+(UNKNOWN, not a crash), and a mixed-VTY config where only the
+specific line range with the actual problem is flagged as evidence,
+not the whole device indiscriminately.
+
+**A real bug caught by testing before shipping**: the models file
+originally had `enabled: Mapped[bool] = mapped_column(String(8), ...)`
+-- a genuine type mismatch (the Python annotation said `bool`, the
+actual column type said `String`) introduced while thinking through
+the design and never corrected, with a leftover comment ("kept as a
+real bool below instead") that didn't even describe real code. Caught
+by re-reading before the file was even submitted, fixed to a proper
+`Boolean` column matching every other `enabled` field in this project.
+
+### Data model
+
+`Check` (a stable, selectable row referencing a registry evaluator by
+`check_key`; the actual pass/fail LOGIC lives in code, not the row --
+same pattern as `CommandCategory`) and `CheckResult` (append-only,
+never overwritten on re-run -- matches this project's established
+"never destroy history" discipline for Policy versions and Config
+versions). `remediation`/`verification` fields from spec section 12
+are deliberately not added yet -- there is no remediation/approval
+workflow in this project (that's Phase 8 territory), and adding empty
+fields with nothing to populate them would be exactly the kind of
+half-built feature this project avoids.
+
+### API and GUI
+
+`POST /api/network-ops/jobs/{id}/run-checks` (optionally scoped to
+specific check_keys, defaulting to every enabled check),
+`GET .../check-results`, `GET /api/network-ops/checks`. The Job
+Detail page gained a Checks section (Run Checks button + results
+table with evidence/recommendation shown inline); a new Checks page
+lists the registered catalog.
+
+### Not done in Phase 3, honestly
+
+Only 4 starter checks exist, all Management Plane / Cisco IOS,
+sourced from `show running-config` specifically -- no Layer 2/3/CoPP/
+VPN/PKI domains yet (that range of content is Phase 5's actual
+integration of the referenced standalone auditor, not built here).
+No correlation engine (cross-check reasoning, like the referenced
+project's own `Context`-based rules) yet. No per-device Security
+Score, no Audit grouping of multiple checks into a named suite (that's
+Phase 4), no scheduling, no historical trend view.
+

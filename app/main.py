@@ -19,6 +19,7 @@ from .api.routes_auth import router as auth_router
 from .database import get_sessionmaker
 from .modules import registry
 from .modules.core_module import register_core_module
+from .modules.network_ops_module import register_network_ops_module
 from .modules.tacacs_module import register_tacacs_module
 from .models.module_state import ModuleState
 from .web.routes import router as web_router
@@ -98,6 +99,35 @@ def _seed_monitor_group() -> None:
         db.close()
 
 
+def _seed_network_ops_checks() -> None:
+    """Seeds the starter Check catalog on first boot -- a no-op on
+    every subsequent boot once any Check row exists. See
+    app.api.routes_network_ops_checks.ensure_seeded."""
+    from .api.routes_network_ops_checks import ensure_seeded
+
+    session_local = get_sessionmaker()
+    db: Session = session_local()
+    try:
+        ensure_seeded(db)
+    finally:
+        db.close()
+
+
+def _seed_network_ops_audits() -> None:
+    """Seeds the starter Audit on first boot -- must run AFTER
+    _seed_network_ops_checks (the starter Audit references check_keys
+    that need to already exist as real Check rows). See
+    app.api.routes_network_ops_audits.ensure_seeded."""
+    from .api.routes_network_ops_audits import ensure_seeded
+
+    session_local = get_sessionmaker()
+    db: Session = session_local()
+    try:
+        ensure_seeded(db)
+    finally:
+        db.close()
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="AAA Management Platform", docs_url="/api/docs", redoc_url=None)
 
@@ -110,6 +140,7 @@ def create_app() -> FastAPI:
 
     register_core_module()
     register_tacacs_module()
+    register_network_ops_module()
 
     @app.on_event("startup")
     def _on_startup() -> None:
@@ -117,6 +148,8 @@ def create_app() -> FastAPI:
         _seed_command_categories()
         _seed_admin_role_templates()
         _seed_monitor_group()
+        _seed_network_ops_checks()
+        _seed_network_ops_audits()
         enabled = _enabled_module_keys()
         for module in registry.all_modules():
             # Mandatory modules (core / future TACACS+ core) are always

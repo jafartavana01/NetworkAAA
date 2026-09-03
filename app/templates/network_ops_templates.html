@@ -1,0 +1,202 @@
+{% extends "app_shell.html" %}
+{% block title %}Command Templates — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Network Operations / Templates{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Command Templates</h1>
+    <p class="content-sub">Reusable, named lists of commands — pick one when creating a Command Job instead of typing commands from scratch.</p>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="template-count"></span>
+    <button class="btn-primary btn-small" id="add-template-btn" style="width:auto;">+ New Template</button>
+  </div>
+
+  <div id="templates-table-wrap">
+    <div class="empty-state">Loading templates…</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="template-modal-backdrop" hidden>
+  <div class="modal" style="max-width: min(92vw, 640px);max-height:88vh;overflow-y:auto;">
+    <h2 id="template-modal-title">New Template</h2>
+    <form id="template-form">
+      <input type="hidden" id="template-id">
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input type="text" id="template-name" required maxlength="128">
+      </label>
+      <label class="field">
+        <span class="field-label">Description</span>
+        <input type="text" id="template-description">
+      </label>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Vendor</span>
+          <input type="text" id="template-vendor" value="cisco_ios">
+        </label>
+        <label class="field">
+          <span class="field-label">Platform (optional)</span>
+          <input type="text" id="template-platform" placeholder="e.g. IOS-XE">
+        </label>
+        <label class="field">
+          <span class="field-label">Device Role (optional)</span>
+          <input type="text" id="template-device-role" placeholder="e.g. ACCESS">
+        </label>
+      </div>
+      <label class="field">
+        <span class="field-label">Commands</span>
+        <textarea id="template-commands" rows="10" required style="width:100%;font-family:var(--font-mono);font-size:12px;background:var(--bg-input);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;color:var(--text-primary);"></textarea>
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">One command per line.</div>
+      <label class="field" style="flex:0 0 200px;">
+        <span class="field-label">Command Timeout (sec)</span>
+        <input type="number" id="template-timeout" value="30" min="1" max="600">
+      </label>
+
+      <div id="template-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="template-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Save Template</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  let templates = [];
+
+  async function loadTemplates() {
+    const wrap = document.getElementById('templates-table-wrap');
+    const res = await AAAPlatform.authedFetch('/api/network-ops/templates');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) {
+      wrap.innerHTML = '<div class="empty-state">Could not load templates.</div>';
+      return;
+    }
+    templates = await res.json();
+    document.getElementById('template-count').textContent = templates.length + (templates.length === 1 ? ' template' : ' templates');
+    if (templates.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No templates yet.</div>';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Description</th><th>Vendor</th><th>Commands</th><th></th></tr></thead>
+        <tbody>${templates.map(t => `
+          <tr>
+            <td>${escapeHtml(t.name)}</td>
+            <td class="content-sub">${escapeHtml(t.description || '—')}</td>
+            <td class="cell-mono">${escapeHtml(t.vendor)}</td>
+            <td class="cell-mono content-sub">${t.commands.length} command(s)</td>
+            <td class="cell-actions">
+              <button class="btn-secondary btn-small" data-edit="${t.id}">Edit</button>
+              <button class="btn-danger btn-small" data-delete="${t.id}">Delete</button>
+            </td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+    wrap.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.addEventListener('click', () => openModal(templates.find(t => t.id === btn.dataset.edit)));
+    });
+    wrap.querySelectorAll('[data-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deleteTemplate(btn.dataset.delete));
+    });
+  }
+
+  function openModal(template) {
+    document.getElementById('template-form').reset();
+    document.getElementById('template-form-error').hidden = true;
+    if (template) {
+      document.getElementById('template-modal-title').textContent = 'Edit Template';
+      document.getElementById('template-id').value = template.id;
+      document.getElementById('template-name').value = template.name;
+      document.getElementById('template-description').value = template.description || '';
+      document.getElementById('template-vendor').value = template.vendor;
+      document.getElementById('template-platform').value = template.platform || '';
+      document.getElementById('template-device-role').value = template.device_role || '';
+      document.getElementById('template-commands').value = template.commands.join('\n');
+      document.getElementById('template-timeout').value = template.command_timeout_seconds;
+    } else {
+      document.getElementById('template-modal-title').textContent = 'New Template';
+      document.getElementById('template-id').value = '';
+      document.getElementById('template-vendor').value = 'cisco_ios';
+      document.getElementById('template-timeout').value = 30;
+    }
+    document.getElementById('template-modal-backdrop').hidden = false;
+  }
+
+  document.getElementById('add-template-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('template-cancel-btn').addEventListener('click', () => { document.getElementById('template-modal-backdrop').hidden = true; });
+  document.getElementById('template-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'template-modal-backdrop') document.getElementById('template-modal-backdrop').hidden = true;
+  });
+
+  document.getElementById('template-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('template-form-error');
+    errorBox.hidden = true;
+
+    const id = document.getElementById('template-id').value;
+    const commandsText = document.getElementById('template-commands').value.trim();
+    const payload = {
+      name: document.getElementById('template-name').value,
+      description: document.getElementById('template-description').value || null,
+      vendor: document.getElementById('template-vendor').value || 'cisco_ios',
+      platform: document.getElementById('template-platform').value || null,
+      device_role: document.getElementById('template-device-role').value || null,
+      commands: commandsText ? commandsText.split('\n').map(l => l.trim()).filter(Boolean) : [],
+      command_timeout_seconds: parseInt(document.getElementById('template-timeout').value, 10),
+    };
+    if (payload.commands.length === 0) {
+      errorBox.textContent = 'At least one command is required.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const url = id ? `/api/network-ops/templates/${id}` : '/api/network-ops/templates';
+    const method = id ? 'PUT' : 'POST';
+    const res = await AAAPlatform.authedFetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Could not save template.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+    document.getElementById('template-modal-backdrop').hidden = true;
+    AAAPlatform.toast(id ? 'Template updated.' : 'Template created.');
+    loadTemplates();
+  });
+
+  async function deleteTemplate(id) {
+    const template = templates.find(t => t.id === id);
+    if (!confirm(`Delete template "${template ? template.name : id}"?`)) return;
+    const res = await AAAPlatform.authedFetch(`/api/network-ops/templates/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not delete template.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Template deleted.');
+    loadTemplates();
+  }
+
+  loadTemplates();
+</script>
+{% endblock %}

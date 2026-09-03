@@ -1,0 +1,275 @@
+{% extends "app_shell.html" %}
+{% block title %}Job Detail — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Network Operations / Command Jobs / Detail{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <a href="/network-ops/jobs" class="content-sub">← Back to Command Jobs</a>
+    <h1 id="job-title">Loading…</h1>
+    <p class="content-sub" id="job-subtitle"></p>
+  </div>
+
+  <div id="job-progress-panel" class="panel panel-wide" style="margin-bottom:20px;" hidden>
+    <div class="panel-body">
+      <div class="toolbar" style="margin-bottom:10px;">
+        <span id="job-progress-summary" class="content-sub"></span>
+        <span id="job-progress-status"></span>
+      </div>
+      <div style="background:var(--bg-void);border-radius:var(--radius);height:10px;overflow:hidden;">
+        <div id="job-progress-bar" style="background:var(--signal);height:100%;width:0%;transition:width 300ms ease;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="job-targets-wrap">
+    <div class="empty-state">Loading targets…</div>
+  </div>
+
+  <div class="content-head" style="margin-top:32px;">
+    <h2>Checks</h2>
+    <p class="content-sub">Evaluates already-collected command output — running a check never connects to a device again.</p>
+  </div>
+  <div class="toolbar">
+    <span class="content-sub" id="check-results-count"></span>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn-primary btn-small" id="run-checks-btn" style="width:auto;">Run Checks</button>
+      <select id="run-audit-select" style="width:auto;"></select>
+      <button class="btn-secondary btn-small" id="run-audit-btn" style="width:auto;">Run Audit</button>
+    </div>
+  </div>
+  <div id="check-results-wrap">
+    <div class="empty-state">No checks run yet.</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="output-modal-backdrop" hidden>
+  <div class="modal" style="max-width: min(92vw, 800px);max-height:88vh;overflow-y:auto;">
+    <h2 id="output-modal-title">Command Output</h2>
+    <div id="output-modal-body" class="cell-mono content-sub" style="white-space:pre-wrap;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:12px;max-height:60vh;overflow-y:auto;"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="output-modal-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  const jobId = window.location.pathname.split('/').filter(Boolean).pop();
+  let pollIntervalId = null;
+
+  function statusColor(status) {
+    if (status === 'COMPLETED') return 'var(--signal)';
+    if (status === 'FAILED' || status === 'TIMEOUT') return 'var(--red)';
+    if (status === 'PARTIAL') return 'var(--amber)';
+    return 'var(--text-dim)';
+  }
+
+  function statusBadge(status) {
+    const cls = status === 'COMPLETED' ? 'badge-on' : (status === 'PENDING' || status === 'CONNECTING' || status === 'RUNNING') ? 'badge-off' : 'badge-off';
+    return `<span class="badge ${cls}" style="color:${statusColor(status)};">${escapeHtml(status)}</span>`;
+  }
+
+  function classificationTag(c) {
+    const color = c === 'DESTRUCTIVE' ? 'var(--red)' : c === 'CONFIGURATION' ? 'var(--amber)' : c === 'READ_ONLY' ? 'var(--signal)' : 'var(--text-dim)';
+    return `<span style="color:${color};font-size:11px;">${escapeHtml(c)}</span>`;
+  }
+
+  function renderTargets(job) {
+    const wrap = document.getElementById('job-targets-wrap');
+    if (!job.targets || job.targets.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No targets.</div>';
+      return;
+    }
+    wrap.innerHTML = job.targets.map(t => `
+      <div class="panel panel-wide" style="margin-bottom:12px;">
+        <div class="panel-body">
+          <div class="toolbar" style="margin-bottom:8px;">
+            <span><strong>${escapeHtml(t.device_name)}</strong> <span class="content-sub cell-mono">${escapeHtml(t.device_ip_address)}</span> ${t.resolved_from ? '<span class="content-sub">— ' + escapeHtml(t.resolved_from) + '</span>' : ''}</span>
+            ${statusBadge(t.status)}
+          </div>
+          ${t.error_message ? `<div class="content-sub" style="color:var(--red);margin-bottom:8px;">${escapeHtml(t.error_message)}</div>` : ''}
+          ${t.executions.length ? `
+            <table class="data-table">
+              <thead><tr><th>Command</th><th>Type</th><th>Status</th><th>Duration</th><th></th></tr></thead>
+              <tbody>${t.executions.map(ex => `
+                <tr>
+                  <td class="cell-mono">${escapeHtml(ex.command)}</td>
+                  <td>${classificationTag(ex.command_classification)}</td>
+                  <td>${statusBadge(ex.status)}</td>
+                  <td class="cell-mono content-sub">${ex.duration_ms != null ? ex.duration_ms + 'ms' : '—'}</td>
+                  <td class="cell-actions">${ex.raw_output ? `<button type="button" class="btn-secondary btn-small" data-view-output="${escapeHtml(ex.command)}" data-exec-id="${ex.id}">View Output</button>` : ''}</td>
+                </tr>
+              `).join('')}</tbody>
+            </table>
+          ` : '<div class="content-sub">No commands executed yet.</div>'}
+        </div>
+      </div>
+    `).join('');
+
+    wrap.querySelectorAll('[data-view-output]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const execId = btn.dataset.execId;
+        const target = job.targets.find(t => t.executions.some(ex => ex.id === execId));
+        const execution = target.executions.find(ex => ex.id === execId);
+        document.getElementById('output-modal-title').textContent = `${target.device_name} — ${execution.command}`;
+        document.getElementById('output-modal-body').textContent = execution.raw_output || '(no output)';
+        document.getElementById('output-modal-backdrop').hidden = false;
+      });
+    });
+  }
+
+  document.getElementById('output-modal-close-btn').addEventListener('click', () => {
+    document.getElementById('output-modal-backdrop').hidden = true;
+  });
+  document.getElementById('output-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'output-modal-backdrop') document.getElementById('output-modal-backdrop').hidden = true;
+  });
+
+  function renderProgress(job) {
+    const panel = document.getElementById('job-progress-panel');
+    const isRunning = job.status === 'PENDING' || job.status === 'RUNNING';
+    panel.hidden = !isRunning;
+    if (!isRunning) return;
+
+    const total = job.targets.length;
+    const done = job.targets.filter(t => ['COMPLETED', 'FAILED', 'TIMEOUT', 'SKIPPED', 'CANCELLED'].includes(t.status)).length;
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    document.getElementById('job-progress-summary').textContent = `${done} / ${total} devices complete`;
+    document.getElementById('job-progress-status').innerHTML = statusBadge(job.status);
+    document.getElementById('job-progress-bar').style.width = pct + '%';
+  }
+
+  async function loadJob() {
+    const res = await AAAPlatform.authedFetch(`/api/network-ops/jobs/${jobId}`);
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) {
+      document.getElementById('job-title').textContent = 'Job not found';
+      if (pollIntervalId) clearInterval(pollIntervalId);
+      return;
+    }
+    const job = await res.json();
+    document.getElementById('job-title').textContent = job.name;
+    document.getElementById('job-subtitle').textContent = `${job.description || ''} ${job.source_template_name ? '— from template: ' + job.source_template_name : ''}`.trim();
+    renderProgress(job);
+    renderTargets(job);
+
+    if (job.status !== 'PENDING' && job.status !== 'RUNNING' && pollIntervalId) {
+      clearInterval(pollIntervalId);
+      pollIntervalId = null;
+    }
+  }
+
+  if (window.AAAPlatform && AAAPlatform.onViewLeave) {
+    AAAPlatform.onViewLeave(() => { if (pollIntervalId) clearInterval(pollIntervalId); });
+  }
+
+  function checkStatusColor(status) {
+    if (status === 'PASS') return 'var(--signal)';
+    if (status === 'FAIL') return 'var(--red)';
+    if (status === 'WARNING') return 'var(--amber)';
+    return 'var(--text-dim)'; // NOT_APPLICABLE, MANUAL_REVIEW, UNKNOWN
+  }
+
+  function renderCheckResults(results) {
+    const wrap = document.getElementById('check-results-wrap');
+    document.getElementById('check-results-count').textContent = results.length
+      ? `${results.length} result(s), most recent run first`
+      : '';
+    if (results.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No checks run yet.</div>';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Device</th><th>Check</th><th>Status</th><th>Details</th><th>When</th></tr></thead>
+        <tbody>${results.map(r => `
+          <tr>
+            <td>${escapeHtml(r.device_name)}</td>
+            <td>${escapeHtml(r.check_name)}</td>
+            <td><span style="color:${checkStatusColor(r.status)};font-weight:600;">${escapeHtml(r.status)}</span></td>
+            <td class="content-sub">
+              ${escapeHtml(r.description)}
+              ${r.evidence && r.evidence.length ? '<div class="cell-mono" style="margin-top:4px;">Evidence: ' + r.evidence.map(escapeHtml).join(', ') + '</div>' : ''}
+              ${r.recommendation ? '<div class="cell-mono" style="margin-top:4px;color:var(--signal);">Fix: ' + escapeHtml(r.recommendation) + '</div>' : ''}
+            </td>
+            <td class="cell-mono content-sub">${new Date(r.created_at).toLocaleString()}</td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+  }
+
+  async function loadCheckResults() {
+    const res = await AAAPlatform.authedFetch(`/api/network-ops/jobs/${jobId}/check-results`);
+    if (!res.ok) return;
+    renderCheckResults(await res.json());
+  }
+
+  document.getElementById('run-checks-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('run-checks-btn');
+    btn.disabled = true;
+    btn.textContent = 'Running…';
+    const res = await AAAPlatform.authedFetch(`/api/network-ops/jobs/${jobId}/run-checks`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+    });
+    btn.disabled = false;
+    btn.textContent = 'Run Checks';
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const msg = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not run checks.';
+      AAAPlatform.toast(msg, 'error');
+      return;
+    }
+    AAAPlatform.toast('Checks run.');
+    await loadCheckResults();
+  });
+
+  async function loadAuditsForSelect() {
+    const select = document.getElementById('run-audit-select');
+    const res = await AAAPlatform.authedFetch('/api/network-ops/audits');
+    if (!res.ok) return;
+    const audits = await res.json();
+    select.innerHTML = audits.length
+      ? audits.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join('')
+      : '<option value="">— No audits defined —</option>';
+  }
+
+  document.getElementById('run-audit-btn').addEventListener('click', async () => {
+    const auditId = document.getElementById('run-audit-select').value;
+    if (!auditId) {
+      AAAPlatform.toast('No audit selected.', 'error');
+      return;
+    }
+    const btn = document.getElementById('run-audit-btn');
+    btn.disabled = true;
+    btn.textContent = 'Running…';
+    const res = await AAAPlatform.authedFetch(`/api/network-ops/jobs/${jobId}/run-audit/${auditId}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+    });
+    btn.disabled = false;
+    btn.textContent = 'Run Audit';
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const msg = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not run audit.';
+      AAAPlatform.toast(msg, 'error');
+      return;
+    }
+    const auditRun = await res.json();
+    AAAPlatform.toast(`Audit run complete — score ${auditRun.score.score}/100.`);
+    await loadCheckResults();
+  });
+
+  loadJob();
+  loadCheckResults();
+  loadAuditsForSelect();
+  pollIntervalId = setInterval(loadJob, 2500);
+</script>
+{% endblock %}

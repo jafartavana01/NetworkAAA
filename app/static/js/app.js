@@ -242,8 +242,6 @@ window.AAAPlatform = (function () {
       return visible.length ? visible[visible.length - 1] : null;
     }
 
-    let pendingCloseTarget = null;
-
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
 
@@ -253,7 +251,6 @@ window.AAAPlatform = (function () {
         // editing" -- the same safe default as its focused button,
         // not another level of confirmation.
         unsavedModal.hidden = true;
-        pendingCloseTarget = null;
         return;
       }
 
@@ -261,7 +258,6 @@ window.AAAPlatform = (function () {
       if (!target) return;
 
       if (dirtyModals.has(target) && unsavedModal) {
-        pendingCloseTarget = target;
         unsavedModal.hidden = false;
       } else {
         target.hidden = true;
@@ -273,16 +269,26 @@ window.AAAPlatform = (function () {
     if (keepEditingBtn) {
       keepEditingBtn.addEventListener('click', () => {
         document.getElementById('unsaved-changes-modal-backdrop').hidden = true;
-        pendingCloseTarget = null;
       });
     }
     if (discardBtn) {
       discardBtn.addEventListener('click', () => {
         document.getElementById('unsaved-changes-modal-backdrop').hidden = true;
-        if (pendingCloseTarget) {
-          pendingCloseTarget.hidden = true;
-          dirtyModals.delete(pendingCloseTarget);
-          pendingCloseTarget = null;
+        // Re-query for the currently-visible real modal AT CLICK TIME,
+        // rather than relying on a value captured earlier when Escape
+        // was first pressed. The dirty modal stays visible (just
+        // overlaid) for the entire time this confirm prompt is
+        // showing, so this is provably correct regardless of any
+        // staleness a captured-earlier reference could develop --
+        // deliberately removed the earlier `pendingCloseTarget`
+        // closure variable entirely rather than trust it, after a
+        // real report that "Discard and close" did nothing even after
+        // many clicks and this project's own testing could not
+        // conclusively reproduce a root cause to fix more narrowly.
+        const target = topVisibleModal();
+        if (target) {
+          target.hidden = true;
+          dirtyModals.delete(target);
         }
       });
     }

@@ -139,13 +139,13 @@ def _mavis_block(settings: AdSettings | None) -> str:
     nested directly inside `id = tac_plus-ng {}`, with `login backend
     = mavis` / `user backend = mavis` as sibling top-level directives.
     LDAP_SERVER_TYPE / LDAP_HOSTS / LDAP_BASE / LDAP_USER / LDAP_PASSWD
-    / LDAP_FILTER / LDAP_SCOPE / FLAG_USE_MEMBEROF / AD_GROUP_PREFIX
-    all appeared consistently across multiple independent real
-    configs. Deliberately NOT emitting a REQUIRE_*_GROUP_PREFIX
-    directive: sources disagreed on its exact name
-    (REQUIRE_AD_GROUP_PREFIX vs REQUIRE_TACACS_GROUP_PREFIX) and it's
-    optional, so omitting it avoids guessing between two names found
-    in different sources rather than picking one and hoping.
+    / LDAP_FILTER / LDAP_SCOPE / FLAG_USE_MEMBEROF / AD_GROUP_PREFIX /
+    UNLIMIT_AD_GROUP_MEMBERSHIP all appeared consistently across
+    multiple independent real configs. Deliberately NOT emitting a
+    REQUIRE_*_GROUP_PREFIX directive: sources disagreed on its exact
+    name (REQUIRE_AD_GROUP_PREFIX vs REQUIRE_TACACS_GROUP_PREFIX) and
+    it's optional, so omitting it avoids guessing between two names
+    found in different sources rather than picking one and hoping.
 
     Returns "" (no MAVIS block at all, local-only authentication
     continues exactly as before) when AD integration isn't enabled or
@@ -173,10 +173,52 @@ def _mavis_block(settings: AdSettings | None) -> str:
         lines.append(f"        setenv LDAP_USER = {_quote(settings.bind_dn)}")
     if password:
         lines.append(f"        setenv LDAP_PASSWD = {_quote(password)}")
-    if settings.group_prefix:
-        lines.append(f"        setenv AD_GROUP_PREFIX = {_quote(settings.group_prefix)}")
     if settings.use_memberof:
+        # AD_GROUP_PREFIX is ALWAYS emitted here (even as an empty
+        # string when the admin hasn't configured a specific prefix),
+        # not only when settings.group_prefix is set. This is a real,
+        # confirmed fix, not a guess: a live, controlled before/after
+        # test against a real AD server (via mavistest) showed that
+        # mavis_tacplus_ads.pl's group-membership reporting (the
+        # MEMBEROF and TACMEMBER attributes) does not activate AT ALL
+        # unless AD_GROUP_PREFIX is DEFINED in its environment -- not
+        # merely whether its value is non-empty. With the directive
+        # entirely absent (the platform's previous behavior whenever
+        # no prefix was configured), a real AUTH request that returned
+        # RESULT=ACK (fully successful authentication) still returned
+        # zero group information whatsoever -- meaning every
+        # group-based policy condition was silently guaranteed to
+        # never match any AD user, regardless of their real
+        # membership. Adding just `AD_GROUP_PREFIX = ""` to that same
+        # config, with nothing else changed, made MEMBEROF and
+        # TACMEMBER appear immediately, confirming both the mechanism
+        # and the fix in one controlled test. An empty value reports
+        # every group name completely unstripped, matching this
+        # platform's own existing assumption for the no-prefix case
+        # elsewhere (the Groups page's own AD-group-name suggestion
+        # logic).
+        lines.append(f"        setenv AD_GROUP_PREFIX = {_quote(settings.group_prefix or '')}")
         lines.append("        setenv FLAG_USE_MEMBEROF = 1")
+        # Confirmed, by the actual author of mavis_tacplus_ldap.pl, in
+        # a real support thread: WITHOUT this flag, a user's reported
+        # group membership is silently limited to exactly ONE group,
+        # even if they're really a member of several -- "the number of
+        # groups a user can be member of is limited to one" is the
+        # documented default. Given almost no real AD user is a member
+        # of only one group, and a policy might need to check several
+        # possible memberships, leaving this unset would silently
+        # break authorization for any user whose relevant group isn't
+        # the one (arbitrarily) chosen to report. Confirmed for
+        # mavis_tacplus_ldap.pl specifically; not independently
+        # confirmed for mavis_tacplus_ads.pl (the AD-specific variant
+        # this project actually uses -- see exec= below), but the two
+        # scripts share the same codebase and environment-variable
+        # conventions, and an unrecognized environment variable is
+        # confirmed elsewhere to be a harmless no-op/warning, not a
+        # hard failure -- so the downside of including this if it
+        # doesn't apply is minimal, and the upside if it does is
+        # substantial.
+        lines.append("        setenv UNLIMIT_AD_GROUP_MEMBERSHIP = 1")
     lines.append("        exec = /usr/local/lib/mavis/mavis_tacplus_ads.pl")
     lines.append("    }")
     lines.append("")

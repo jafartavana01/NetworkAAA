@@ -51,6 +51,9 @@ PERMISSION_CATALOG: list[Permission] = [
     Permission("admin_users:view", "View Admin Users", "See other platform administrator accounts."),
     Permission("admin_users:write", "Manage Admin Users", "Create, edit, and delete platform administrator accounts and roles."),
     Permission("platform_settings:write", "Manage Platform Settings", "Change network/HTTPS settings and certificates."),
+    Permission("network_ops:view", "View Network Operations", "See command jobs, their targets, and raw command output."),
+    Permission("network_ops:execute", "Run Command Jobs", "Create and run command jobs against devices and device groups."),
+    Permission("network_ops:templates", "Manage Command Templates", "Create, edit, and delete reusable command templates."),
 ]
 
 PERMISSION_KEYS = {p.key for p in PERMISSION_CATALOG}

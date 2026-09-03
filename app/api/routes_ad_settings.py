@@ -52,6 +52,7 @@ def _to_out(settings: AdSettings) -> AdSettingsOut:
         host=settings.host,
         port=settings.port,
         use_tls=settings.use_tls,
+        use_starttls=settings.use_starttls,
         bind_dn=settings.bind_dn,
         has_password=bool(settings.bind_password_encrypted),
         search_base=settings.search_base,
@@ -81,6 +82,7 @@ def update_settings(
     settings.host = payload.host
     settings.port = payload.port
     settings.use_tls = payload.use_tls
+    settings.use_starttls = payload.use_starttls
     settings.bind_dn = payload.bind_dn
     settings.search_base = payload.search_base
     settings.user_filter_template = payload.user_filter_template
@@ -106,7 +108,7 @@ def test_settings(
     saved = db.query(AdSettings).first()
 
     probe = AdSettings(
-        host=payload.host, port=payload.port, use_tls=payload.use_tls,
+        host=payload.host, port=payload.port, use_tls=payload.use_tls, use_starttls=payload.use_starttls,
         bind_dn=payload.bind_dn, search_base=payload.search_base,
         bind_password_encrypted=(saved.bind_password_encrypted if (not payload.bind_password and saved) else None),
     )
@@ -141,12 +143,16 @@ def search_ad_groups(
     account's own credentials. Requires the SAVED settings to have a
     host configured; works whether or not AD integration is currently
     "enabled" (a false start on browsing shouldn't require flipping
-    that switch first), same as app.services.ad_directory's own
-    fail-quiet-to-empty-list design."""
+    that switch first). Returns {"results": [...], "error": str|None}
+    -- a real search failure is now distinguishable from a genuinely
+    empty result, confirmed necessary by a real report where a group
+    name a user's own memberOf named correctly still showed as "no
+    matches" here with no way to tell why."""
     settings = db.query(AdSettings).first()
     if not settings or not settings.host or len(query.strip()) < 2:
-        return []
-    return ad_directory.search_groups(settings, query.strip())
+        return {"results": [], "error": None}
+    result = ad_directory.search_groups(settings, query.strip())
+    return {"results": result.results, "error": result.error}
 
 
 @router.get("/search-users")
@@ -159,5 +165,30 @@ def search_ad_users(
     page's AD-identity picker -- gated on tacacs_users:write."""
     settings = db.query(AdSettings).first()
     if not settings or not settings.host or len(query.strip()) < 2:
-        return []
-    return ad_directory.search_users(settings, query.strip())
+        return {"results": [], "error": None}
+    result = ad_directory.search_users(settings, query.strip())
+    return {"results": result.results, "error": result.error}
+
+
+@router.get("/user-group-memberships")
+def get_user_group_memberships(
+    identity: str,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("tacacs_users:write")),
+):
+    """
+    Shows exactly what group membership `tac_plus-ng` itself would see
+    for `identity` (a sAMAccountName or UPN) -- built specifically to
+    answer "why did this AD user get denied by ACL" directly, without
+    needing external LDAP tools. Returns {"found": False} when the
+    user isn't found or the lookup itself fails (bad credentials,
+    unreachable server) -- distinguishable in the response from a
+    successful lookup that simply found zero group memberships.
+    """
+    settings = db.query(AdSettings).first()
+    if not settings or not settings.host or not identity.strip():
+        return {"found": False}
+    result = ad_directory.get_user_group_memberships(settings, identity.strip())
+    if result is None:
+        return {"found": False}
+    return {"found": True, **result}

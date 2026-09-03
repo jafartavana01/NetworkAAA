@@ -38,6 +38,39 @@
     <h2 id="user-modal-title">Add user</h2>
     <form id="user-form">
       <input type="hidden" id="user-id">
+
+      <label class="field">
+        <span class="field-label">Authentication</span>
+        <select id="user-auth-source">
+          <option value="local">Local — password stored and verified by this platform</option>
+          <option value="ad">Active Directory — authenticates via tac_plus-ng's AD integration</option>
+        </select>
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;" id="user-auth-source-hint">Requires Active Directory to be configured and enabled under Platform → Active Directory to actually take effect in the generated configuration.</div>
+
+      <div class="panel panel-wide" id="user-ad-no-apply-note" style="margin:-4px 0 16px 0;border-color:var(--red);" hidden>
+        <div class="panel-body" style="font-size:12px;color:var(--red);">
+          ⚠ Adding an Active Directory user here does not require applying configuration, and won't show a pending change — tac_plus-ng authenticates any real AD user through MAVIS whether or not they're listed on this page at all. This entry exists purely for your own tracking. What actually controls whether this person can log in is real Active Directory group membership, matched by a policy — see the Groups page.
+        </div>
+      </div>
+
+      <div id="user-ad-auth-fields" hidden>
+        <label class="field">
+          <span class="field-label">Search AD users</span>
+          <input type="text" id="user-ad-search-input" placeholder="Type at least 2 characters…" autocomplete="off">
+        </label>
+        <div id="user-ad-search-results" style="margin-bottom:8px;"></div>
+        <div class="field-hint" style="margin-top:-2px;margin-bottom:14px;">Searches as you type. Selecting a match below fills in Username, Full Name, and AD Identity automatically — no password needed, since Active Directory handles that.</div>
+        <label class="field">
+          <span class="field-label">AD identity (username or UPN)</span>
+          <input type="text" id="user-ad-identity" placeholder="e.g. jdoe or jdoe@corp.example.com">
+        </label>
+        <div class="field-hint" style="margin-top:-10px;margin-bottom:8px;">Filled in automatically above, or type one directly if you already know it.</div>
+        <button type="button" class="btn-secondary btn-small" id="user-check-ad-groups-btn" style="width:auto;margin-bottom:8px;">Check real AD group membership</button>
+        <div class="field-hint" style="margin-top:-4px;margin-bottom:6px;">Shows exactly what group name(s) tac_plus-ng would see for this identity — useful when a login authenticates fine but is "denied by ACL": a policy's group condition must reference a name shown here, not a name only used inside this platform.</div>
+        <div id="user-ad-groups-result" style="margin-bottom:14px;"></div>
+      </div>
+
       <div class="field-row">
         <label class="field">
           <span class="field-label">Username</span>
@@ -51,7 +84,7 @@
           </div>
         </label>
       </div>
-      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng user identifier.</div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng user identifier. Filled in automatically when you select an AD user above; still editable if you want a different local identifier.</div>
 
       <label class="field">
         <span class="field-label">Full name</span>
@@ -59,20 +92,12 @@
       </label>
 
       <label class="field">
-        <span class="field-label">Authentication</span>
-        <select id="user-auth-source">
-          <option value="local">Local — password stored and verified by this platform</option>
-          <option value="ad">Active Directory — authenticates via tac_plus-ng's AD integration</option>
-        </select>
-      </label>
-      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;" id="user-auth-source-hint">Requires Active Directory to be configured and enabled under Platform → Active Directory to actually take effect in the generated configuration.</div>
-
-      <label class="field">
         <span class="field-label">Group</span>
         <select id="user-group-select">
           <option value="">— No group —</option>
         </select>
       </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:6px;" id="user-group-ad-hint" hidden>For an AD-authenticated user, this is a local, platform-only assignment — it does not drive tac_plus-ng's own authorization for them. A policy matching this user by group requires them to be a real member of a matching Active Directory group instead (see the Groups page for linking a local group to one).</div>
       <button type="button" class="quickadd-toggle" id="user-group-quickadd-toggle">+ New group</button>
       <div class="quickadd-panel" id="user-group-quickadd-panel" hidden>
         <div class="field-row">
@@ -95,25 +120,9 @@
       <div id="user-local-auth-fields">
         <label class="field">
           <span class="field-label">Password</span>
-          <input type="password" id="user-password" placeholder="">
+          <input type="password" id="user-password" placeholder="" autocomplete="new-password">
         </label>
         <div class="field-hint" id="user-secret-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new users. Never displayed once saved — leave blank when editing to keep the current password.</div>
-      </div>
-
-      <div id="user-ad-auth-fields" hidden>
-        <label class="field">
-          <span class="field-label">AD identity (username or UPN)</span>
-          <input type="text" id="user-ad-identity" placeholder="e.g. jdoe or jdoe@corp.example.com">
-        </label>
-        <div class="field-hint" style="margin-top:-10px;">Type it directly, or search Active Directory below and select a match.</div>
-        <div class="field-row" style="align-items:flex-end;margin-bottom:6px;">
-          <label class="field">
-            <span class="field-label">Search AD users</span>
-            <input type="text" id="user-ad-search-input" placeholder="Type at least 2 characters…">
-          </label>
-          <button type="button" class="btn-secondary btn-small" id="user-ad-search-btn" style="width:auto;margin-bottom:2px;">Search</button>
-        </div>
-        <div id="user-ad-search-results" style="margin-bottom:16px;"></div>
       </div>
 
       <label class="field">
@@ -212,23 +221,38 @@
     const isAd = document.getElementById('user-auth-source').value === 'ad';
     document.getElementById('user-local-auth-fields').hidden = isAd;
     document.getElementById('user-ad-auth-fields').hidden = !isAd;
+    document.getElementById('user-group-ad-hint').hidden = !isAd;
+    document.getElementById('user-ad-no-apply-note').hidden = !isAd;
   }
   document.getElementById('user-auth-source').addEventListener('change', toggleAuthSourceFields);
 
+  let userAdSearchRequestId = 0;
   async function searchAdUsers() {
     const query = document.getElementById('user-ad-search-input').value.trim();
     const resultsEl = document.getElementById('user-ad-search-results');
+    if (query.length === 0) {
+      resultsEl.innerHTML = '';
+      return;
+    }
     if (query.length < 2) {
       resultsEl.innerHTML = '<div class="content-sub">Type at least 2 characters.</div>';
       return;
     }
     resultsEl.innerHTML = '<div class="content-sub">Searching…</div>';
+    const requestId = ++userAdSearchRequestId;
     const res = await AAAPlatform.authedFetch(`/api/ad-settings/search-users?query=${encodeURIComponent(query)}`);
+    if (requestId !== userAdSearchRequestId) return; // a newer keystroke already started a later search; discard this stale response
     if (!res.ok) {
       resultsEl.innerHTML = '<div class="content-sub">Could not search AD — check the Active Directory settings page.</div>';
       return;
     }
-    const results = await res.json();
+    const data = await res.json();
+    if (requestId !== userAdSearchRequestId) return;
+    if (data.error) {
+      resultsEl.innerHTML = `<div class="content-sub" style="color:var(--red);">Search failed: ${escapeHtml(data.error)}</div>`;
+      return;
+    }
+    const results = data.results;
     if (results.length === 0) {
       resultsEl.innerHTML = '<div class="content-sub">No matches.</div>';
       return;
@@ -236,20 +260,77 @@
     resultsEl.innerHTML = results.map(r => `
       <div class="version-row">
         <span style="flex:1;">${escapeHtml(r.sam_account_name || r.upn)}${r.display_name ? ' <span class="content-sub">(' + escapeHtml(r.display_name) + ')</span>' : ''}</span>
-        <button type="button" class="btn-secondary btn-small" data-pick-ad-user="${escapeHtml(r.upn || r.sam_account_name)}">Use this</button>
+        <button type="button" class="btn-secondary btn-small"
+          data-pick-ad-identity="${escapeHtml(r.upn || r.sam_account_name)}"
+          data-pick-sam="${escapeHtml(r.sam_account_name || '')}"
+          data-pick-display-name="${escapeHtml(r.display_name || '')}">Use this</button>
       </div>
     `).join('');
-    resultsEl.querySelectorAll('[data-pick-ad-user]').forEach(btn => {
+    resultsEl.querySelectorAll('[data-pick-ad-identity]').forEach(btn => {
       btn.addEventListener('click', () => {
-        document.getElementById('user-ad-identity').value = btn.dataset.pickAdUser;
+        document.getElementById('user-ad-identity').value = btn.dataset.pickAdIdentity;
+
+        // Auto-fill Username and Full Name from the selected AD user
+        // -- this is the whole point of searching: find the person,
+        // don't retype what AD already knows. Only fills a field that
+        // is currently empty, so it never overwrites something the
+        // admin already typed deliberately; Username specifically is
+        // only filled if the AD sAMAccountName is actually a valid
+        // tac_plus-ng identifier (letters/digits/hyphens/underscores),
+        // since it's used directly as one -- a name containing
+        // characters outside that set is left for the admin to enter
+        // manually rather than silently producing an invalid value.
+        const usernameField = document.getElementById('user-username');
+        if (!usernameField.value.trim() && btn.dataset.pickSam && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(btn.dataset.pickSam)) {
+          usernameField.value = btn.dataset.pickSam;
+        }
+        const fullNameField = document.getElementById('user-fullname');
+        if (!fullNameField.value.trim() && btn.dataset.pickDisplayName) {
+          fullNameField.value = btn.dataset.pickDisplayName;
+        }
+
         resultsEl.innerHTML = '';
         document.getElementById('user-ad-search-input').value = '';
       });
     });
   }
-  document.getElementById('user-ad-search-btn').addEventListener('click', searchAdUsers);
-  document.getElementById('user-ad-search-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); searchAdUsers(); }
+
+  // Auto-search as the admin types, debounced -- no separate Search
+  // button or Enter-to-search needed. 400ms is long enough that a
+  // normal typing cadence doesn't fire a request per keystroke, short
+  // enough that it still feels immediate.
+  let userAdSearchDebounceTimer = null;
+  document.getElementById('user-ad-search-input').addEventListener('input', () => {
+    if (userAdSearchDebounceTimer) clearTimeout(userAdSearchDebounceTimer);
+    userAdSearchDebounceTimer = setTimeout(searchAdUsers, 400);
+  });
+
+  document.getElementById('user-check-ad-groups-btn').addEventListener('click', async () => {
+    const identity = document.getElementById('user-ad-identity').value.trim();
+    const resultEl = document.getElementById('user-ad-groups-result');
+    if (!identity) {
+      resultEl.innerHTML = '<div class="content-sub" style="color:var(--red);">Enter an AD identity first.</div>';
+      return;
+    }
+    resultEl.innerHTML = '<div class="content-sub">Looking up…</div>';
+    const res = await AAAPlatform.authedFetch(`/api/ad-settings/user-group-memberships?identity=${encodeURIComponent(identity)}`);
+    if (!res.ok) {
+      resultEl.innerHTML = '<div class="content-sub" style="color:var(--red);">Could not look this up — check the Active Directory settings page.</div>';
+      return;
+    }
+    const data = await res.json();
+    if (!data.found) {
+      resultEl.innerHTML = '<div class="content-sub" style="color:var(--red);">No matching AD user found for this identity.</div>';
+      return;
+    }
+    if (data.reported_groups.length === 0) {
+      const prefixNote = data.prefix_applied
+        ? ` (after filtering to the configured "${escapeHtml(data.prefix_applied)}" prefix)`
+        : '';
+      resultEl.innerHTML = `<div class="content-sub" style="color:var(--red);">tac_plus-ng would see NO group membership for this user${prefixNote} — this is very likely why authentication succeeds but authorization is denied by ACL. Raw AD groups this user actually belongs to: ${data.raw_groups.length ? escapeHtml(data.raw_groups.join(', ')) : '(none)'}</div>`;
+      return;
+    }
+    resultEl.innerHTML = `<div class="content-sub" style="color:var(--signal);">tac_plus-ng would see this user as a member of: <strong>${data.reported_groups.map(escapeHtml).join(', ')}</strong></div><div class="content-sub" style="margin-top:4px;">A policy's group condition must reference one of these exact names for this user to be permitted. Create or edit a local group on the Groups page with a matching name if none exists yet.</div>`;
   });
 
   function openModal(user) {
@@ -284,6 +365,8 @@
 
   function closeModal() {
     document.getElementById('user-modal-backdrop').hidden = true;
+    if (userAdSearchDebounceTimer) clearTimeout(userAdSearchDebounceTimer);
+    userAdSearchRequestId++; // invalidates any AD search response still in flight from this modal session
   }
 
   document.getElementById('add-user-btn').addEventListener('click', () => openModal(null));

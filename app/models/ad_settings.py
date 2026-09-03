@@ -55,7 +55,21 @@ class AdSettings(Base):
 
     host: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     port: Mapped[int] = mapped_column(Integer, nullable=False, default=389)
+    # Two genuinely distinct, mutually exclusive mechanisms -- confirmed
+    # by the ldap3 library's own documentation, which explicitly
+    # describes them as the two separate ways LDAP secures a
+    # connection. use_tls: dedicated SSL from the moment the socket
+    # opens (LDAPS, conventionally port 636). use_starttls: connect
+    # in the clear (conventionally port 389), then explicitly upgrade
+    # the SAME connection to TLS via the StartTLS extended operation
+    # before any bind is attempted -- see app.services.ad_directory
+    # for why the upgrade must complete before the bind, not after.
+    # Both depend on the domain controller actually having a working
+    # TLS/certificate setup; StartTLS is not an independent fallback
+    # for a DC with no TLS configured at all, per real-world reports
+    # from AD-specific StartTLS usage.
     use_tls: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    use_starttls: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     # Confirmed real from the upstream project's own AD integration
     # guide: a bind (service) account DN/UPN and password, an LDAP

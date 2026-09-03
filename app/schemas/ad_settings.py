@@ -18,6 +18,7 @@ class AdSettingsUpdate(BaseModel):
     host: str = Field(default="", max_length=255)
     port: int = Field(default=389, ge=1, le=65535)
     use_tls: bool = False
+    use_starttls: bool = False
     bind_dn: str = Field(default="", max_length=255)
     bind_password: str | None = Field(default=None, max_length=512)
     search_base: str = Field(default="", max_length=255)
@@ -33,6 +34,7 @@ class AdSettingsOut(BaseModel):
     host: str
     port: int
     use_tls: bool
+    use_starttls: bool
     bind_dn: str
     has_password: bool = False
     search_base: str
@@ -51,6 +53,7 @@ class AdTestRequest(BaseModel):
     host: str = Field(default="", max_length=255)
     port: int = Field(default=389, ge=1, le=65535)
     use_tls: bool = False
+    use_starttls: bool = False
     bind_dn: str = Field(default="", max_length=255)
     bind_password: str | None = Field(default=None, max_length=512)
     search_base: str = Field(default="", max_length=255)

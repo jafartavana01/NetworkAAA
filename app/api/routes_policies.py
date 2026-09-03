@@ -37,7 +37,7 @@ from ..models.group import TacacsGroup
 from ..models.policy import Policy
 from ..models.policy_command_set import PolicyCommandSet
 from ..schemas.policy import PolicyCreate, PolicyOut, PolicyUpdate, ReferencedCommandSet
-from ..services import policy_versioning
+from ..services import condition_engine, policy_versioning
 from .deps import require_permission, verify_csrf
 
 router = APIRouter(prefix="/api/policies", tags=["policies"])
@@ -114,6 +114,7 @@ def policy_to_out(db: Session, policy: Policy, command_sets: list[CommandSet] | 
         condition_group_name=group.name if group else None,
         condition_device_name=device.name if device else None,
         condition_device_group_name=device_group.name if device_group else None,
+        has_condition_tree=condition_engine.has_condition_tree(db, policy),
         default_priv_lvl=policy.default_priv_lvl,
         default_action=policy.default_action,
         command_sets=[ReferencedCommandSet(id=str(cs.id), name=cs.name, enabled=cs.enabled) for cs in command_sets],

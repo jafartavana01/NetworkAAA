@@ -75,6 +75,7 @@ The TACACS+ engine itself is **never modified**. NetworkAAA only ever *configure
 | **TACACS+ Users & Groups** | bcrypt-hashed passwords or AD-linked (no local password) accounts, native `tac_plus-ng` group support with member management, device-group membership, trusted-host field (stored for planning; not yet enforced) |
 | **Authorization Policies** | Priorities start at 0 and insert-and-shift like an ordered list (no manual renumbering, no reject-on-conflict); an interactive two-list condition picker as the default view plus a full AND/OR/NOT advanced tree builder with unlimited nesting; full version history with diff/restore; a Policy Simulator with a step-by-step evaluation trace; a silently-uncompilable policy is surfaced with a specific reason from the Config page and the global Apply button |
 | **Command Sets** | Reusable, named permit/deny rule collections referenced by one or more policies; "starts with / contains / exact / custom regex" pattern builder that correctly round-trips back to plain text, not raw regex, when you reopen a rule; promote a command straight from the Accounting page into a Command Set *or directly into a policy* |
+| **Network Operations** *(new)* | Run commands against one or more devices or device groups, with automatic deduplication when the same device is reachable through more than one selection; reusable Command Templates; live per-device, per-command execution progress with full raw output retained for every run; a small Check engine evaluating already-collected output against real Cisco IOS hardening checks (AAA, password encryption, VTY transport, HTTP server), never guessing when evidence is missing — a real execution and evaluation engine, kept deliberately distinct from Command Sets (a TACACS+ authorization concept, not a command-execution one) |
 | **Command Categories** | A vendor-scoped command taxonomy for reporting/filtering, with an optional risk-level tag |
 | **Dashboard** | Live active-sessions count and a "who accessed what in the last 5 minutes" table with a per-device drill-down, alongside hourly activity and authorization-result charts |
 | **Sessions & Accounting** | Session view correlating accounting start/stop records; searchable, filterable accounting logs with CSV export; AAA Health page with real permit/deny and failure-analysis breakdowns; Effective Access lookups |
@@ -164,6 +165,7 @@ The original 8-phase build plan is complete through Phase 7, plus a substantial 
 - TACACS+ user trusted-host (data model + GUI only — see limitations)
 - Full HTTPS control, per-admin trusted-host
 - Single-window GUI redesign (complete — every authenticated page), content-sized modals with sticky Save/Cancel
+- **Network Operations & Assurance Engine, Phase 1 (Command Jobs) and Phase 3 (Check Engine)** — run commands against devices/device groups with deduplication, reusable Command Templates, live per-device/per-command progress, full raw-output history; a small registry of real Cisco IOS hardening checks (AAA new-model, password encryption, VTY SSH-only transport, HTTP server disabled) evaluating already-collected job output, with a strict "never guess PASS/FAIL when evidence is missing" discipline. Two increments of a much larger, explicitly phased capability (12 phases total: Command Jobs → Templates → Check engine → Audit engine → security-auditor integration → remediation → compliance → scheduling → fleet Finder → visualization) — Phase 2 (Templates, effectively covered already by Phase 1) and Phase 3 are built; Phases 4-12 are not. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full assessment and what's deliberately deferred.
 
 **Not yet implemented:**
 
@@ -172,8 +174,9 @@ The original 8-phase build plan is complete through Phase 7, plus a substantial 
 - Automated test suite
 - RADIUS backend
 - "Demo mode" (timed configuration apply with automatic revert) — deliberately deferred; a scheduled auto-revert carries real safety weight if done wrong, and deserves a dedicated design pass rather than a rushed addition
-- Granular RBAC is applied to Policies, Command Sets, Devices, and Device Groups so far — not yet extended to every route in the API
+- Granular RBAC is applied to Policies, Command Sets, Devices, Device Groups, and Network Operations so far — not yet extended to every route in the API
 - Command-as-a-policy-condition — researched and deliberately not implemented (no confirmed `tac_plus-ng` syntax for it; see Known Limitations)
+- Network Operations & Assurance Engine, Phases 4-12 (Audit engine grouping multiple checks into a named suite, Cisco IOS security-auditor domain integration, interface security engine, remediation/approval workflow, compliance mapping, scheduling, fleet Finder, visualization) — not started. Phase 3's Check engine currently has only 4 starter checks, all Management Plane / Cisco IOS, all requiring `show running-config` specifically — no Layer 2/3/CoPP/VPN/PKI domains yet, no correlation engine, no per-device Security Score.
 
 ---
 
@@ -316,6 +319,15 @@ Visible from any page, whenever there's something that needs your attention:
 - Per-admin trusted-host IP allow-lists, full HTTPS control.
 - **Configuration backup/restore**: export a structured, version-tagged backup file; restoring checks version compatibility first and shows a diff before you confirm anything.
 - **Default AAA command template**: the Cisco IOS commands pushed by both Network Scan and the per-device Apply AAA action are admin-editable and persist for future use, not just a one-off edit.
+
+### Network Operations *(Phase 1 — Command Jobs, Phase 3 — Check Engine)*
+
+- Go to **Network Operations → Command Jobs → New Command Job**. Select targets (individual devices, device groups, or both — the same device selected two different ways only runs once), either type commands directly or start from a saved template, and supply SSH credentials for this run (never stored). **Preview Targets** shows exactly which devices will be reached before you commit.
+- Sequential or controlled-parallel execution, with configurable concurrency and per-command/connection timeouts.
+- The job detail page live-polls progress while running, then shows every command's classification (read-only / configuration / destructive / unknown — a heuristic aid, always review the actual command list yourself) alongside its full raw output.
+- **Templates** page: build and reuse named command lists across future jobs — include `show running-config` (or `sh run`) if you want to run Checks against a job's results afterward.
+- **Checks**: from a job's detail page, click **Run Checks** to evaluate that job's already-collected output against the registered check library — no new device connection is made. Results show PASS/FAIL/NOT_APPLICABLE with evidence and a suggested fix where relevant; a device whose job didn't collect `show running-config` output correctly reports NOT_APPLICABLE rather than a guessed result. See the **Checks** page for the full registered catalog.
+- This is an early slice of a much larger, explicitly phased capability — see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for what's built versus deliberately deferred.
 
 ---
 

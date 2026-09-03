@@ -10,10 +10,26 @@ Nothing here is invented: the upstream PREREQUISITES.txt lists a C
 compiler, GNU make, Perl, libpcre2 dev headers/libs, libc-ares dev
 headers/libs, and OpenSSL 3.x dev headers/libs as required to build
 tac_plus-ng; Python is called out as optional there and is not part of
-the tac_plus-ng build itself. Perl CPAN modules used only by the
-optional `mavis` backends (LDAP/RADIUS auth backends, not the TACACS+
-core) are intentionally NOT installed by default -- they belong to a
-future LDAP/RADIUS module (spec sections 46/22), not TACACS+ core.
+the tac_plus-ng build itself.
+
+MAVIS_LDAP_DEPS: Active Directory integration is now a real, shipped
+feature of this platform (not a future one) -- an earlier version of
+this file deferred these packages with the reasoning "belong to a
+future LDAP/RADIUS module", which is now outdated given that module
+exists. Added after a real, confirmed production failure: without
+`libnet-ldap-perl` (the Debian/Ubuntu package providing Perl's
+Net::LDAP module -- confirmed via multiple independent Debian package
+pages, not guessed), `mavis_tacplus_ads.pl` cannot even load --
+"Can't locate Net/LDAP.pm in @INC" -- so it dies at the Perl module
+loading stage on every single login attempt, before ever attempting
+an LDAP connection at all. This happens regardless of how correctly
+this platform's own AD settings, certificates, or TLS configuration
+are set up, since the failure is entirely upstream of any of that.
+`libio-socket-ssl-perl` is included alongside it for the same reason
+-- LDAPS/StartTLS support within the Perl script itself needs it, and
+it's only a Debian "Suggests" on libnet-ldap-perl (not a hard
+dependency apt pulls in automatically), so it must be listed
+explicitly rather than assumed to come along for free.
 
 NOTE ON `apt-get update`: runs once, automatically, before checking
 for missing packages -- restored after previously being removed on
@@ -41,6 +57,14 @@ TAC_PLUS_NG_BUILD_DEPS = [
     "pkg-config",
 ]
 
+# Perl CPAN modules the mavis LDAP/AD backend (mavis_tacplus_ads.pl,
+# which itself delegates to mavis_tacplus_ldap.pl) needs at runtime --
+# see the module docstring above for why these are no longer deferred.
+MAVIS_LDAP_DEPS = [
+    "libnet-ldap-perl",     # provides Net::LDAP -- confirmed required; without it mavis_tacplus_ads.pl fails to load at all
+    "libio-socket-ssl-perl",  # LDAPS/StartTLS support within the Perl script
+]
+
 # Packages required to run the management plane (this application).
 MANAGEMENT_PLANE_DEPS = [
     "python3",
@@ -56,7 +80,7 @@ MANAGEMENT_PLANE_DEPS = [
                             # installer.sudoers_setup (visudo + sudo -n)
 ]
 
-ALL_PACKAGES = TAC_PLUS_NG_BUILD_DEPS + MANAGEMENT_PLANE_DEPS
+ALL_PACKAGES = TAC_PLUS_NG_BUILD_DEPS + MAVIS_LDAP_DEPS + MANAGEMENT_PLANE_DEPS
 
 
 def _installed_packages() -> set[str]:
@@ -90,7 +114,7 @@ def ensure_packages(packages: list[str]) -> list[str]:
     from the static lists in this module -- never from free-form user
     input -- before being placed in an apt-get argv.
     """
-    allowed = set(TAC_PLUS_NG_BUILD_DEPS + MANAGEMENT_PLANE_DEPS)
+    allowed = set(TAC_PLUS_NG_BUILD_DEPS + MAVIS_LDAP_DEPS + MANAGEMENT_PLANE_DEPS)
     packages = [p for p in packages if p in allowed]
 
     already = _installed_packages()

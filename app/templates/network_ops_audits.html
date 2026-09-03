@@ -1,0 +1,239 @@
+{% extends "app_shell.html" %}
+{% block title %}Audits — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Network Operations / Audits{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Audits</h1>
+    <p class="content-sub">A named, reusable collection of Checks — run one against a Command Job's results from that job's own detail page to get an aggregated, transparent score.</p>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="audit-count"></span>
+    <button class="btn-primary btn-small" id="add-audit-btn" style="width:auto;">+ New Audit</button>
+  </div>
+
+  <div id="audits-table-wrap">
+    <div class="empty-state">Loading audits…</div>
+  </div>
+
+  <div class="content-head" style="margin-top:32px;">
+    <h2>Audit Run History</h2>
+  </div>
+  <div id="audit-runs-table-wrap">
+    <div class="empty-state">Loading…</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="audit-modal-backdrop" hidden>
+  <div class="modal" style="max-width: min(92vw, 560px);max-height:88vh;overflow-y:auto;">
+    <h2 id="audit-modal-title">New Audit</h2>
+    <form id="audit-form">
+      <input type="hidden" id="audit-id">
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input type="text" id="audit-name" required maxlength="128">
+      </label>
+      <label class="field">
+        <span class="field-label">Description</span>
+        <input type="text" id="audit-description">
+      </label>
+      <div class="field-label" style="margin-bottom:6px;">Checks included</div>
+      <div id="audit-checks-list" style="border:1px solid var(--line);border-radius:var(--radius);padding:8px;margin-bottom:14px;"></div>
+
+      <div id="audit-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="audit-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Save Audit</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  let audits = [];
+  let allChecks = [];
+
+  async function loadAllChecks() {
+    const res = await AAAPlatform.authedFetch('/api/network-ops/checks');
+    allChecks = res.ok ? await res.json() : [];
+  }
+
+  async function loadAudits() {
+    const wrap = document.getElementById('audits-table-wrap');
+    const res = await AAAPlatform.authedFetch('/api/network-ops/audits');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) {
+      wrap.innerHTML = '<div class="empty-state">Could not load audits.</div>';
+      return;
+    }
+    audits = await res.json();
+    document.getElementById('audit-count').textContent = audits.length + (audits.length === 1 ? ' audit' : ' audits');
+    if (audits.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No audits yet.</div>';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Description</th><th>Checks</th><th></th></tr></thead>
+        <tbody>${audits.map(a => `
+          <tr>
+            <td>${escapeHtml(a.name)}</td>
+            <td class="content-sub">${escapeHtml(a.description || '—')}</td>
+            <td class="cell-mono content-sub">${a.check_keys.length} check(s)</td>
+            <td class="cell-actions">
+              <button class="btn-secondary btn-small" data-edit="${a.id}">Edit</button>
+              <button class="btn-danger btn-small" data-delete="${a.id}">Delete</button>
+            </td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+    wrap.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.addEventListener('click', () => openModal(audits.find(a => a.id === btn.dataset.edit)));
+    });
+    wrap.querySelectorAll('[data-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deleteAudit(btn.dataset.delete));
+    });
+  }
+
+  function renderChecksChecklist(selectedKeys) {
+    const wrap = document.getElementById('audit-checks-list');
+    if (allChecks.length === 0) {
+      wrap.innerHTML = '<div class="content-sub">No checks registered.</div>';
+      return;
+    }
+    wrap.innerHTML = allChecks.map(c => `
+      <label class="checkbox-field field" style="margin-bottom:8px;">
+        <input type="checkbox" value="${c.check_key}" ${selectedKeys.includes(c.check_key) ? 'checked' : ''}>
+        <span>${escapeHtml(c.name)} <span class="content-sub">(${escapeHtml(c.category)})</span></span>
+      </label>
+    `).join('');
+  }
+
+  function openModal(audit) {
+    document.getElementById('audit-form').reset();
+    document.getElementById('audit-form-error').hidden = true;
+    if (audit) {
+      document.getElementById('audit-modal-title').textContent = 'Edit Audit';
+      document.getElementById('audit-id').value = audit.id;
+      document.getElementById('audit-name').value = audit.name;
+      document.getElementById('audit-description').value = audit.description || '';
+      renderChecksChecklist(audit.check_keys);
+    } else {
+      document.getElementById('audit-modal-title').textContent = 'New Audit';
+      document.getElementById('audit-id').value = '';
+      renderChecksChecklist([]);
+    }
+    document.getElementById('audit-modal-backdrop').hidden = false;
+  }
+
+  document.getElementById('add-audit-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('audit-cancel-btn').addEventListener('click', () => { document.getElementById('audit-modal-backdrop').hidden = true; });
+  document.getElementById('audit-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'audit-modal-backdrop') document.getElementById('audit-modal-backdrop').hidden = true;
+  });
+
+  document.getElementById('audit-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('audit-form-error');
+    errorBox.hidden = true;
+
+    const id = document.getElementById('audit-id').value;
+    const checkedBoxes = Array.from(document.querySelectorAll('#audit-checks-list input[type=checkbox]:checked'));
+    const checkKeys = checkedBoxes.map(cb => cb.value);
+    if (checkKeys.length === 0) {
+      errorBox.textContent = 'Select at least one check.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const payload = {
+      name: document.getElementById('audit-name').value,
+      description: document.getElementById('audit-description').value || null,
+      check_keys: checkKeys,
+    };
+
+    const url = id ? `/api/network-ops/audits/${id}` : '/api/network-ops/audits';
+    const method = id ? 'PUT' : 'POST';
+    const res = await AAAPlatform.authedFetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Could not save audit.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+    document.getElementById('audit-modal-backdrop').hidden = true;
+    AAAPlatform.toast(id ? 'Audit updated.' : 'Audit created.');
+    loadAudits();
+  });
+
+  async function deleteAudit(id) {
+    const audit = audits.find(a => a.id === id);
+    if (!confirm(`Delete audit "${audit ? audit.name : id}"?`)) return;
+    const res = await AAAPlatform.authedFetch(`/api/network-ops/audits/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not delete audit.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Audit deleted.');
+    loadAudits();
+  }
+
+  function scoreColor(score) {
+    if (score >= 80) return 'var(--signal)';
+    if (score >= 50) return 'var(--amber)';
+    return 'var(--red)';
+  }
+
+  async function loadAuditRuns() {
+    const wrap = document.getElementById('audit-runs-table-wrap');
+    const res = await AAAPlatform.authedFetch('/api/network-ops/audit-runs');
+    if (!res.ok) {
+      wrap.innerHTML = '<div class="empty-state">Could not load audit run history.</div>';
+      return;
+    }
+    const runs = await res.json();
+    if (runs.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No audits run yet.</div>';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Audit</th><th>Job</th><th>Score</th><th>Pass / Fail / N-A</th><th>Run by</th><th>When</th></tr></thead>
+        <tbody>${runs.map(r => `
+          <tr>
+            <td>${escapeHtml(r.audit_name)}</td>
+            <td>${escapeHtml(r.job_name)}</td>
+            <td><strong style="color:${scoreColor(r.score.score)};">${r.score.score}</strong> / 100</td>
+            <td class="cell-mono content-sub">${r.score.passed} / ${r.score.failed} / ${r.score.not_applicable}</td>
+            <td class="content-sub">${escapeHtml(r.created_by_admin_username || '—')}</td>
+            <td class="cell-mono content-sub">${new Date(r.created_at).toLocaleString()}</td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+  }
+
+  (async () => {
+    await loadAllChecks();
+    await loadAudits();
+    await loadAuditRuns();
+  })();
+</script>
+{% endblock %}

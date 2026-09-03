@@ -1,0 +1,62 @@
+{% extends "app_shell.html" %}
+{% block title %}Checks — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Network Operations / Checks{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Checks</h1>
+    <p class="content-sub">A registered, code-defined set of evaluators — run them against a completed Command Job's collected output from that job's own detail page.</p>
+  </div>
+
+  <div id="checks-table-wrap">
+    <div class="empty-state">Loading checks…</div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function severityColor(s) {
+    return { CRITICAL: 'var(--red)', HIGH: 'var(--red)', MEDIUM: 'var(--amber)', LOW: 'var(--text-dim)', INFO: 'var(--text-dim)' }[s] || 'var(--text-dim)';
+  }
+
+  async function loadChecks() {
+    const wrap = document.getElementById('checks-table-wrap');
+    const res = await AAAPlatform.authedFetch('/api/network-ops/checks');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) {
+      wrap.innerHTML = '<div class="empty-state">Could not load checks.</div>';
+      return;
+    }
+    const checks = await res.json();
+    if (checks.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No checks registered.</div>';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Category</th><th>Severity</th><th>Requires</th><th>Description</th><th>Status</th></tr></thead>
+        <tbody>${checks.map(c => `
+          <tr>
+            <td>${escapeHtml(c.name)}</td>
+            <td class="content-sub">${escapeHtml(c.category)}</td>
+            <td><span style="color:${severityColor(c.default_severity)};">${escapeHtml(c.default_severity)}</span></td>
+            <td class="cell-mono content-sub">${c.required_commands.map(escapeHtml).join(', ')}</td>
+            <td class="content-sub">${escapeHtml(c.description)}</td>
+            <td>${c.enabled ? '<span class="badge badge-on">Enabled</span>' : '<span class="badge badge-off">Disabled</span>'}</td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+  }
+
+  loadChecks();
+</script>
+{% endblock %}

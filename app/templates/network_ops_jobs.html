@@ -1,0 +1,315 @@
+{% extends "app_shell.html" %}
+{% block title %}Command Jobs — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Network Operations / Command Jobs{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Command Jobs</h1>
+    <p class="content-sub">Run commands against one or more devices, or entire device groups. Every execution is recorded with full raw output.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:16px;border-color:var(--red);">
+    <div class="panel-body" style="font-size:12px;color:var(--red);">
+      ⚠ SSH username/password below are used only for this job — never stored. Commands run exactly as written; review the target list and command list carefully before executing, especially for configuration-changing commands.
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="job-count"></span>
+    <button class="btn-primary btn-small" id="new-job-btn" style="width:auto;">+ New Command Job</button>
+  </div>
+
+  <div id="jobs-table-wrap">
+    <div class="empty-state">Loading jobs…</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="job-modal-backdrop" hidden>
+  <div class="modal" style="max-width: min(92vw, 720px);max-height:88vh;overflow-y:auto;">
+    <h2>New Command Job</h2>
+    <form id="job-form">
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input type="text" id="job-name" required maxlength="128">
+      </label>
+      <label class="field">
+        <span class="field-label">Description</span>
+        <input type="text" id="job-description">
+      </label>
+
+      <div class="field-label" style="margin-bottom:6px;">Targets</div>
+      <div class="field-row" style="align-items:flex-start;">
+        <div class="field" style="flex:1;">
+          <span class="field-label">Individual Devices</span>
+          <div id="job-devices-list" style="border:1px solid var(--line);border-radius:var(--radius);padding:8px;min-height:50px;margin-bottom:8px;"></div>
+          <div class="field-row" style="align-items:flex-end;margin-bottom:0;">
+            <select id="job-devices-add-select" style="flex:1;"></select>
+            <button type="button" class="btn-secondary btn-small" id="job-devices-add-btn" style="width:auto;">Add</button>
+          </div>
+        </div>
+        <div class="field" style="flex:1;">
+          <span class="field-label">Device Groups</span>
+          <div id="job-groups-list" style="border:1px solid var(--line);border-radius:var(--radius);padding:8px;min-height:50px;margin-bottom:8px;"></div>
+          <div class="field-row" style="align-items:flex-end;margin-bottom:0;">
+            <select id="job-groups-add-select" style="flex:1;"></select>
+            <button type="button" class="btn-secondary btn-small" id="job-groups-add-btn" style="width:auto;">Add</button>
+          </div>
+        </div>
+      </div>
+      <button type="button" class="btn-ghost btn-small" id="preview-targets-btn" style="width:auto;margin:6px 0 14px 0;">Preview Targets</button>
+      <div id="preview-targets-result" style="margin-bottom:14px;"></div>
+
+      <label class="field">
+        <span class="field-label">Start from a template (optional)</span>
+        <select id="job-template-select"><option value="">— None, type commands manually —</option></select>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Commands</span>
+        <textarea id="job-commands" rows="8" placeholder="terminal length 0&#10;show version&#10;show inventory" style="width:100%;font-family:var(--font-mono);font-size:12px;background:var(--bg-input);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;color:var(--text-primary);"></textarea>
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">One command per line, sent in this exact order.</div>
+
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">SSH Username</span>
+          <input type="text" id="job-ssh-username" required>
+        </label>
+        <label class="field">
+          <span class="field-label">SSH Password</span>
+          <input type="password" id="job-ssh-password" required>
+        </label>
+      </div>
+
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Execution</span>
+          <select id="job-execution-mode">
+            <option value="sequential">Sequential</option>
+            <option value="parallel">Controlled Parallel</option>
+          </select>
+        </label>
+        <label class="field" style="flex:0 0 140px;">
+          <span class="field-label">Concurrency</span>
+          <input type="number" id="job-concurrency" value="5" min="1" max="50">
+        </label>
+      </div>
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Command Timeout (sec)</span>
+          <input type="number" id="job-command-timeout" value="30" min="1" max="600">
+        </label>
+        <label class="field">
+          <span class="field-label">Connection Timeout (sec)</span>
+          <input type="number" id="job-connection-timeout" value="10" min="1" max="120">
+        </label>
+      </div>
+
+      <div id="job-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="job-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Execute Job</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  let allDevices = [];
+  let allDeviceGroups = [];
+  let allTemplates = [];
+  let jobDeviceEntries = [];
+  let jobGroupEntries = [];
+
+  async function loadReferenceData() {
+    const [devicesRes, groupsRes, templatesRes] = await Promise.all([
+      AAAPlatform.authedFetch('/api/devices'),
+      AAAPlatform.authedFetch('/api/device-groups'),
+      AAAPlatform.authedFetch('/api/network-ops/templates'),
+    ]);
+    allDevices = devicesRes.ok ? await devicesRes.json() : [];
+    allDeviceGroups = groupsRes.ok ? await groupsRes.json() : [];
+    allTemplates = templatesRes.ok ? await templatesRes.json() : [];
+  }
+
+  function renderJobDeviceLists() {
+    const devEl = document.getElementById('job-devices-list');
+    devEl.innerHTML = jobDeviceEntries.length
+      ? jobDeviceEntries.map((e, i) => `<div class="version-row"><span style="flex:1;">${escapeHtml(e.name)}</span><button type="button" class="btn-danger btn-small" data-rm-dev="${i}">×</button></div>`).join('')
+      : '<div class="content-sub">None selected</div>';
+    devEl.querySelectorAll('[data-rm-dev]').forEach(btn => btn.addEventListener('click', () => { jobDeviceEntries.splice(parseInt(btn.dataset.rmDev, 10), 1); renderJobDeviceLists(); }));
+
+    const grpEl = document.getElementById('job-groups-list');
+    grpEl.innerHTML = jobGroupEntries.length
+      ? jobGroupEntries.map((e, i) => `<div class="version-row"><span style="flex:1;">${escapeHtml(e.name)}</span><button type="button" class="btn-danger btn-small" data-rm-grp="${i}">×</button></div>`).join('')
+      : '<div class="content-sub">None selected</div>';
+    grpEl.querySelectorAll('[data-rm-grp]').forEach(btn => btn.addEventListener('click', () => { jobGroupEntries.splice(parseInt(btn.dataset.rmGrp, 10), 1); renderJobDeviceLists(); }));
+
+    const chosenDevIds = new Set(jobDeviceEntries.map(e => e.id));
+    document.getElementById('job-devices-add-select').innerHTML = allDevices.filter(d => !chosenDevIds.has(d.id)).map(d => `<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
+    const chosenGrpIds = new Set(jobGroupEntries.map(e => e.id));
+    document.getElementById('job-groups-add-select').innerHTML = allDeviceGroups.filter(g => !chosenGrpIds.has(g.id)).map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  }
+
+  document.getElementById('job-devices-add-btn').addEventListener('click', () => {
+    const select = document.getElementById('job-devices-add-select');
+    const id = select.value;
+    if (!id) return;
+    const device = allDevices.find(d => d.id === id);
+    if (device) jobDeviceEntries.push({ id, name: device.name });
+    renderJobDeviceLists();
+  });
+  document.getElementById('job-groups-add-btn').addEventListener('click', () => {
+    const select = document.getElementById('job-groups-add-select');
+    const id = select.value;
+    if (!id) return;
+    const group = allDeviceGroups.find(g => g.id === id);
+    if (group) jobGroupEntries.push({ id, name: group.name });
+    renderJobDeviceLists();
+  });
+
+  document.getElementById('job-template-select').addEventListener('change', (e) => {
+    const template = allTemplates.find(t => t.id === e.target.value);
+    if (template) document.getElementById('job-commands').value = template.commands.join('\n');
+  });
+
+  document.getElementById('preview-targets-btn').addEventListener('click', async () => {
+    const resultBox = document.getElementById('preview-targets-result');
+    resultBox.innerHTML = '<div class="content-sub">Resolving…</div>';
+    const res = await AAAPlatform.authedFetch('/api/network-ops/preview-targets', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_ids: jobDeviceEntries.map(e => e.id), device_group_ids: jobGroupEntries.map(e => e.id) }),
+    });
+    if (!res.ok) {
+      resultBox.innerHTML = '<div class="content-sub" style="color:var(--red);">Could not resolve targets.</div>';
+      return;
+    }
+    const resolved = await res.json();
+    if (resolved.length === 0) {
+      resultBox.innerHTML = '<div class="content-sub">No devices would be targeted.</div>';
+      return;
+    }
+    resultBox.innerHTML = `<div class="content-sub" style="margin-bottom:6px;">${resolved.length} device(s) will be targeted:</div>` +
+      resolved.map(r => `<div class="cell-mono content-sub">• ${escapeHtml(r.device_name)} (${escapeHtml(r.device_ip_address)}) — ${escapeHtml(r.resolved_from)}</div>`).join('');
+  });
+
+  function openJobModal() {
+    document.getElementById('job-form').reset();
+    document.getElementById('job-form-error').hidden = true;
+    document.getElementById('preview-targets-result').innerHTML = '';
+    jobDeviceEntries = [];
+    jobGroupEntries = [];
+    renderJobDeviceLists();
+    document.getElementById('job-template-select').innerHTML =
+      '<option value="">— None, type commands manually —</option>' + allTemplates.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+    document.getElementById('job-modal-backdrop').hidden = false;
+  }
+  document.getElementById('new-job-btn').addEventListener('click', openJobModal);
+  document.getElementById('job-cancel-btn').addEventListener('click', () => { document.getElementById('job-modal-backdrop').hidden = true; });
+  document.getElementById('job-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'job-modal-backdrop') document.getElementById('job-modal-backdrop').hidden = true;
+  });
+
+  document.getElementById('job-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('job-form-error');
+    errorBox.hidden = true;
+
+    const templateId = document.getElementById('job-template-select').value || null;
+    const commandsText = document.getElementById('job-commands').value.trim();
+    const commands = commandsText ? commandsText.split('\n').map(l => l.trim()).filter(Boolean) : null;
+
+    if (!templateId && !commands) {
+      errorBox.textContent = 'Provide commands, or pick a template.';
+      errorBox.hidden = false;
+      return;
+    }
+    if (jobDeviceEntries.length === 0 && jobGroupEntries.length === 0) {
+      errorBox.textContent = 'Select at least one device or device group.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const payload = {
+      name: document.getElementById('job-name').value,
+      description: document.getElementById('job-description').value || null,
+      targets: { device_ids: jobDeviceEntries.map(e => e.id), device_group_ids: jobGroupEntries.map(e => e.id) },
+      commands: templateId ? null : commands,
+      template_id: templateId,
+      ssh_username: document.getElementById('job-ssh-username').value,
+      ssh_password: document.getElementById('job-ssh-password').value,
+      execution_mode: document.getElementById('job-execution-mode').value,
+      concurrency: parseInt(document.getElementById('job-concurrency').value, 10),
+      command_timeout_seconds: parseInt(document.getElementById('job-command-timeout').value, 10),
+      connection_timeout_seconds: parseInt(document.getElementById('job-connection-timeout').value, 10),
+    };
+
+    const res = await AAAPlatform.authedFetch('/api/network-ops/jobs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Could not create job.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+    const job = await res.json();
+    document.getElementById('job-modal-backdrop').hidden = true;
+    window.location.href = `/network-ops/jobs/${job.id}`;
+  });
+
+  function statusBadge(status) {
+    const colorClass = { COMPLETED: 'badge-on', PARTIAL: 'badge-off', FAILED: 'badge-off', RUNNING: 'badge-on', PENDING: 'badge-off', CANCELLED: 'badge-off' }[status] || 'badge-off';
+    return `<span class="badge ${colorClass}">${escapeHtml(status)}</span>`;
+  }
+
+  async function loadJobs() {
+    const wrap = document.getElementById('jobs-table-wrap');
+    const res = await AAAPlatform.authedFetch('/api/network-ops/jobs');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) {
+      wrap.innerHTML = '<div class="empty-state">Could not load jobs.</div>';
+      return;
+    }
+    const jobs = await res.json();
+    document.getElementById('job-count').textContent = jobs.length + (jobs.length === 1 ? ' job' : ' jobs');
+    if (jobs.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No command jobs yet.</div>';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Status</th><th>Targets</th><th>Created by</th><th>Created</th><th></th></tr></thead>
+        <tbody>${jobs.map(j => `
+          <tr>
+            <td>${escapeHtml(j.name)}</td>
+            <td>${statusBadge(j.status)}</td>
+            <td class="cell-mono">${j.target_count}</td>
+            <td>${escapeHtml(j.created_by_admin_username || '—')}</td>
+            <td class="cell-mono content-sub">${new Date(j.created_at).toLocaleString()}</td>
+            <td class="cell-actions"><a href="/network-ops/jobs/${j.id}" class="btn-secondary btn-small">View</a></td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+  }
+
+  (async () => {
+    await loadReferenceData();
+    await loadJobs();
+  })();
+</script>
+{% endblock %}

@@ -682,7 +682,14 @@
       if (p.condition_group_name) conditionParts.push(`group=${p.condition_group_name}`);
       if (p.condition_device_name) conditionParts.push(`device=${p.condition_device_name}`);
       if (p.condition_device_group_name) conditionParts.push(`device-group=${p.condition_device_group_name}`);
-      const conditionsText = conditionParts.length ? conditionParts.join(', ') : 'unconditional';
+      // has_condition_tree is checked FIRST -- a policy migrated to the
+      // Advanced condition builder has none of the legacy flat fields
+      // set at all (they're mutually exclusive models), so relying on
+      // conditionParts alone here always showed "unconditional" for
+      // any such policy, even one with real, non-trivial conditions.
+      const conditionsText = p.has_condition_tree
+        ? 'advanced conditions (see Edit)'
+        : (conditionParts.length ? conditionParts.join(', ') : 'unconditional');
 
       return `
       <tr draggable="true" data-row-index="${i}" class="draggable-row">

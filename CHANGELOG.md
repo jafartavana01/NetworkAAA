@@ -10,6 +10,351 @@ it was built alongside.
 
 ---
 
+## 2026-09-03
+
+### Fixed — the real root cause of AD group authorization: `AD_GROUP_PREFIX` must be defined, not merely non-empty
+
+Confirmed with a live, controlled before/after test against the real
+AD server this session has been debugging against, using `mavistest`
+directly rather than any documentation or secondhand example:
+
+With `AD_GROUP_PREFIX` entirely absent from the generated config
+(this platform's previous behavior whenever no specific prefix was
+configured), a real `AUTH`-type request against a real AD user
+returned `RESULT=ACK` -- fully successful authentication -- but
+**zero** group attributes of any kind. Adding a single line,
+`setenv AD_GROUP_PREFIX = ""` (empty, not a real prefix), with
+nothing else changed, made `MEMBEROF` and `TACMEMBER` appear
+immediately in the exact same request, correctly listing every group
+the user actually belongs to, completely unstripped.
+
+This means `mavis_tacplus_ads.pl`'s group-membership reporting
+requires the variable to be *defined*, not merely for its value to be
+non-empty -- a materially different requirement than assumed
+previously, and the direct explanation for every group-based
+authorization failure investigated this session: since no group
+information was ever being returned at all, any policy checking
+`member == X` was guaranteed to never match any AD user, regardless
+of the condition or the user's real membership.
+
+`_mavis_block()` now always emits `AD_GROUP_PREFIX` whenever memberOf
+-based lookup is enabled -- using the admin's configured value if
+set, or an empty string otherwise -- rather than omitting the
+directive entirely when no prefix was configured. Verified with 4
+real execution tests reproducing the exact confirmed live scenario
+plus edge cases (a real prefix still passes through correctly;
+nothing is emitted when memberOf itself is disabled). Also fixed,
+along the way, three separate `mavistest` usage errors that
+repeatedly produced misleading or empty output during this
+investigation: the wrong config file path/extension, the wrong
+`<type>` value (`TAC_PLUS` instead of the tool's actual `TACPLUS`),
+and stdio buffering differences between a real terminal and a
+redirected pipe -- none of which turned out to be the underlying bug,
+but all of which cost real debugging time before being resolved.
+
+---
+
+## 2026-09-02
+
+### Fixed — the actual root cause of AD login failures: missing Perl module
+
+Real production log analysis. Every previous AD fix this session (LDAPS
+TLS configuration, `UNLIMIT_AD_GROUP_MEMBERSHIP`) was correct but
+could never have mattered on its own, because `mavis_tacplus_ads.pl`
+was failing before it ever got that far:
+
+```
+Can't locate Net/LDAP.pm in @INC (you may need to install the Net::LDAP module)
+BEGIN failed--compilation aborted at /usr/local/lib/mavis/mavis_tacplus_ldap.pl line 294.
+external: /usr/local/lib/mavis/mavis_tacplus_ads.pl respawning too fast; throttling for 30 seconds.
+```
+
+- **`installer/apt_deps.py`**: now installs `libnet-ldap-perl`
+  (confirmed, via multiple independent Debian package pages, as the
+  correct Debian/Ubuntu package providing Perl's `Net::LDAP` module)
+  and `libio-socket-ssl-perl` (LDAPS/StartTLS support within the Perl
+  script itself — only a "Suggests" on the former, so not pulled in
+  automatically, and had to be listed explicitly). An earlier version
+  of this file deliberately deferred mavis's Perl dependencies with
+  the reasoning "belong to a future LDAP/RADIUS module" — that future
+  arrived when AD integration shipped, and this closes the gap.
+- Without this fix, `mavis_tacplus_ads.pl` cannot even load on any
+  login attempt, regardless of how correctly this platform's own AD
+  settings, TLS configuration, or certificates are set up — the
+  failure happens entirely upstream of any of that, at the Perl
+  module loading stage.
+
+### Improved — AD search is now live, auto-search as you type
+
+On both the Users page (searching AD users) and the Groups page
+(searching AD groups): removed the separate Search button and
+Enter-key requirement entirely, per direct feedback that a plain
+textbox that searches itself is the expected interaction. Typing now
+triggers a debounced (400ms) search automatically.
+
+Verified with a real, deliberately adversarial test: simulated typing
+"j" then quickly "jd", with the network mocked to resolve the simpler
+"j" query *after* the more specific "jd" one (a genuine race auto-search
+implementations are prone to) — confirmed the correct, most recent
+result always wins, never a stale one silently overwriting it. Also
+clears any in-flight search when its modal closes.
+
+### Clarified — AD users don't need to be pre-added to log in
+
+Confirmed from `login backend = mavis` / `user backend = mavis` being
+global settings, and directly from a real log line
+(`looking for user u1 in MAVIS backend` for a user with no static
+`user {}` block in the compiled config): any AD user who is a genuine
+member of the correct AD group can authenticate and be authorized
+without ever being manually added to this platform's own Users page
+first. The Users page is for visibility and organization, not a
+prerequisite gate.
+
+### Added — a direct way to see why an AD login is "denied by ACL"
+
+Real log analysis confirmed AD authentication itself was working
+(`result for user u1 is ACK`) but authorization was failing (`denied
+by ACL`) -- the expected result when a policy's group condition
+doesn't match what the user is really a member of in AD. Rather than
+requiring external LDAP tools to check, the Users page now has a
+"Check real AD group membership" action (for an AD-linked user) that
+performs a live `memberOf` lookup and shows exactly what group
+name(s) `tac_plus-ng` itself would see for that identity -- applying
+the same confirmed prefix-filter-and-strip transformation
+`mavis_tacplus_ads.pl` applies, so what's shown is what a `member ==`
+policy condition actually needs to reference, not the raw AD group
+name.
+
+Verified with 4 real execution tests against realistic `memberOf`
+values, including reproducing the exact confirmed research example
+(`GTC_ad-admins` → `ad-admins`) and the zero-groups case, which
+surfaces a direct explanation rather than an empty result.
+
+### Improved — Add Group dialog: Type-first, matching the Users dialog
+
+Direct UX feedback: the previous "Linked AD group" field undersold how
+much it actually mattered, presenting itself as an optional
+cross-reference when getting it right is actually the entire
+mechanism by which an AD group's real membership maps to a policy
+condition. Redesigned with a Type selector (Local / Active Directory)
+as the first field, matching the pattern already established on the
+Users dialog. Selecting Active Directory surfaces AD search
+immediately and shows an explicit warning that membership is
+determined entirely by real AD group membership -- adding members via
+the Members button has no effect for this type. Selecting Local shows
+the reverse warning: local group membership drives authorization for
+local users only, not AD ones.
+
+Confirmed, with further research (a real, direct fix from tac_plus-ng's
+own author mapping a backend-reported "groups" attribute to `member`
+internally) that this project's existing guidance was correct: an AD
+user's `member ==` match always comes from what the AD backend itself
+reports at login time, never from a locally-assigned membership table
+-- there is no way to make manually adding an AD-sourced user to a
+platform-local group drive their real tac_plus-ng authorization.
+
+### Clarified — why adding an AD user shows no pending Apply change
+
+Real feedback against a live compiled config, confirming an AD-linked
+user genuinely never gets a `user {}` block: adding one is not itself
+a config change, because `login backend = mavis` being global means
+tac_plus-ng will try MAVIS for any username it doesn't recognize --
+including one never added to this platform at all. Added a clear note
+on the Users page explaining this directly, rather than leaving an
+admin to wonder why the Apply button never appears. Further research
+into tac_plus-ng's own real-world configs also surfaced a
+`mavis module = groups { }` block (regex-based `groups filter` /
+`memberof filter`) as a more flexible alternative to the simpler
+`AD_GROUP_PREFIX` approach already in use here -- noted for a future
+increment, not built now without stronger confirmation it's needed.
+
+### Fixed — AD search silently hid real failures behind "No matches"
+
+Real, concrete bug report: a user's own memberOf correctly reported
+membership in a group ("tacpalasGroup") via the group-membership
+lookup tool, but searching for that exact same name on the Groups
+page returned "No matches" -- a genuine inconsistency between two
+tools hitting the same directory.
+
+Root cause: `search_groups`/`search_users` had a blanket
+`except Exception: return []` -- any real failure (a bad bind, a
+malformed filter, or -- the likely culprit here -- a search_base that
+doesn't cover the OU/container a group actually lives in, unlike a
+memberOf lookup, which reads an attribute value directly off the user
+and never needs the group to be within search_base at all) was
+indistinguishable from a search that genuinely found nothing.
+
+Both functions now return a real/empty/error three-way result
+instead of a bare list, and the API and both GUIs (Groups, Users)
+surface an actual error message when a search fails, rather than
+silently presenting it as zero results. Verified with a real test
+covering all three states: a genuine failure, a genuinely empty
+result, and a successful one -- confirming each renders distinctly.
+
+### Fixed — the real `search_groups` root cause, a CSS layout bug, and hardened the "Discard and close" button
+
+Follow-up on the search-failure fix above, from a real, concrete error
+the improved error-surfacing immediately revealed: `Search failed:
+Search failed: attribute 'get' not found`. Root cause found and fixed:
+`entry.get("distinguishedName", entry.entry_dn)` in `search_groups`
+called `.get()` on an ldap3 `Entry` object, which isn't a dict --
+ldap3 overrides attribute access so `.get` gets interpreted as "look
+up an LDAP attribute literally named 'get'", which doesn't exist.
+Reproduced the exact reported error string with a real test against
+ldap3's actual attribute-access behavior, confirmed the fix resolves
+it. Also fixed the resulting double "Search failed: Search failed:"
+prefix (both the backend and frontend were independently adding the
+same label).
+
+**A real, project-wide CSS bug**, also from direct feedback ("text
+description are in the textboxes"): `.field-hint`'s common
+`margin-top:-10px` convention exists specifically to compensate for
+`.modal .field { margin-bottom: 14px; }`, a rule scoped only to
+`.modal`. Active Directory Settings (and part of the Devices page)
+render their fields on a plain page, not inside a modal, so that
+compensating margin had nothing to offset and pulled hint text up
+into the input box above it. Found every instance project-wide with a
+proper HTML-nesting-aware parser (not a text search, which cannot
+distinguish "inside a modal" from "not"), confirmed zero remaining
+instances after fixing both files.
+
+**Hardened "Discard and close"**, from a report that clicking it
+repeatedly did nothing. Extensive testing with a real, purpose-built
+DOM simulation (using the actual, unmodified source from this file)
+could not reproduce a failure in the core Escape-to-confirm flow, but
+the fix removes an entire class of potential staleness bugs regardless:
+the button previously closed whichever modal a `pendingCloseTarget`
+closure variable had captured when Escape was first pressed; it now
+re-queries for the currently-visible real modal at the moment of the
+click itself, which is provably correct since the dirty modal stays
+visible (just overlaid) for the entire time the confirm prompt is
+showing. `pendingCloseTarget` removed entirely rather than kept
+alongside the safer approach.
+
+---
+
+## 2026-09-01
+
+### Fixed — Active Directory group authorization, and Add User UX
+
+Real production debugging, working from a live `tacplas.local` AD
+deployment and an actual authorization failure report ("AD user can't
+login on switch or routers"):
+
+- **`UNLIMIT_AD_GROUP_MEMBERSHIP = 1` now emitted whenever memberOf-
+  based group evaluation is used.** Confirmed, by the actual author
+  of the mavis LDAP integration scripts in a real support thread:
+  without this flag, a user's reported group membership is silently
+  limited to exactly ONE group, even if they're really a member of
+  several — almost certainly the direct cause of AD users
+  authenticating successfully but failing every authorization rule
+  that checks a specific group. This was a genuine gap in the
+  compiler's MAVIS block that existed since AD integration was first
+  built.
+- **Groups page**: picking an AD group from the search results now
+  suggests the LOCAL group's Name field as the prefix-stripped CN
+  (confirmed exact behavior: `AD_GROUP_PREFIX = GTC_` turns
+  `CN=GTC_ad-admins` into `member == ad-admins`, prefix stripped, not
+  the full CN) — verified against that exact real-world example.
+  Never overwrites a name the admin already typed; never suggests an
+  invalid tac_plus-ng identifier.
+- **Add User dialog reordered**: Authentication is now the first
+  field. Selecting Active Directory surfaces AD search immediately;
+  picking a result now auto-fills Username, Full Name, and AD
+  Identity together (previously only AD Identity was filled, still
+  requiring the admin to separately retype the username by hand even
+  after finding the exact right AD account). A new inline note
+  clarifies that for an AD-linked user, the platform's own Group
+  dropdown is local/display-only and does not drive tac_plus-ng's
+  actual authorization for them — that requires real AD group
+  membership instead, which is what the Groups page fix above makes
+  practical to set up correctly.
+
+### Added — Network Operations & Assurance Engine, Phase 1 (Command Jobs)
+
+The first increment of a much larger, explicitly-phased capability
+(the full design covers 12 phases: Command Jobs → Templates → a Check
+engine → an Audit engine → integration of two existing standalone
+Cisco security-auditor projects → remediation with an approval
+workflow → compliance mapping → scheduling → a fleet-wide "Finder" →
+visualization). Only Phase 1 is built here — see
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full
+architecture assessment and exactly what's deliberately deferred.
+
+- **Command Jobs**: run commands against one or more devices, device
+  groups, or a mix of both, with automatic deduplication — a device
+  reachable through more than one selected group (or both
+  individually and via a group) runs exactly once. Sequential or
+  controlled-parallel execution with configurable concurrency and
+  per-command/connection timeouts. Verified with a real executable
+  test against every target-resolution scenario the design spec
+  explicitly requires, including its own "device in two groups"
+  example.
+- **Live job dashboard**: per-device, per-command progress while a
+  job runs, auto-refreshing every 2.5s and stopping once the job
+  reaches a terminal state; full raw output retained and viewable for
+  every command, on every device, permanently.
+- **Command classification**: every executed command is tagged
+  READ_ONLY / CONFIGURATION / DESTRUCTIVE / UNKNOWN — a heuristic aid
+  for the confirmation UI, explicitly documented as such, never a
+  guarantee. Verified against 13 realistic Cisco IOS commands across
+  all four categories.
+- **Command Templates**: reusable, named command lists, selectable
+  when creating a job instead of typing commands from scratch.
+- New RBAC permissions (`network_ops:view`, `network_ops:execute`,
+  `network_ops:templates`), following the existing permission
+  catalog's naming convention exactly.
+- Registered as a genuinely optional module (not mandatory, unlike
+  the TACACS+ core) — toggleable independently via the existing
+  module enable/disable mechanism.
+
+### Fixed (caught during Phase 1's own development, before shipping)
+
+- The command classifier's `write memory` handling: reasoned about in
+  a docstring as belonging in the CONFIGURATION category, but the
+  actual prefix list was never updated to match, so it silently fell
+  through to UNKNOWN. Found by the classification test failing, not
+  by re-reading the code.
+- A leftover, confusing placeholder (`if False else re.compile("(?!)")`)
+  in the destructive-command pattern list, written while reasoning
+  through whether `write memory` should be classified as destructive
+  — cleaned up before it could confuse a future reader, once the
+  actual decision (it shouldn't) was reached.
+
+### Added — Network Operations & Assurance Engine, Phase 3 (Check Engine)
+
+- **Checks**: a small, code-defined registry of Cisco IOS hardening
+  evaluators (AAA new-model enabled, password encryption service,
+  VTY SSH-only transport, HTTP management server disabled) — all
+  well-documented, standard Cisco IOS checks chosen specifically for
+  high confidence. Evaluates already-collected command output from a
+  completed Command Job; running a check never triggers a new SSH
+  connection.
+- A small, independently-written Cisco IOS config-structure parser
+  (`show running-config` stanza parsing) — verified with a real test
+  against the exact `re.MULTILINE` bug class a referenced project's
+  own README documents having hit, confirmed correct here from the
+  start.
+- **Honesty discipline, verified with real tests**: a device with no
+  running-config output collected returns NOT_APPLICABLE, never a
+  guessed PASS/FAIL. A fully-hardened sample config passes all 4
+  checks; a weak one fails all 4; a mixed-VTY config correctly
+  flags only the specific line range with the actual problem.
+- Check results are append-only across re-runs — never overwritten,
+  matching this project's established version-history discipline.
+- New Job Detail page section (Run Checks + results with evidence and
+  recommended fix inline) and a new Checks catalog page.
+
+### Fixed (caught during Phase 3's own development, before shipping)
+
+- A genuine type mismatch in the `Check` model: `enabled` was
+  annotated `Mapped[bool]` but defined with a `String(8)` column, left
+  behind from thinking through the design mid-write, with a comment
+  that didn't describe real code. Caught by re-reading before the file
+  was even submitted; fixed to a proper `Boolean` column.
+
+---
+
 ## 2026-08-30
 
 ### Added — Device Secret Confirmation
