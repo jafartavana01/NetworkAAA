@@ -65,6 +65,14 @@
     return div.innerHTML;
   }
 
+  // Same display-only cleanup as the Accounting page -- see its own
+  // comment for why this is a standard Cisco IOS TACACS+ convention,
+  // not something to fix in the underlying parsed data.
+  function displayCommand(cmd) {
+    if (!cmd) return cmd;
+    return cmd.replace(/\s*<cr>\s*$/i, '').trim() || cmd;
+  }
+
   function formatDuration(startIso, stopIso) {
     if (!startIso) return '—';
     const start = new Date(startIso);
@@ -118,7 +126,7 @@
     const body = document.getElementById('session-detail-body');
     const timeline = [];
     if (session.start_at) timeline.push(`${new Date(session.start_at).toLocaleTimeString()}  Accounting Start`);
-    session.commands.forEach(cmd => timeline.push(`  ...  Command: ${cmd}`));
+    session.commands.forEach(cmd => timeline.push(`  ...  Command: ${displayCommand(cmd)}`));
     if (session.stop_at) timeline.push(`${new Date(session.stop_at).toLocaleTimeString()}  Accounting Stop`);
     else timeline.push('(no stop record observed yet)');
 

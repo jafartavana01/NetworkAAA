@@ -294,5 +294,70 @@ window.AAAPlatform = (function () {
     }
   })();
 
-  return { readCookie, authedFetch, toast, setupQuickAdd, onViewLeave, runViewCleanup };
+  let openContextMenuEl = null;
+
+  function closeContextMenu() {
+    if (openContextMenuEl) {
+      openContextMenuEl.remove();
+      openContextMenuEl = null;
+    }
+  }
+
+  // Shared right-click context menu, so every page (Devices, Users,
+  // Groups) gets identical behavior instead of three separate
+  // implementations. `items` is an array of either a real action --
+  // {label, onClick, danger?: bool} -- or the literal string
+  // 'separator' for a visual divider. `onClick` receives no
+  // arguments; the caller's own closure already has whatever row data
+  // it needs. Positioned to stay on-screen even when the click is
+  // near the window's right/bottom edge, dismissed on an outside
+  // click, Escape, or scroll -- never left orphaned on the page.
+  function showContextMenu(x, y, items) {
+    closeContextMenu();
+    const menu = document.createElement('div');
+    menu.className = 'context-menu';
+    menu.setAttribute('role', 'menu');
+    items.forEach((item) => {
+      if (item === 'separator') {
+        const sep = document.createElement('div');
+        sep.className = 'context-menu-separator';
+        menu.appendChild(sep);
+        return;
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'context-menu-item' + (item.danger ? ' context-menu-item-danger' : '');
+      btn.textContent = item.label;
+      btn.addEventListener('click', () => {
+        closeContextMenu();
+        item.onClick();
+      });
+      menu.appendChild(btn);
+    });
+    document.body.appendChild(menu);
+
+    const rect = menu.getBoundingClientRect();
+    const left = Math.min(x, window.innerWidth - rect.width - 8);
+    const top = Math.min(y, window.innerHeight - rect.height - 8);
+    menu.style.left = `${Math.max(8, left)}px`;
+    menu.style.top = `${Math.max(8, top)}px`;
+    openContextMenuEl = menu;
+  }
+
+  document.addEventListener('click', (e) => {
+    if (openContextMenuEl && !openContextMenuEl.contains(e.target)) closeContextMenu();
+  });
+  document.addEventListener('contextmenu', (e) => {
+    // A right-click elsewhere on the page (not on a row that opens
+    // its own menu) closes whatever menu is already open, rather than
+    // leaving a stale one floating while a new native menu also
+    // appears.
+    if (openContextMenuEl && !e.defaultPrevented) closeContextMenu();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && openContextMenuEl) closeContextMenu();
+  });
+  window.addEventListener('scroll', closeContextMenu, true);
+
+  return { readCookie, authedFetch, toast, setupQuickAdd, onViewLeave, runViewCleanup, showContextMenu };
 })();

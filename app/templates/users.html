@@ -180,7 +180,7 @@
     }
 
     const rows = tacacsUsers.map(u => `
-      <tr>
+      <tr data-user-row="${u.id}">
         <td>${escapeHtml(u.username)}${u.auth_source === 'ad' ? ' <span class="badge">AD</span>' : ''}</td>
         <td>${escapeHtml(u.full_name || '—')}</td>
         <td>${escapeHtml(u.group_name || '—')}</td>
@@ -207,6 +207,18 @@
     });
     wrap.querySelectorAll('[data-delete]').forEach(btn => {
       btn.addEventListener('click', () => deleteUser(btn.dataset.delete));
+    });
+    wrap.querySelectorAll('[data-user-row]').forEach(row => {
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const user = tacacsUsers.find(u => u.id === row.dataset.userRow);
+        if (!user) return;
+        AAAPlatform.showContextMenu(e.clientX, e.clientY, [
+          { label: 'Edit', onClick: () => openModal(user) },
+          'separator',
+          { label: 'Delete', onClick: () => deleteUser(user.id), danger: true },
+        ]);
+      });
     });
   }
 

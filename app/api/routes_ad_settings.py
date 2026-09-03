@@ -192,3 +192,29 @@ def get_user_group_memberships(
     if result is None:
         return {"found": False}
     return {"found": True, **result}
+
+
+@router.get("/group-members")
+def get_ad_group_members(
+    group_name: str,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("groups:write")),
+):
+    """
+    Read-only, live-fetched list of a real AD group's actual current
+    members -- backs the Groups page's Members view for an AD-linked
+    group. Gated on groups:write, matching search_ad_groups, since
+    this is Groups-page functionality specifically.
+
+    Deliberately NOT an add/remove/edit endpoint: this platform's own
+    local membership assignment has zero effect on an AD group's real
+    authorization-relevant membership (confirmed earlier this
+    session), so the only thing worth exposing here is a live,
+    accurate view of what AD itself actually says -- not a local copy
+    that could silently drift from reality.
+    """
+    settings = db.query(AdSettings).first()
+    if not settings or not settings.host or not group_name.strip():
+        return {"results": [], "error": None}
+    result = ad_directory.get_ad_group_members(settings, group_name.strip())
+    return {"results": result.results, "error": result.error}

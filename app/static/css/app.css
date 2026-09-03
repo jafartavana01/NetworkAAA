@@ -679,3 +679,37 @@ table.data-table tr:hover td { background: var(--bg-panel-raised); }
   letter-spacing: -1px;
 }
 .draggable-row:hover .drag-handle { color: var(--text-dim); }
+
+/* ---------- shared right-click context menu (Devices, Users, Groups) ---------- */
+
+.context-menu {
+  position: fixed;
+  z-index: 10002;
+  min-width: 180px;
+  background: var(--bg-panel-raised);
+  border: 1px solid var(--line-bright);
+  border-radius: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.context-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.context-menu-item:hover { background: var(--bg-panel); }
+.context-menu-item-danger { color: var(--red); }
+.context-menu-separator {
+  height: 1px;
+  background: var(--line);
+  margin: 4px 2px;
+}

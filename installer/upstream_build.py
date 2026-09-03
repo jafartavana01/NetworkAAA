@@ -36,7 +36,14 @@ from pathlib import Path
 
 from . import utils
 
-UPSTREAM_REPO_URL = "https://github.com/MarcJHuber/event-driven-servers.git"
+UPSTREAM_REPO_URL = "https://github.com/jafartavana01/GUi-event-driven-servers.git"
+# Points at the administrator's own fork of the real upstream
+# (https://github.com/MarcJHuber/event-driven-servers), per their
+# explicit request, rather than the original repository directly.
+# Everything else in this module -- the configure-flag discovery, the
+# commit-pinning behavior described above -- still applies exactly the
+# same way, since this is still a real git clone of a real source
+# tree, just from a different remote.
 
 UPSTREAM_SRC_DIR = Path("/opt/aaa-platform/upstream/event-driven-servers")
 BUILD_INFO_PATH = Path("/etc/aaa-platform/build_info.json")

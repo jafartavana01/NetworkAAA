@@ -120,6 +120,21 @@
       </div>
       <div class="field-hint" style="margin-top:-10px;margin-bottom:18px;">A full-access "Admin" policy needs no Command Sets at all — just Permit here.</div>
 
+      <label class="checkbox-field field" style="margin-bottom:8px;">
+        <input type="checkbox" id="policy-manual-mode">
+        <span>Manual mode — require live admin approval for this device or group</span>
+      </label>
+      <div id="policy-manual-fields" hidden>
+        <label class="field">
+          <span class="field-label">Default command set for approved sessions</span>
+          <select id="policy-manual-command-set"></select>
+        </label>
+        <div class="panel panel-wide" style="margin:8px 0 16px 0;border-color:var(--red);">
+          <div class="panel-body" style="font-size:12px;color:var(--red);">⚠ This device or group denies access by default. When an admin approves a specific login request, this command set applies unless overridden at approval time — but the approved user must retry their login after approval; their original attempt is not held open waiting for a decision. For an Active-Directory user specifically, this platform cannot yet enforce that only the approved individual (not anyone else) gets in during the approval window — see the Policies help text for why.</div>
+        </div>
+      </div>
+      <div class="field-hint" style="margin-top:-4px;margin-bottom:18px;" id="policy-manual-off-hint">Off by default — matching this policy grants access immediately, per Default action above.</div>
+
       <div class="field-label" style="margin-bottom:8px;">Command Sets</div>
       <input type="text" id="command-sets-filter" placeholder="Filter by name…" style="margin-bottom:8px;">
       <div id="command-sets-checklist" style="margin-bottom:16px;"></div>
@@ -699,7 +714,7 @@
         <td>${p.enabled ? '<span class="badge badge-on">Enabled</span>' : '<span class="badge badge-off">Disabled</span>'}</td>
         <td class="cell-mono">${escapeHtml(conditionsText)}</td>
         <td>${p.command_sets.length ? p.command_sets.map(cs => escapeHtml(cs.name)).join(', ') : '<span class="content-sub">none</span>'}</td>
-        <td class="cell-mono">priv ${p.default_priv_lvl}, ${p.default_action}</td>
+        <td class="cell-mono">priv ${p.default_priv_lvl}, ${p.default_action}${p.requires_manual_approval ? ' <span class="badge" style="border-color:var(--red);color:var(--red);">MANUAL</span>' : ''}</td>
         <td class="cell-actions">
           <button class="btn-secondary btn-small" data-edit="${p.id}">Edit</button>
           <button class="btn-secondary btn-small" data-history="${p.id}">History</button>
@@ -790,6 +805,20 @@
     loadPolicies();
   }
 
+  function toggleManualModeFields() {
+    const isManual = document.getElementById('policy-manual-mode').checked;
+    document.getElementById('policy-manual-fields').hidden = !isManual;
+    document.getElementById('policy-manual-off-hint').hidden = isManual;
+  }
+  document.getElementById('policy-manual-mode').addEventListener('change', toggleManualModeFields);
+
+  function renderManualCommandSetOptions() {
+    const select = document.getElementById('policy-manual-command-set');
+    select.innerHTML = allCommandSets.length
+      ? allCommandSets.map(cs => `<option value="${cs.id}">${escapeHtml(cs.name)}</option>`).join('')
+      : '<option value="">— No Command Sets exist yet —</option>';
+  }
+
   async function loadPolicies() {
     const res = await AAAPlatform.authedFetch('/api/policies');
     if (res.status === 401) { window.location.href = '/login'; return; }
@@ -814,6 +843,12 @@
       document.getElementById('policy-enabled').checked = policy.enabled;
       document.getElementById('policy-priv-lvl').value = policy.default_priv_lvl;
       document.getElementById('policy-default-action').value = policy.default_action;
+      document.getElementById('policy-manual-mode').checked = policy.requires_manual_approval;
+      renderManualCommandSetOptions();
+      if (policy.manual_default_command_set_id) {
+        document.getElementById('policy-manual-command-set').value = policy.manual_default_command_set_id;
+      }
+      toggleManualModeFields();
       currentCommandSetIds = policy.command_sets.map(cs => cs.id);
 
       const treeRes = await AAAPlatform.authedFetch(`/api/policies/${policy.id}/condition-tree`);
@@ -866,6 +901,9 @@
       document.getElementById('policy-priority').value = maxPriority + 1;
       document.getElementById('policy-priv-lvl').value = 1;
       document.getElementById('policy-default-action').value = 'deny';
+      document.getElementById('policy-manual-mode').checked = false;
+      renderManualCommandSetOptions();
+      toggleManualModeFields();
       currentCommandSetIds = [];
       showMultiSelectConditions();
     }
@@ -889,6 +927,7 @@
     errorBox.hidden = true;
 
     const id = document.getElementById('policy-id').value;
+    const manualMode = document.getElementById('policy-manual-mode').checked;
     const payload = {
       name: document.getElementById('policy-name').value,
       description: document.getElementById('policy-description').value || null,
@@ -896,6 +935,8 @@
       priority: parseInt(document.getElementById('policy-priority').value, 10),
       default_priv_lvl: parseInt(document.getElementById('policy-priv-lvl').value, 10),
       default_action: document.getElementById('policy-default-action').value,
+      requires_manual_approval: manualMode,
+      manual_default_command_set_id: manualMode ? (document.getElementById('policy-manual-command-set').value || null) : null,
       command_set_ids: currentCommandSetIds,
       change_description: document.getElementById('policy-change-description').value || null,
     };

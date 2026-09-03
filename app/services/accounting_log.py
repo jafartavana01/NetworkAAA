@@ -66,22 +66,22 @@ ACCOUNTING_LOG_PATH = LOG_DIR / "tac_plus-ng-accounting.log"
 _FIELD_NAMES = ["nas", "user", "port", "nac", "accttype", "result", "service", "cmd"]
 _EXPECTED_FIELD_COUNT = len(_FIELD_NAMES)
 
-# e.g. "Jul 12 09:39:50" -- the syslog-style prefix seen consistently
-# across real tac_plus-family accounting log examples during research.
-# No year (syslog convention omits it), so the current year is assumed
-# -- meaning parsing is unreliable right at a year boundary for old
-# entries, a known, accepted limitation of a best-effort feature.
-_TIMESTAMP_PATTERN = re.compile(r"^([A-Za-z]{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})")
+# e.g. "2026-09-03 08:02:18 +0000" -- CORRECTED against a real
+# deployment's actual accounting log (previously assumed syslog-style
+# "Jul 12 09:39:50", no year -- that assumption was wrong for this
+# real tac_plus-ng install's own file-output prefix, which includes a
+# full year and a UTC offset instead). Anchored to the START of the
+# line specifically, not found by field-count heuristics -- see
+# _parse_line for why that distinction turned out to matter.
+_TIMESTAMP_PATTERN = re.compile(r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+[+-]\d{4})\s+")
 
 
 def _try_parse_timestamp(prefix: str) -> datetime | None:
-    match = _TIMESTAMP_PATTERN.match(prefix.strip())
+    match = _TIMESTAMP_PATTERN.match(prefix)
     if not match:
         return None
     try:
-        current_year = datetime.now(timezone.utc).year
-        parsed = datetime.strptime(f"{current_year} {match.group(1)}", "%Y %b %d %H:%M:%S")
-        return parsed.replace(tzinfo=timezone.utc)
+        return datetime.strptime(match.group(1), "%Y-%m-%d %H:%M:%S %z")
     except ValueError:
         return None
 
@@ -110,16 +110,51 @@ class AccountingRecord:
 
 def _parse_line(line: str) -> AccountingRecord:
     line = line.rstrip("\n")
-    parts = line.split(ACCOUNTING_FIELD_SEPARATOR)
 
+    # Try the timestamp-prefix-first strategy: if the line starts with
+    # a recognized timestamp, strip it off FIRST and split the exact
+    # remainder -- this is what actually matches a real deployment's
+    # log, where the prefix is separated from the payload by a space,
+    # not by the "::" field separator. Splitting by "::" BEFORE
+    # removing the prefix (the previous approach) meant a
+    # space-separated prefix had no delimiter to be split apart on at
+    # all, so it silently fused onto the first real field's value
+    # instead of being recognized as a separate prefix -- confirmed
+    # directly from a real log where the "nas" field's value came back
+    # as "2026-09-03 08:02:18 +0000 192.168.44.10" instead of just the
+    # real device address.
+    ts_match = _TIMESTAMP_PATTERN.match(line)
+    if ts_match:
+        raw_prefix = ts_match.group(1)
+        payload = line[ts_match.end():]
+        parts = payload.split(ACCOUNTING_FIELD_SEPARATOR)
+        if len(parts) == _EXPECTED_FIELD_COUNT:
+            values = dict(zip(_FIELD_NAMES, parts))
+            return AccountingRecord(
+                raw_line=line,
+                parsed=True,
+                raw_prefix=raw_prefix,
+                parsed_at=_try_parse_timestamp(line),
+                **values,
+            )
+        # A recognized timestamp but an unexpected field count after
+        # it falls through to the anchor-from-the-end fallback below,
+        # rather than being force-fit or discarded outright.
+
+    # Fallback: no recognized timestamp prefix (or one was found but
+    # what followed it didn't cleanly split into the expected field
+    # count) -- anchor from the END instead, on the theory that
+    # whatever precedes the last _EXPECTED_FIELD_COUNT "::"-delimited
+    # segments is prefix material of some unrecognized shape. This is
+    # deliberately kept as a second attempt rather than the only
+    # strategy, since it's the weaker heuristic of the two -- proven
+    # wrong on its own for this project's actual real-world log
+    # format, which is exactly why the timestamp-first attempt above
+    # now runs first.
+    parts = line.split(ACCOUNTING_FIELD_SEPARATOR)
     if len(parts) < _EXPECTED_FIELD_COUNT:
         return AccountingRecord(raw_line=line, parsed=False)
 
-    # The last _EXPECTED_FIELD_COUNT segments are our known fields
-    # (see module docstring for why: whatever precedes them -- an
-    # auto-prepended timestamp, most likely -- may itself legitimately
-    # contain no delimiter at all, so we anchor from the end, not the
-    # start).
     field_values = parts[-_EXPECTED_FIELD_COUNT:]
     raw_prefix = ACCOUNTING_FIELD_SEPARATOR.join(parts[:-_EXPECTED_FIELD_COUNT]).strip()
 
@@ -281,10 +316,27 @@ def group_into_sessions(records: list[AccountingRecord]) -> list[SessionSummary]
                 continue
 
             open_session["event_count"] += 1
-            if r.cmd and accttype != "stop":
+
+            # CORRECTED: per-command accounting is itself sent as a
+            # "stop"-type record too -- each command's execution is
+            # instantaneous, so there's no separate start/stop pair for
+            # it the way there is for the session itself. Confirmed
+            # directly from a real deployment's accounting log: rows
+            # carrying an actual executed command (`show ip vrf`, etc.)
+            # had accttype=stop. The previous logic (`accttype !=
+            # "stop"`) meant a command-carrying "stop" record was BOTH
+            # excluded from `commands` AND treated as ending the
+            # session -- closing it after the very first command a user
+            # ran, which is why Session detail showed zero commands
+            # even when the accounting log clearly had many. The real
+            # distinguishing signal between a per-command "stop" and the
+            # session's own closing "stop" is whether `cmd` itself is
+            # populated -- a session-level start/stop carries no
+            # specific command, only a per-command record does.
+            if r.cmd:
                 open_session["commands"].append(r.cmd)
 
-            if accttype == "stop":
+            if accttype == "stop" and not r.cmd:
                 sessions.append(SessionSummary(
                     device=device, port=port,
                     user=open_session["user"], source_ip=open_session["source_ip"],

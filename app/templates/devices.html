@@ -386,7 +386,7 @@
     }
 
     const rows = devices.map(d => `
-      <tr>
+      <tr data-device-row="${d.id}">
         <td>${escapeHtml(d.name)}</td>
         <td class="cell-mono">${escapeHtml(d.ip_address)}${d.ipv6_address ? '<br>' + escapeHtml(d.ipv6_address) : ''}</td>
         <td>${escapeHtml(d.vendor || '—')}</td>
@@ -417,6 +417,19 @@
     });
     wrap.querySelectorAll('[data-delete]').forEach(btn => {
       btn.addEventListener('click', () => deleteDevice(btn.dataset.delete));
+    });
+    wrap.querySelectorAll('[data-device-row]').forEach(row => {
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const device = devices.find(d => d.id === row.dataset.deviceRow);
+        if (!device) return;
+        AAAPlatform.showContextMenu(e.clientX, e.clientY, [
+          { label: 'Edit', onClick: () => openModal(device) },
+          { label: 'Apply AAA config', onClick: () => openDeviceAaaModal(device) },
+          'separator',
+          { label: 'Delete', onClick: () => deleteDevice(device.id), danger: true },
+        ]);
+      });
     });
   }
 

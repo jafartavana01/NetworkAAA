@@ -420,3 +420,72 @@ def get_user_group_memberships(settings: AdSettings, identity: str) -> dict | No
         return {"raw_groups": raw_groups, "reported_groups": reported_groups, "prefix_applied": prefix}
     except Exception:
         return None
+
+
+def get_ad_group_members(settings: AdSettings, group_cn: str) -> AdSearchResult:
+    """
+    Real LDAP lookup of a group's actual current members -- built to
+    back a read-only member list for an AD-linked TacacsGroup, since
+    this platform's own local Members add/remove UI has no effect on
+    AD group membership at all (confirmed earlier: authorization for
+    AD users is entirely runtime-based via MAVIS, never driven by
+    anything stored locally here).
+
+    Two queries, not one: first an EXACT (not substring) match on the
+    group's own CN to get its DN, then a single search for every user
+    object whose memberOf includes that DN. This is deliberately NOT
+    done by reading the group's own `member` attribute and resolving
+    each listed DN individually -- that would be one query PER member,
+    where this is a fixed two queries regardless of group size.
+
+    Returns AdSearchResult with `results` as a list of dicts matching
+    search_users' own shape ({"sam_account_name", "upn",
+    "display_name"}) so the same rendering code can be reused, and
+    `error` set (with `results` empty) when the group itself can't be
+    found or the lookup fails -- distinguishable from a group that
+    genuinely, correctly has zero members.
+    """
+    if not settings.host or not settings.search_base:
+        return AdSearchResult([], error="Active Directory host or search base is not configured.")
+    if not group_cn or not group_cn.strip():
+        return AdSearchResult([], error="No AD group name to look up.")
+    try:
+        conn = _get_connection(settings)
+        if not conn.bind():
+            return AdSearchResult([], error=f"Could not bind to Active Directory: {conn.result.get('description', 'unknown error')}")
+        import ldap3
+
+        safe_cn = group_cn.strip().replace("*", "").replace("(", "").replace(")", "").replace("\\", "")
+        conn.search(
+            search_base=settings.search_base,
+            search_filter=f"(&(objectClass=group)(cn={safe_cn}))",
+            search_scope=ldap3.SUBTREE,
+            attributes=["distinguishedName"],
+            size_limit=1,
+        )
+        if not conn.entries:
+            conn.unbind()
+            return AdSearchResult([], error=f"No AD group found with the exact name '{group_cn}'.")
+        # Same fix as search_groups earlier in this file: entry.get(...)
+        # is not a real dict method on an ldap3 Entry -- use `in` and
+        # direct indexing instead.
+        group_entry = conn.entries[0]
+        group_dn = str(group_entry["distinguishedName"]) if "distinguishedName" in group_entry else group_entry.entry_dn
+
+        conn.search(
+            search_base=settings.search_base,
+            search_filter=f"(&(objectClass=user)(memberOf={group_dn}))",
+            search_scope=ldap3.SUBTREE,
+            attributes=["sAMAccountName", "displayName", "userPrincipalName"],
+            size_limit=1000,
+        )
+        results = []
+        for entry in conn.entries:
+            sam = str(entry["sAMAccountName"]) if "sAMAccountName" in entry else ""
+            upn = str(entry["userPrincipalName"]) if "userPrincipalName" in entry else ""
+            display = str(entry["displayName"]) if "displayName" in entry else ""
+            results.append({"sam_account_name": sam, "upn": upn, "display_name": display})
+        conn.unbind()
+        return AdSearchResult(results)
+    except Exception as exc:
+        return AdSearchResult([], error=str(exc))

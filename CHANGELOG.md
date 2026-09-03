@@ -52,6 +52,139 @@ and stdio buffering differences between a real terminal and a
 redirected pipe -- none of which turned out to be the underlying bug,
 but all of which cost real debugging time before being resolved.
 
+### Added — read-only, live AD group membership on the Groups page
+
+Direct request: since this platform's own local Members add/remove UI
+has no effect on an AD group's real, authorization-relevant
+membership (confirmed the hard way this session), an AD-linked group
+now shows a genuinely read-only, live-fetched list of who Active
+Directory itself currently reports as a member -- the add-user picker
+and Remove buttons are hidden entirely for this group type, replaced
+with a direct explanation of why. Backed by a new `get_ad_group_members`
+lookup: an exact-CN search for the group's DN, then a single query for
+every user whose memberOf includes it -- deliberately not one query
+per listed member, regardless of group size. Local groups are
+unaffected; their existing add/remove behavior is unchanged.
+
+### Changed — installer now clones the administrator's own fork
+
+`UPSTREAM_REPO_URL` now points at
+`https://github.com/jafartavana01/GUi-event-driven-servers.git`
+(a fork of the real upstream), per explicit request. Everything else
+about the build process -- configure-flag discovery, commit-pinning
+for reproducibility -- is unchanged, since this is still a real git
+clone of a real source tree, just from a different remote.
+
+### Fixed — two real bugs behind broken Sessions, Accounting, and AAA Health
+
+Direct report, with screenshots, of the "device" column showing a
+concatenated timestamp+IP, sessions never correlating to a closed
+state, session detail never showing any commands, and AAA Health
+reporting "28 distinct devices" for what is really a single device.
+
+**Root cause 1**: `_parse_line`'s timestamp-prefix format was a wrong,
+unconfirmed guess (`Jul 12 09:39:50`, no year) carried over from
+generic research examples. This real deployment's actual prefix is
+`2026-09-03 08:02:18 +0000` (full year, UTC offset) -- and critically,
+it's followed by a SPACE before the real payload, not the `::` field
+separator the old anchor-from-the-end parsing strategy depended on to
+tell the two apart. With no delimiter between them, the entire
+prefix silently fused onto the first real field's value (`nas`/
+device) instead of being recognized as separate. Fixed by trying a
+corrected, confirmed-format timestamp match from the START of the
+line first, only falling back to the old (weaker) anchor-from-the-end
+heuristic when that doesn't apply.
+
+**Root cause 2**: `group_into_sessions` treated any `accttype=stop`
+record as ending a session -- but per-command TACACS+ accounting is
+itself sent as `stop`-type records too (a command executes
+instantaneously, so there's no separate start/stop pair for it the
+way there is for the session itself). This closed every session after
+its very first command, discarding the rest and reporting zero
+commands in the session that was actually still open. Fixed to
+distinguish a per-command `stop` (has a `cmd` value: append it, keep
+the session open) from the session's own closing `stop` (empty `cmd`:
+actually end it).
+
+Verified with real execution tests reproducing the exact reported
+scenario end to end: a start record, three per-command `stop` records,
+and a session-ending `stop`, correctly correlating into one closed
+session with all three commands captured -- confirmed both bugs are
+now fixed together, not just each in isolation. AAA Health's
+"distinct devices" count needed no separate fix -- it reads directly
+from the same `nas` field, so root cause 1's fix corrects it
+automatically.
+
+Also cleaned up, for display only (never touching the underlying
+stored data): a trailing `<cr>` -- a standard, expected Cisco IOS
+TACACS+ argument marking a complete submitted command line, not a
+parsing artifact -- is now trimmed from commands shown on the
+Accounting and Sessions pages, and from a command pre-filled into the
+"Promote to Command Set" dialog.
+
+### Added — Policy "Manual mode" definition, and a real, evidence-based finding about its limits for AD users
+
+`Policy` gains two new fields: `requires_manual_approval` (a
+deliberately separate flag from `default_action`, not a third value
+crammed into it -- see the model's own docstring for why) and
+`manual_default_command_set_id`, the command set applied to an
+approved session unless overridden at approval time. Full schema
+validation, API wiring, and a Manual-mode toggle in the Policy form
+that reveals the default-command-set picker -- exactly the "CoreSwitch
++ Manual mode + pick a default set" flow requested.
+
+Researched, rather than guessed at, how an approved login would
+actually be granted: confirmed with new evidence (a direct reply from
+tac_plus-ng's own author -- "user backend = mavis disables user
+lookup") that a static `user {}` block is completely ignored for
+group-membership purposes once MAVIS is the user backend, and that no
+real config anywhere (including several independent AD/group
+troubleshooting threads) uses a bare-username ruleset condition. This
+project's own existing `DeviceAccessGrant` feature hit the identical
+wall previously and works around it by scoping to a dedicated group --
+a workaround that doesn't extend to AD users, since this platform
+cannot inject AD group membership at all. The actual grant-application
+mechanism (the compiler change, the pending-approval data model, and
+the approval/queue GUI) is deliberately NOT built yet, rather than
+build something that might silently not restrict access to the
+specific approved individual.
+
+### Added — shared right-click context menus (Devices, Users, Groups)
+
+A single reusable `AAAPlatform.showContextMenu(x, y, items)` utility,
+rather than three separate implementations -- positioned to stay
+on-screen near window edges, dismissed on outside click, Escape, or
+scroll. Wired into each page's existing row actions (Edit/Delete, plus
+Members for Groups and Apply AAA config for Devices) rather than
+introducing new, separate action implementations.
+
+### Removed — Just-In-Time (JIT) access grants
+
+Built partway (data model, compiler integration for group-scoped
+grants, RBAC permissions), then explicitly requested to be removed
+before the remaining pieces (API routes, GUI, cleanup task, tests)
+were built. Fully reverted: `app/models/jit_grant.py` and
+`app/services/jit_grants.py` deleted, the `jit_grants:view`/`write`
+permissions removed from the catalog, and every JIT-specific addition
+to `app/services/config_compiler.py` (four compiler functions and
+their integration into `compile_candidate`) removed -- confirmed with
+a project-wide search returning zero remaining references anywhere,
+and the device-access-grant logic it had been woven alongside
+confirmed, with a real test, to be back to its exact original,
+pre-JIT behavior.
+
+Worth recording for anyone reviewing this history: while building it,
+a real, working discovery from earlier in this project (the
+"dedicated synthetic group" workaround `DeviceAccessGrant` uses for
+group-only targeting) turned out NOT to safely extend to an individual
+JIT-granted user -- `TacacsUser.group_id` is a single column, one
+group per user, with no membership join table in this project, so
+moving a user into a synthetic grant-only group would have displaced
+their real, standing group membership for the grant's duration, not
+added to it. Caught before it reached the database layer. If a
+JIT-style feature is revisited later, this is the specific pitfall to
+design around from the start, not rediscover again.
+
 ---
 
 ## 2026-09-02

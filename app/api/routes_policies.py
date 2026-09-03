@@ -67,6 +67,13 @@ def _resolve_conditions(db: Session, payload) -> tuple[uuid.UUID | None, uuid.UU
     return group_id, device_id, device_group_id
 
 
+def _resolve_manual_command_set(db: Session, payload) -> uuid.UUID | None:
+    manual_cs_id = _parse_optional_uuid(payload.manual_default_command_set_id, field_label="manual default command set")
+    if manual_cs_id and not db.query(CommandSet).filter(CommandSet.id == manual_cs_id).first():
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="That manual-mode default command set doesn't exist.")
+    return manual_cs_id
+
+
 def _replace_command_sets(db: Session, policy: Policy, command_set_ids: list[str]) -> list[CommandSet]:
     db.query(PolicyCommandSet).filter(PolicyCommandSet.policy_id == policy.id).delete()
 
@@ -101,6 +108,10 @@ def policy_to_out(db: Session, policy: Policy, command_sets: list[CommandSet] | 
     group = db.query(TacacsGroup).filter(TacacsGroup.id == policy.condition_group_id).first() if policy.condition_group_id else None
     device = db.query(NetworkDevice).filter(NetworkDevice.id == policy.condition_device_id).first() if policy.condition_device_id else None
     device_group = db.query(DeviceGroup).filter(DeviceGroup.id == policy.condition_device_group_id).first() if policy.condition_device_group_id else None
+    manual_command_set = (
+        db.query(CommandSet).filter(CommandSet.id == policy.manual_default_command_set_id).first()
+        if policy.manual_default_command_set_id else None
+    )
 
     return PolicyOut(
         id=str(policy.id),
@@ -117,6 +128,9 @@ def policy_to_out(db: Session, policy: Policy, command_sets: list[CommandSet] | 
         has_condition_tree=condition_engine.has_condition_tree(db, policy),
         default_priv_lvl=policy.default_priv_lvl,
         default_action=policy.default_action,
+        requires_manual_approval=policy.requires_manual_approval,
+        manual_default_command_set_id=str(policy.manual_default_command_set_id) if policy.manual_default_command_set_id else None,
+        manual_default_command_set_name=manual_command_set.name if manual_command_set else None,
         command_sets=[ReferencedCommandSet(id=str(cs.id), name=cs.name, enabled=cs.enabled) for cs in command_sets],
     )
 
@@ -182,6 +196,7 @@ def create_policy(
 ):
     _make_room_for_priority(db, payload.priority)
     group_id, device_id, device_group_id = _resolve_conditions(db, payload)
+    manual_cs_id = _resolve_manual_command_set(db, payload)
 
     policy = Policy(
         name=payload.name,
@@ -193,6 +208,8 @@ def create_policy(
         condition_device_group_id=device_group_id,
         default_priv_lvl=payload.default_priv_lvl,
         default_action=payload.default_action,
+        requires_manual_approval=payload.requires_manual_approval,
+        manual_default_command_set_id=manual_cs_id,
     )
     db.add(policy)
     try:
@@ -243,6 +260,7 @@ def update_policy(
     if payload.priority != policy.priority:
         _make_room_for_priority(db, payload.priority, exclude_id=policy.id)
     group_id, device_id, device_group_id = _resolve_conditions(db, payload)
+    manual_cs_id = _resolve_manual_command_set(db, payload)
 
     policy.name = payload.name
     policy.description = payload.description
@@ -253,6 +271,8 @@ def update_policy(
     policy.condition_device_group_id = device_group_id
     policy.default_priv_lvl = payload.default_priv_lvl
     policy.default_action = payload.default_action
+    policy.requires_manual_approval = payload.requires_manual_approval
+    policy.manual_default_command_set_id = manual_cs_id
 
     try:
         db.flush()

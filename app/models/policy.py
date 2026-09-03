@@ -121,8 +121,43 @@ class Policy(Base):
     default_priv_lvl: Mapped[int] = mapped_column(Integer, default=1, nullable=False)  # 0-15, TACACS+ convention
 
     # "permit" | "deny" -- fallback when no referenced CommandSet's
-    # rules match a non-empty `cmd`.
+    # rules match a non-empty `cmd`. Unaffected by manual-approval mode
+    # below -- this still governs command-level fallback for whatever
+    # ultimately gets permitted, whether that permit came from this
+    # policy directly or from a temporary approval-granted override.
     default_action: Mapped[str] = mapped_column(String(8), default="deny", nullable=False)
+
+    # --- Manual approval mode ---
+    # Deliberately a SEPARATE flag, not a third value crammed into
+    # default_action -- "manual" isn't a command-level fallback
+    # action, it's a different axis entirely (whether this policy's
+    # own grant is immediate or gated behind a live admin decision).
+    # When true, this policy's match compiles to a static DENY in the
+    # generated ruleset -- access is only actually granted via a
+    # separate, time-limited permit rule generated when an admin
+    # approves a specific (user, device) request, applied through this
+    # platform's existing, already-proven Apply lifecycle. This is a
+    # deliberate, confirmed-safe design choice, not a placeholder for
+    # a "true live block" mechanism: tac_plus-ng's `external-mt` mavis
+    # module type is real and designed for exactly this kind of
+    # "wait for interaction on a secondary channel" backend, but
+    # implementing a correct, safe one from scratch needs deeper
+    # protocol-level research than is confirmed as of this field being
+    # added -- see docs/PAM_EXPANSION_PLAN.md for the open item. The
+    # real, present consequence: a user denied by a manual-mode policy
+    # must retry their login after approval: their original attempt is
+    # not held open waiting for a decision.
+    requires_manual_approval: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # The command set applied when an approval for this policy is
+    # granted WITHOUT the admin overriding it at approval time.
+    # Nullable: a manual-mode policy with no default configured yet is
+    # still valid to save, just not yet approvable until one is set
+    # (enforced at the API layer, not the database, so a policy can be
+    # drafted before every field is filled in).
+    manual_default_command_set_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("command_sets.id", ondelete="SET NULL"), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$")
 _VALID_ACTIONS = {"permit", "deny"}
@@ -44,6 +44,12 @@ class PolicyBase(BaseModel):
     default_priv_lvl: int = Field(default=1, ge=0, le=15)
     default_action: str = Field(default="deny")
 
+    # Manual approval mode -- see app/models/policy.py's own docstring
+    # on requires_manual_approval for the full design reasoning
+    # (a separate axis from default_action, not a third value of it).
+    requires_manual_approval: bool = False
+    manual_default_command_set_id: str | None = None
+
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
@@ -61,6 +67,23 @@ class PolicyBase(BaseModel):
         if v not in _VALID_ACTIONS:
             raise ValueError("default_action must be 'permit' or 'deny'.")
         return v
+
+    @model_validator(mode="after")
+    def validate_manual_mode(self):
+        # Deliberately NOT requiring manual_default_command_set_id
+        # whenever requires_manual_approval is true -- a manual-mode
+        # policy is still valid to save mid-draft, before every field
+        # is filled in (matching app/models/policy.py's own reasoning
+        # for why the column itself is nullable). What's actually
+        # enforced: a command set can only be attached as the manual
+        # default when manual mode is actually on -- carrying one over
+        # from an earlier edit after switching back to Permit/Deny
+        # would silently misrepresent what the policy does.
+        if not self.requires_manual_approval and self.manual_default_command_set_id:
+            raise ValueError(
+                "manual_default_command_set_id can only be set when requires_manual_approval is true."
+            )
+        return self
 
 
 class PolicyCreate(PolicyBase):
@@ -86,5 +109,6 @@ class PolicyOut(PolicyBase):
     condition_group_name: str | None = None
     condition_device_name: str | None = None
     condition_device_group_name: str | None = None
+    manual_default_command_set_name: str | None = None
     has_condition_tree: bool = False
     command_sets: list[ReferencedCommandSet] = Field(default_factory=list)

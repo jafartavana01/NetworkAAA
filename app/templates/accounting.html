@@ -141,6 +141,19 @@
     return div.innerHTML;
   }
 
+  // Strips a trailing "<cr>" for display only -- this is a standard,
+  // expected Cisco IOS TACACS+ convention (an argument marking a
+  // complete, submitted command line, not a partial/tab-completed
+  // one), not a parsing artifact to fix. Never applied to the
+  // underlying stored/raw value, only to what's shown or pre-filled
+  // for the admin, since the trailing marker adds no information for
+  // a human reading the command list but would be an unwanted literal
+  // match fragment if baked into a promoted Command Set entry.
+  function displayCommand(cmd) {
+    if (!cmd) return cmd;
+    return cmd.replace(/\s*<cr>\s*$/i, '').trim() || cmd;
+  }
+
   function buildQuery() {
     const params = new URLSearchParams();
     const user = document.getElementById('filter-user').value.trim();
@@ -197,7 +210,7 @@
           <td class="cell-mono">${escapeHtml(r.nac || '—')}</td>
           <td>${escapeHtml(r.accttype || '—')}</td>
           <td>${escapeHtml(r.result || '—')}</td>
-          <td class="cell-mono">${escapeHtml(r.cmd || r.service || '—')}</td>
+          <td class="cell-mono">${escapeHtml(displayCommand(r.cmd) || r.service || '—')}</td>
           <td class="cell-actions">${canPromote ? `<button class="btn-secondary btn-small" data-promote="${i}">Promote</button>` : ''}</td>
         </tr>
       `;
@@ -295,7 +308,7 @@
     document.getElementById('promote-observed-command').textContent = record.cmd;
     document.getElementById('promote-form-error').hidden = true;
     document.getElementById('promote-match-mode').value = 'exact';
-    document.getElementById('promote-value').value = record.cmd;
+    document.getElementById('promote-value').value = displayCommand(record.cmd);
     document.getElementById('promote-action').value = 'deny';
     document.getElementById('promote-target-type').value = 'command-set';
     updatePromotePreview();

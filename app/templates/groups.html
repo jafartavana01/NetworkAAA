@@ -84,14 +84,20 @@
   <div class="modal" style="max-width: 560px;">
     <h2 id="members-modal-title">Members</h2>
 
-    <div class="field-row" style="align-items:flex-end;margin-bottom:16px;">
-      <label class="field">
-        <span class="field-label">Add a user</span>
-        <select id="members-add-select"></select>
-      </label>
-      <button type="button" class="btn-primary btn-small" id="members-add-btn" style="width:auto;margin-bottom:2px;">Add</button>
+    <div id="members-local-fields">
+      <div class="field-row" style="align-items:flex-end;margin-bottom:16px;">
+        <label class="field">
+          <span class="field-label">Add a user</span>
+          <select id="members-add-select"></select>
+        </label>
+        <button type="button" class="btn-primary btn-small" id="members-add-btn" style="width:auto;margin-bottom:2px;">Add</button>
+      </div>
+      <div id="members-add-note" class="content-sub" style="margin:-10px 0 14px 0;" hidden></div>
     </div>
-    <div id="members-add-note" class="content-sub" style="margin:-10px 0 14px 0;" hidden></div>
+
+    <div id="members-ad-note" class="panel panel-wide" style="margin-bottom:16px;" hidden>
+      <div class="panel-body" style="font-size:12px;">This is a live, read-only view of who Active Directory itself currently reports as a member of this group — not something managed here. Adding or removing members for an AD group isn't available on this platform, since it would have no effect on the group's real, authorization-relevant membership.</div>
+    </div>
 
     <div id="members-list"></div>
 
@@ -122,7 +128,7 @@
     }
 
     const rows = tacacsGroups.map(g => `
-      <tr>
+      <tr data-group-row="${g.id}">
         <td>${escapeHtml(g.name)}</td>
         <td>${escapeHtml(g.description || '—')}</td>
         <td>${g.referenced_by_policy_names.length ? g.referenced_by_policy_names.map(escapeHtml).join(', ') : '<span class="content-sub">none</span>'}</td>
@@ -152,6 +158,19 @@
     });
     wrap.querySelectorAll('[data-members]').forEach(btn => {
       btn.addEventListener('click', () => openMembersModal(tacacsGroups.find(g => g.id === btn.dataset.members)));
+    });
+    wrap.querySelectorAll('[data-group-row]').forEach(row => {
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const group = tacacsGroups.find(g => g.id === row.dataset.groupRow);
+        if (!group) return;
+        AAAPlatform.showContextMenu(e.clientX, e.clientY, [
+          { label: 'Members', onClick: () => openMembersModal(group) },
+          { label: 'Edit', onClick: () => openModal(group) },
+          'separator',
+          { label: 'Delete', onClick: () => deleteGroup(group.id), danger: true },
+        ]);
+      });
     });
   }
 
@@ -359,8 +378,39 @@
     currentMembersGroup = group;
     document.getElementById('members-modal-title').textContent = `Members — ${group.name}`;
     document.getElementById('members-add-note').hidden = true;
-    await refreshMembers();
+    const isAd = !!group.ad_group_name;
+    document.getElementById('members-local-fields').hidden = isAd;
+    document.getElementById('members-ad-note').hidden = !isAd;
+    if (isAd) {
+      await refreshAdGroupMembers();
+    } else {
+      await refreshMembers();
+    }
     document.getElementById('members-modal-backdrop').hidden = false;
+  }
+
+  async function refreshAdGroupMembers() {
+    const listEl = document.getElementById('members-list');
+    listEl.innerHTML = '<div class="content-sub">Looking up real AD membership…</div>';
+    const res = await AAAPlatform.authedFetch(`/api/ad-settings/group-members?group_name=${encodeURIComponent(currentMembersGroup.ad_group_name)}`);
+    if (!res.ok) {
+      listEl.innerHTML = '<div class="content-sub" style="color:var(--red);">Could not look this up — check the Active Directory settings page.</div>';
+      return;
+    }
+    const data = await res.json();
+    if (data.error) {
+      listEl.innerHTML = `<div class="content-sub" style="color:var(--red);">${escapeHtml(data.error)}</div>`;
+      return;
+    }
+    if (data.results.length === 0) {
+      listEl.innerHTML = '<div class="empty-state">Active Directory reports no members for this group right now.</div>';
+      return;
+    }
+    listEl.innerHTML = data.results.map(m => `
+      <div class="version-row">
+        <span style="flex:1;">${escapeHtml(m.sam_account_name)}${m.display_name ? ' <span class="content-sub">(' + escapeHtml(m.display_name) + ')</span>' : ''}</span>
+      </div>
+    `).join('');
   }
 
   async function refreshMembers() {
