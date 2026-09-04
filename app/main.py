@@ -20,6 +20,7 @@ from .database import get_sessionmaker
 from .modules import registry
 from .modules.core_module import register_core_module
 from .modules.network_ops_module import register_network_ops_module
+from .modules.security_module import register_security_module
 from .modules.tacacs_module import register_tacacs_module
 from .models.module_state import ModuleState
 from .web.routes import router as web_router
@@ -141,6 +142,7 @@ def create_app() -> FastAPI:
     register_core_module()
     register_tacacs_module()
     register_network_ops_module()
+    register_security_module()
 
     @app.on_event("startup")
     def _on_startup() -> None:

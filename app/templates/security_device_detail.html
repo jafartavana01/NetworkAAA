@@ -1,0 +1,317 @@
+{% extends "app_shell.html" %}
+{% block title %}Device Security — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Security Center / Devices / Detail{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1 id="device-detail-name">Loading…</h1>
+    <p class="content-sub" id="device-detail-sub"></p>
+  </div>
+
+  <section class="panel-grid" id="device-score-grid" hidden>
+    <div class="panel">
+      <div class="panel-head"><span class="rail" id="device-score-rail"></span>Security Score</div>
+      <div class="panel-body" id="device-score">—</div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span class="rail rail-dim"></span>Risk Level</div>
+      <div class="panel-body" id="device-risk">—</div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><span class="rail rail-dim"></span>Last Audited</div>
+      <div class="panel-body" id="device-last-audited">—</div>
+    </div>
+  </section>
+
+  <div class="content-head" style="margin-top:32px;">
+    <h2>Run a New Audit</h2>
+  </div>
+  <div class="panel" style="padding:16px;">
+    <div class="toolbar" style="margin-bottom:14px;">
+      <button type="button" class="btn-secondary btn-small" id="audit-mode-live-btn" style="width:auto;">Live SSH</button>
+      <button type="button" class="btn-secondary btn-small" id="audit-mode-upload-btn" style="width:auto;">Paste Configuration</button>
+    </div>
+
+    <div id="audit-live-fields">
+      <label class="field">
+        <span class="field-label">SSH username</span>
+        <input type="text" id="audit-ssh-username">
+      </label>
+      <label class="field" style="margin-top:12px;">
+        <span class="field-label">SSH password</span>
+        <input type="password" id="audit-ssh-password" autocomplete="new-password">
+      </label>
+    </div>
+    <div id="audit-upload-fields" hidden>
+      <label class="field">
+        <span class="field-label">Configuration text</span>
+        <textarea id="audit-config-text" rows="10" style="width:100%;font-family:var(--font-mono);font-size:12px;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;color:var(--text-primary);"></textarea>
+      </label>
+    </div>
+
+    <div id="audit-error" class="form-error" role="alert" hidden></div>
+    <div style="margin-top:12px;">
+      <button type="button" class="btn-primary btn-small" id="run-audit-btn" style="width:auto;">Run Audit</button>
+    </div>
+  </div>
+
+  <div id="audit-result-panel" hidden style="margin-top:24px;">
+    <div class="content-head">
+      <h2>Latest Audit Result</h2>
+    </div>
+    <div class="panel" style="padding:16px;">
+      <div id="audit-result-summary" style="margin-bottom:16px;"></div>
+
+      <div class="content-head" style="margin-top:0;">
+        <h2 style="font-size:13px;">Domain Scores</h2>
+      </div>
+      <div id="audit-domain-scores"></div>
+
+      <div class="content-head">
+        <h2 style="font-size:13px;">Findings</h2>
+      </div>
+      <div id="audit-result-findings"></div>
+
+      <div class="content-head">
+        <h2 style="font-size:13px;">Compliance</h2>
+      </div>
+      <div id="audit-compliance-summary"></div>
+    </div>
+  </div>
+
+  <div class="content-head" style="margin-top:32px;">
+    <h2>Audit History</h2>
+  </div>
+  <div id="audit-history-table-wrap">
+    <div class="empty-state">Loading…</div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s == null ? '' : String(s);
+    return div.innerHTML;
+  }
+  function scoreRail(score) {
+    if (score == null) return 'rail-dim';
+    if (score >= 85) return 'rail-signal';
+    if (score >= 60) return 'rail-amber';
+    return 'rail-red';
+  }
+  function severityRail(sev) {
+    if (sev === 'critical' || sev === 'high') return 'rail-red';
+    if (sev === 'medium') return 'rail-amber';
+    return 'rail-dim';
+  }
+
+  const pathParts = window.location.pathname.split('/').filter(Boolean);
+  const deviceId = pathParts[pathParts.length - 1];
+
+  async function loadDeviceSummary() {
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/security/devices');
+    } catch (err) {
+      res = null;
+    }
+    if (!res || !res.ok) {
+      document.getElementById('device-detail-name').textContent = 'Could not load this device';
+      document.getElementById('device-detail-sub').textContent = res && res.status === 403
+        ? "Your role doesn't have permission to view Security Center."
+        : 'Please try again.';
+      return;
+    }
+    const devices = await res.json();
+    const device = devices.find(d => d.id === deviceId);
+    if (!device) {
+      document.getElementById('device-detail-name').textContent = 'Device not found';
+      return;
+    }
+    document.getElementById('device-detail-name').textContent = device.name;
+    document.getElementById('device-detail-sub').textContent = `${device.ip_address}${device.device_group_name ? ' — ' + device.device_group_name : ''}`;
+
+    if (device.latest_score != null) {
+      document.getElementById('device-score-grid').hidden = false;
+      document.getElementById('device-score').textContent = `${device.latest_score} / 100`;
+      document.getElementById('device-score-rail').className = `rail ${scoreRail(device.latest_score)}`;
+      document.getElementById('device-risk').textContent = device.latest_risk_level || '—';
+      document.getElementById('device-last-audited').textContent = new Date(device.latest_audited_at).toLocaleString();
+    }
+
+    if (device.latest_audit_run_id) {
+      const auditRes = await AAAPlatform.authedFetch(`/api/security/audits/${device.latest_audit_run_id}`);
+      if (auditRes.ok) renderAuditResult(await auditRes.json());
+    }
+  }
+
+  function renderAuditResult(result) {
+    document.getElementById('audit-result-panel').hidden = false;
+
+    document.getElementById('audit-result-summary').innerHTML = `
+      <div style="display:flex;gap:24px;align-items:baseline;flex-wrap:wrap;">
+        <div><strong style="font-size:22px;">${result.overall_score != null ? result.overall_score : '—'}</strong> / 100</div>
+        <div class="content-sub">${escapeHtml(result.risk_level || '')} risk</div>
+        <div class="content-sub">Source: ${escapeHtml(result.source)}</div>
+      </div>
+    `;
+
+    const domainBox = document.getElementById('audit-domain-scores');
+    domainBox.innerHTML = result.domain_scores.length ? `
+      <table class="data-table">
+        <thead><tr><th>Domain</th><th>Score</th><th>Failing</th><th>Manual Review</th></tr></thead>
+        <tbody>
+          ${result.domain_scores.map(d => `
+            <tr>
+              <td>${escapeHtml(d.domain)}</td>
+              <td><span class="rail ${scoreRail(d.score)}" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;"></span>${d.score}</td>
+              <td>${d.fail_count}</td>
+              <td>${d.manual_count}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    ` : '<div class="empty-state">No domain scores.</div>';
+
+    const allFindings = [...result.correlation_findings, ...result.findings.filter(f => f.status === 'fail')];
+    const findingsBox = document.getElementById('audit-result-findings');
+    findingsBox.innerHTML = allFindings.length ? `
+      <table class="data-table">
+        <thead><tr><th>Severity</th><th>Domain</th><th>Finding</th><th>Recommendation</th></tr></thead>
+        <tbody>
+          ${allFindings.map(f => `
+            <tr>
+              <td><span class="rail ${severityRail(f.severity)}" style="display:inline-block;width:10px;height:10px;border-radius:50%;"></span> ${escapeHtml(f.severity)}</td>
+              <td>${escapeHtml(f.domain)}</td>
+              <td>${escapeHtml(f.title)}</td>
+              <td class="content-sub">${escapeHtml(f.recommendation || f.why || '')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    ` : '<div class="empty-state">No failing or correlated findings.</div>';
+
+    const complianceBox = document.getElementById('audit-compliance-summary');
+    const frameworks = Object.entries(result.compliance_summary || {});
+    complianceBox.innerHTML = frameworks.length ? `
+      <table class="data-table">
+        <thead><tr><th>Framework</th><th>Controls Referenced</th><th>Failing</th></tr></thead>
+        <tbody>
+          ${frameworks.map(([key, data]) => `
+            <tr><td>${escapeHtml(key)}</td><td>${data.total}</td><td>${data.fail}</td></tr>
+          `).join('')}
+        </tbody>
+      </table>
+    ` : '<div class="empty-state">No compliance mappings.</div>';
+  }
+
+  async function loadHistory() {
+    const wrap = document.getElementById('audit-history-table-wrap');
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch(`/api/security/devices/${deviceId}/audits`);
+    } catch (err) {
+      res = null;
+    }
+    if (!res || !res.ok) {
+      wrap.innerHTML = '<div class="empty-state">Could not load audit history.</div>';
+      return;
+    }
+    const runs = await res.json();
+    if (!runs.length) {
+      wrap.innerHTML = '<div class="empty-state">No audits yet — run one above.</div>';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Started</th><th>Source</th><th>Status</th><th>Score</th></tr></thead>
+        <tbody>
+          ${runs.map(r => `
+            <tr>
+              <td>${new Date(r.started_at).toLocaleString()}</td>
+              <td>${escapeHtml(r.source)}</td>
+              <td>${escapeHtml(r.status)}</td>
+              <td>${r.overall_score != null ? r.overall_score : '—'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  document.getElementById('audit-mode-live-btn').addEventListener('click', () => {
+    document.getElementById('audit-live-fields').hidden = false;
+    document.getElementById('audit-upload-fields').hidden = true;
+    document.getElementById('audit-mode-live-btn').className = 'btn-primary btn-small';
+    document.getElementById('audit-mode-upload-btn').className = 'btn-secondary btn-small';
+  });
+  document.getElementById('audit-mode-upload-btn').addEventListener('click', () => {
+    document.getElementById('audit-live-fields').hidden = true;
+    document.getElementById('audit-upload-fields').hidden = false;
+    document.getElementById('audit-mode-upload-btn').className = 'btn-primary btn-small';
+    document.getElementById('audit-mode-live-btn').className = 'btn-secondary btn-small';
+  });
+  document.getElementById('audit-mode-live-btn').click();
+
+  document.getElementById('run-audit-btn').addEventListener('click', async () => {
+    const errorBox = document.getElementById('audit-error');
+    errorBox.hidden = true;
+    const btn = document.getElementById('run-audit-btn');
+    const isLive = !document.getElementById('audit-live-fields').hidden;
+
+    let res;
+    if (isLive) {
+      const sshUsername = document.getElementById('audit-ssh-username').value;
+      const sshPassword = document.getElementById('audit-ssh-password').value;
+      if (!sshUsername || !sshPassword) {
+        errorBox.textContent = 'SSH username and password are required.';
+        errorBox.hidden = false;
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Connecting and auditing…';
+      res = await AAAPlatform.authedFetch(`/api/security/devices/${deviceId}/audit/live`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ssh_username: sshUsername, ssh_password: sshPassword }),
+      });
+    } else {
+      const configText = document.getElementById('audit-config-text').value.trim();
+      if (!configText) {
+        errorBox.textContent = 'Paste the configuration text first.';
+        errorBox.hidden = false;
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Running audit…';
+      res = await AAAPlatform.authedFetch('/api/security/audit/upload', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ raw_config: configText, device_id: deviceId }),
+      });
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Run Audit';
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Audit failed.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const result = await res.json();
+    renderAuditResult(result);
+    AAAPlatform.toast(`Audit complete — score ${result.overall_score != null ? result.overall_score : '—'}/100.`);
+    loadDeviceSummary();
+    loadHistory();
+  });
+
+  loadDeviceSummary();
+  loadHistory();
+})();
+</script>
+{% endblock %}

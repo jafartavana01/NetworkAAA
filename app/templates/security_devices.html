@@ -1,0 +1,78 @@
+{% extends "app_shell.html" %}
+{% block title %}Security Center — Devices — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Security Center / Devices{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Device Security</h1>
+    <p class="content-sub">Every NetworkAAA device, with its most recent security audit score if it has one.</p>
+  </div>
+
+  <div id="security-devices-table-wrap">
+    <div class="empty-state">Loading…</div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s == null ? '' : String(s);
+    return div.innerHTML;
+  }
+
+  function scoreRail(score) {
+    if (score == null) return 'rail-dim';
+    if (score >= 85) return 'rail-signal';
+    if (score >= 60) return 'rail-amber';
+    return 'rail-red';
+  }
+
+  async function loadDevices() {
+    const wrap = document.getElementById('security-devices-table-wrap');
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/security/devices');
+    } catch (err) {
+      res = null;
+    }
+    if (!res || !res.ok) {
+      wrap.innerHTML = '<div class="empty-state">Could not load devices.</div>';
+      return;
+    }
+    const devices = await res.json();
+    if (!devices.length) {
+      wrap.innerHTML = '<div class="empty-state">No devices yet — add one from the TACACS+ / RADIUS section first.</div>';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Device</th><th>IP Address</th><th>Group</th><th>Score</th><th>Risk</th><th>Last Audited</th><th></th></tr></thead>
+        <tbody>
+          ${devices.map(d => `
+            <tr>
+              <td>${escapeHtml(d.name)}</td>
+              <td class="cell-mono">${escapeHtml(d.ip_address)}</td>
+              <td>${escapeHtml(d.device_group_name || '—')}</td>
+              <td>
+                ${d.latest_score != null
+                  ? `<span class="rail ${scoreRail(d.latest_score)}" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;"></span>${d.latest_score}`
+                  : '<span class="content-sub">Not audited</span>'}
+              </td>
+              <td>${escapeHtml(d.latest_risk_level || '—')}</td>
+              <td>${d.latest_audited_at ? new Date(d.latest_audited_at).toLocaleString() : '—'}</td>
+              <td class="cell-actions"><a href="/security/devices/${d.id}" class="btn-secondary btn-small">View</a></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  loadDevices();
+})();
+</script>
+{% endblock %}

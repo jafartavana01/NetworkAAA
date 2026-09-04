@@ -20,7 +20,7 @@ from __future__ import annotations
 import ipaddress
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -294,10 +294,39 @@ def preview_device_aaa_commands(
     return DeviceAaaPreviewOut(commands=commands)
 
 
-@router.post("/{device_id}/apply-aaa", response_model=DeviceAaaApplyResult, dependencies=[Depends(verify_csrf)])
+def _apply_aaa_to_device_background(
+    session_id: str, *, host: str, ssh_username: str, ssh_password: str, commands: list[str],
+    connect_timeout: int, command_timeout: int,
+) -> None:
+    """
+    The SSH push itself, run as a background task -- everything that
+    needs the request-scoped DB session (device lookup, secret
+    decryption, extracting/updating a stored secret from an edited
+    command list) already happened synchronously in
+    apply_aaa_to_device before this is scheduled, so this function
+    itself needs no database access at all, unlike
+    app.api.routes_network_scan's own background-task helpers.
+    """
+    from ..services import ssh_provision, apply_progress
+    try:
+        result = ssh_provision.apply_aaa_config(
+            host, ssh_username, ssh_password, commands=commands,
+            connect_timeout=connect_timeout, command_timeout=command_timeout,
+        )
+        apply_progress.increment_completed(session_id)
+        apply_progress.finish_session(session_id, [DeviceAaaApplyResult(
+            success=result.success, message=result.message, command_log=result.command_log,
+        ).model_dump()])
+    except Exception as exc:
+        apply_progress.append_log(session_id, f"Unexpected error: {exc}")
+        apply_progress.finish_session(session_id, [])
+
+
+@router.post("/{device_id}/apply-aaa", dependencies=[Depends(verify_csrf)])
 def apply_aaa_to_device(
     device_id: str,
     payload: DeviceAaaApplyRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _admin: AdminUser = Depends(require_permission("devices:write")),
 ):
@@ -317,10 +346,35 @@ def apply_aaa_to_device(
     "the stored secret is derived from what's actually sent, so it can
     never drift out of sync with a manual edit" principle already
     established and tested for the scan flow, applied here too.
+
+    Runs the actual SSH push as a background task, returning a session
+    id immediately -- same live-progress/"Continue in background"
+    reasoning as app.api.routes_network_scan's own apply endpoints, and
+    polled via the SAME GET .../apply-progress/{session_id} endpoint
+    (app.services.apply_progress is shared, not per-route). Everything
+    that needs the database (device lookup, secret handling) happens
+    HERE, synchronously, before the background task is scheduled --
+    only the SSH push itself is deferred.
     """
     from ..services import ssh_provision
     device = _get_device_or_404(db, device_id)
     real_secret = security.decrypt_secret(device.shared_secret_encrypted)
+
+    from ..models.aaa_template_settings import AaaTemplateSettings
+    stored_settings = db.query(AaaTemplateSettings).first()
+    # Per-apply override -> admin's stored default -> ssh_provision's
+    # own built-in default, in that order. See DeviceAaaApplyRequest's
+    # own docstring for why this exists.
+    connect_timeout = (
+        payload.connect_timeout_seconds
+        or (stored_settings.connect_timeout_seconds if stored_settings else None)
+        or ssh_provision.DEFAULT_CONNECT_TIMEOUT_SECONDS
+    )
+    command_timeout = (
+        payload.command_timeout_seconds
+        or (stored_settings.command_timeout_seconds if stored_settings else None)
+        or ssh_provision.DEFAULT_COMMAND_TIMEOUT_SECONDS
+    )
 
     if payload.commands:
         if any(_EXISTING_SECRET_PLACEHOLDER in line for line in payload.commands):
@@ -343,5 +397,11 @@ def apply_aaa_to_device(
             platform_ip=payload.platform_ip, shared_secret=real_secret, templates=template,
         )
 
-    result = ssh_provision.apply_aaa_config(_bare_ip(device), payload.ssh_username, payload.ssh_password, commands=commands)
-    return DeviceAaaApplyResult(success=result.success, message=result.message, command_log=result.command_log)
+    from ..services import apply_progress
+    session_id = apply_progress.start_session(total=1, target_description=f"Applying AAA config to {device.name}")
+    background_tasks.add_task(
+        _apply_aaa_to_device_background, session_id,
+        host=_bare_ip(device), ssh_username=payload.ssh_username, ssh_password=payload.ssh_password,
+        commands=commands, connect_timeout=connect_timeout, command_timeout=command_timeout,
+    )
+    return {"session_id": session_id}

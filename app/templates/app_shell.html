@@ -37,6 +37,13 @@
       </div>
       <div class="topbar-right">
         <button id="global-apply-config-btn" class="btn-primary btn-small" style="width:auto;" hidden>Apply Configuration</button>
+        <div class="bg-notif-widget" id="bg-notif-widget" hidden>
+          <button type="button" class="bg-notif-bell-btn" id="bg-notif-bell-btn" aria-label="Background operations">
+            <span class="bg-notif-bell-icon">⏳</span>
+            <span class="bg-notif-badge" id="bg-notif-badge">0</span>
+          </button>
+          <div class="bg-notif-panel" id="bg-notif-panel" hidden></div>
+        </div>
         <span class="admin-name">{{ admin_username }}</span>
         <button id="logout-btn" class="btn-ghost">Sign out</button>
       </div>
@@ -210,6 +217,214 @@
 
     checkPending();
     setInterval(checkPending, 20000);
+  })();
+
+  // ---------- sidebar: collapsible sections, search, Ctrl+K ----------
+  // Shell-level (runs once, not re-run per SPA view) -- the sidebar
+  // itself is persistent chrome, same reasoning as the two IIFEs
+  // above. Every navigable item is read straight from the sidebar's
+  // own rendered DOM (never a separately-maintained JS list), so
+  // Ctrl+K and search can never show a page the current admin doesn't
+  // actually have -- an item this admin lacks permission for was
+  // never rendered server-side in the first place (see
+  // partials/sidebar.html / app.modules.sidebar's own superadmin
+  // gating), so it's simply absent from the DOM this reads.
+  //
+  // Accordion, not independent per-section toggles: at most ONE
+  // section is ever open. No localStorage persistence across page
+  // loads is used here on purpose -- every fresh load (including
+  // login, which lands on Dashboard, itself outside every section)
+  // starts with every section collapsed; only navigating into a
+  // section's own page opens it, and only for that one page.
+  (function () {
+    const sections = Array.from(document.querySelectorAll('.nav-section'));
+    if (!sections.length) return; // pages outside the shell (login) have no sidebar at all
+
+    function setSectionCollapsed(section, collapsed) {
+      section.classList.toggle('is-collapsed', collapsed);
+      const toggle = section.querySelector('.nav-section-toggle');
+      if (toggle) toggle.setAttribute('aria-expanded', String(!collapsed));
+    }
+
+    // Closes every section except the one whose key matches openKey --
+    // pass null to collapse all of them (the "just landed on
+    // Dashboard, or manually closed the only open section" case).
+    function setOpenSection(openKey) {
+      sections.forEach((section) => {
+        setSectionCollapsed(section, section.dataset.sectionKey !== openKey);
+      });
+    }
+
+    function syncActiveSection() {
+      let activeKey = null;
+      sections.forEach((section) => {
+        const hasActive = !!section.querySelector('.nav-item.active');
+        section.classList.toggle('has-active', hasActive);
+        if (hasActive) activeKey = section.dataset.sectionKey;
+      });
+      // The section containing wherever navigation just landed opens,
+      // and only it -- accordion, not "also keep whatever was open
+      // before." Landing on Dashboard (activeKey stays null, since
+      // Dashboard isn't inside any section) collapses everything.
+      setOpenSection(activeKey);
+    }
+
+    sections.forEach((section) => {
+      const toggle = section.querySelector('.nav-section-toggle');
+      if (!toggle) return;
+      toggle.addEventListener('click', () => {
+        const key = section.dataset.sectionKey;
+        const alreadyOpen = !section.classList.contains('is-collapsed');
+        // Clicking the already-open section closes it (back to
+        // nothing open); clicking any other section opens just that
+        // one, closing whatever was open before -- standard accordion
+        // toggle semantics.
+        setOpenSection(alreadyOpen ? null : key);
+      });
+    });
+
+    document.addEventListener('spa:navigated', syncActiveSection);
+    syncActiveSection();
+
+    // ---- search (filters the already-rendered sidebar; no API call) ----
+    const searchInput = document.getElementById('nav-search-input');
+    if (searchInput) {
+      function applySearch(query) {
+        const q = query.trim().toLowerCase();
+        if (!q) {
+          sections.forEach((section) => {
+            section.removeAttribute('data-search-hidden');
+            section.querySelectorAll('.nav-item').forEach((el) => el.removeAttribute('data-search-hidden'));
+          });
+          syncActiveSection(); // restore normal accordion state once the query is cleared
+          return;
+        }
+        // Search is a deliberate exception to strict accordion --
+        // results can span several sections, and all of them need to
+        // be visible at once, not just whichever one the accordion
+        // currently has open.
+        sections.forEach((section) => {
+          let sectionHasMatch = false;
+          section.querySelectorAll('.nav-item').forEach((el) => {
+            const haystack = el.dataset.keywords || el.textContent.toLowerCase();
+            const matches = haystack.includes(q);
+            el.toggleAttribute('data-search-hidden', !matches);
+            if (matches) sectionHasMatch = true;
+          });
+          section.toggleAttribute('data-search-hidden', !sectionHasMatch);
+          if (sectionHasMatch) setSectionCollapsed(section, false); // force-open so matches are actually visible
+        });
+      }
+      searchInput.addEventListener('input', () => applySearch(searchInput.value));
+      searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { searchInput.value = ''; applySearch(''); searchInput.blur(); }
+      });
+    }
+
+    // ---- Ctrl+K command palette ----
+    const cmdkBackdrop = document.getElementById('cmdk-backdrop');
+    const cmdkInput = document.getElementById('cmdk-input');
+    const cmdkResults = document.getElementById('cmdk-results');
+    if (!cmdkBackdrop || !cmdkInput || !cmdkResults) return;
+
+    function collectItems() {
+      // Re-read the DOM each time rather than caching once -- the
+      // sidebar's own content never changes after initial render for
+      // a given admin, but reading fresh costs nothing measurable and
+      // avoids ever showing a stale list.
+      return sections.flatMap((section) => {
+        const sectionLabel = section.querySelector('.nav-section-toggle span')?.textContent || '';
+        return Array.from(section.querySelectorAll('.nav-item')).map((el) => ({
+          label: el.textContent.trim(),
+          path: el.getAttribute('href'),
+          section: sectionLabel,
+          keywords: el.dataset.keywords || '',
+        }));
+      });
+    }
+
+    let selectedIndex = 0;
+    let currentResults = [];
+
+    function renderResults(query) {
+      const q = query.trim().toLowerCase();
+      const items = collectItems();
+      const matches = q ? items.filter((i) => i.keywords.includes(q)) : items;
+      currentResults = matches;
+      selectedIndex = 0;
+
+      if (!matches.length) {
+        cmdkResults.innerHTML = '<div class="cmdk-empty">No matching pages.</div>';
+        return;
+      }
+
+      const bySection = new Map();
+      matches.forEach((item) => {
+        if (!bySection.has(item.section)) bySection.set(item.section, []);
+        bySection.get(item.section).push(item);
+      });
+
+      let html = '';
+      let flatIndex = 0;
+      bySection.forEach((sectionItems, sectionLabel) => {
+        html += `<div class="cmdk-section-label">${sectionLabel}</div>`;
+        sectionItems.forEach((item) => {
+          html += `<a class="cmdk-item ${flatIndex === 0 ? 'is-selected' : ''}" href="${item.path}" data-index="${flatIndex}">
+            <span class="cmdk-item-arrow">→</span>${item.label}
+          </a>`;
+          flatIndex += 1;
+        });
+      });
+      cmdkResults.innerHTML = html;
+    }
+
+    function updateSelection(delta) {
+      if (!currentResults.length) return;
+      selectedIndex = Math.max(0, Math.min(currentResults.length - 1, selectedIndex + delta));
+      cmdkResults.querySelectorAll('.cmdk-item').forEach((el, i) => {
+        el.classList.toggle('is-selected', i === selectedIndex);
+      });
+      const selectedEl = cmdkResults.querySelector('.cmdk-item.is-selected');
+      if (selectedEl) selectedEl.scrollIntoView({ block: 'nearest' });
+    }
+
+    function openPalette() {
+      cmdkBackdrop.hidden = false;
+      cmdkInput.value = '';
+      renderResults('');
+      cmdkInput.focus();
+    }
+    function closePalette() {
+      cmdkBackdrop.hidden = true;
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (cmdkBackdrop.hidden) openPalette(); else closePalette();
+      }
+    });
+    cmdkBackdrop.addEventListener('click', (e) => {
+      if (e.target === cmdkBackdrop) closePalette();
+    });
+    cmdkInput.addEventListener('input', () => renderResults(cmdkInput.value));
+    cmdkInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { closePalette(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); updateSelection(1); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); updateSelection(-1); return; }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const selected = currentResults[selectedIndex];
+        if (selected) {
+          closePalette();
+          // A real link click -- spa.js's own delegated click listener
+          // intercepts this exactly like any other sidebar link, so
+          // the SPA transition (not a full reload) happens naturally.
+          const link = cmdkResults.querySelector(`.cmdk-item[data-index="${selectedIndex}"]`);
+          if (link) link.click();
+        }
+      }
+    });
   })();
 </script>
 <!--

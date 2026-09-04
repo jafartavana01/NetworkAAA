@@ -32,11 +32,29 @@ _SESSIONS: dict[str, dict] = {}
 _MAX_AGE_SECONDS = 3600  # stale sessions are dropped on next write, not eagerly swept
 
 
-def start_session() -> str:
+def start_session(*, total: int = 1, target_description: str = "") -> str:
     session_id = str(uuid.uuid4())
-    _SESSIONS[session_id] = {"status": "running", "log": [], "results": None, "started_at": time.time()}
+    _SESSIONS[session_id] = {
+        "status": "running", "log": [], "results": None, "started_at": time.time(),
+        # total/completed back a real progress bar (not just a log) --
+        # added directly in response to a real report that "Applying..."
+        # gave no sense of how much was left, especially once a
+        # bulk apply-all or a slow single-device push could run for a
+        # while with no visible movement. target_description is a
+        # short, human label ("Applying to R1", "Applying to 5
+        # devices") -- what a persistent notification widget shows
+        # once an admin sends this session to run in the background
+        # and navigates away from the page that started it.
+        "total": total, "completed": 0, "target_description": target_description,
+    }
     _prune_stale()
     return session_id
+
+
+def increment_completed(session_id: str) -> None:
+    session = _SESSIONS.get(session_id)
+    if session is not None:
+        session["completed"] += 1
 
 
 def append_log(session_id: str, line: str) -> None:

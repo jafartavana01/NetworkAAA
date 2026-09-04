@@ -147,6 +147,11 @@
 
     setActiveNav(url);
     closeMobileNav();
+    // Sidebar-specific reactions (auto-expanding the active item's
+    // section) live outside this file on purpose -- spa.js itself
+    // has no concept of "sections"; see app_shell.html's own listener
+    // for this event.
+    document.dispatchEvent(new CustomEvent('spa:navigated', { detail: { url } }));
 
     if (push) history.pushState({ spa: true }, '', url);
 
@@ -186,4 +191,5 @@
   // server-side on first load as a no-JS-required fallback; this just
   // means both agree from the very first paint onward).
   setActiveNav(window.location.href);
+  document.dispatchEvent(new CustomEvent('spa:navigated', { detail: { url: window.location.href } }));
 })();

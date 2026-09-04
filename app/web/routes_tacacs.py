@@ -15,6 +15,7 @@ from fastapi.templating import Jinja2Templates
 
 from .. import security
 from ..modules.registry import all_modules
+from ..modules.sidebar import build_sidebar_sections
 from .auth_helpers import current_admin_or_none
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
@@ -32,11 +33,11 @@ def _render(request: Request, session_token: str | None, template_name: str):
     if not admin:
         return RedirectResponse(url="/login", status_code=302)
 
-    nav = [entry for module in all_modules() for entry in module.nav_entries]
+    dashboard_item, nav_sections = build_sidebar_sections(all_modules(), is_superadmin=admin.is_superadmin)
     return templates.TemplateResponse(
         request,
         template_name,
-        {"admin_username": admin.username, "nav": nav, "is_superadmin": admin.is_superadmin},
+        {"admin_username": admin.username, "dashboard_item": dashboard_item, "nav_sections": nav_sections, "is_superadmin": admin.is_superadmin},
     )
 
 

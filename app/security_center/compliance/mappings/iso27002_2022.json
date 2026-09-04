@@ -1,0 +1,1282 @@
+{
+  "framework_id": "iso27002",
+  "framework_name": "ISO/IEC 27002:2022",
+  "license_note": "Copyrighted, commercially published by ISO. Only control numbers and short conventional titles are referenced here -- no descriptive/guidance text from the standard is reproduced. Not an official ISO document.",
+  "checks": {
+    "AAA-01": [
+      {
+        "control": "5.15",
+        "title": "Access control",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-02": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-03": [
+      {
+        "control": "5.29",
+        "title": "Information security during disruption",
+        "relationship": "supporting"
+      }
+    ],
+    "AAA-04": [
+      {
+        "control": "8.2",
+        "title": "Privileged access rights",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-05": [
+      {
+        "control": "8.2",
+        "title": "Privileged access rights",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-06": [
+      {
+        "control": "8.15",
+        "title": "Logging",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-07": [
+      {
+        "control": "8.15",
+        "title": "Logging",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-08": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-09": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-10": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-11": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "USR-01": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "USR-02": [
+      {
+        "control": "5.16",
+        "title": "Identity management",
+        "relationship": "direct"
+      }
+    ],
+    "USR-03": [
+      {
+        "control": "8.2",
+        "title": "Privileged access rights",
+        "relationship": "direct"
+      }
+    ],
+    "SSH-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "SSH-02": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "SSH-03": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      },
+      {
+        "control": "5.15",
+        "title": "Access control",
+        "relationship": "supporting"
+      }
+    ],
+    "SSH-04": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "supporting"
+      }
+    ],
+    "SSH-05": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "supporting"
+      }
+    ],
+    "SSH-06": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "SSH-07": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "SSH-08": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "HTTP-01": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "HTTP-02": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "SNMP-01": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "supporting"
+      },
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "SNMP-02": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "SNMP-03": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "SNMP-04": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "NTP-01": [
+      {
+        "control": "8.17",
+        "title": "Clock synchronization",
+        "relationship": "direct"
+      }
+    ],
+    "NTP-02": [
+      {
+        "control": "8.17",
+        "title": "Clock synchronization",
+        "relationship": "direct"
+      }
+    ],
+    "NTP-03": [
+      {
+        "control": "8.17",
+        "title": "Clock synchronization",
+        "relationship": "direct"
+      }
+    ],
+    "NTP-04": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "supporting"
+      }
+    ],
+    "LOG-01": [
+      {
+        "control": "8.15",
+        "title": "Logging",
+        "relationship": "direct"
+      }
+    ],
+    "LOG-02": [
+      {
+        "control": "8.17",
+        "title": "Clock synchronization",
+        "relationship": "supporting"
+      }
+    ],
+    "LOG-03": [
+      {
+        "control": "8.16",
+        "title": "Monitoring activities",
+        "relationship": "direct"
+      }
+    ],
+    "LOG-04": [
+      {
+        "control": "8.16",
+        "title": "Monitoring activities",
+        "relationship": "supporting"
+      }
+    ],
+    "BAN-01": [
+      {
+        "control": "5.10",
+        "title": "Acceptable use of information and other associated assets",
+        "relationship": "supporting"
+      }
+    ],
+    "DNS-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "supporting"
+      }
+    ],
+    "MPP-01": [
+      {
+        "control": "8.22",
+        "title": "Segregation of networks",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-RESTCONF": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-NETCONF": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-GNMI": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-IOX": [
+      {
+        "control": "8.19",
+        "title": "Installation of software on operational systems",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-TFTP": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-FTP": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-SCP": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "supporting"
+      }
+    ],
+    "EXP-GUESTSHELL": [
+      {
+        "control": "8.19",
+        "title": "Installation of software on operational systems",
+        "relationship": "supporting"
+      }
+    ],
+    "PWD-01": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "supporting"
+      }
+    ],
+    "PWD-02": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "PWD-03": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "PWD-04": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "L2PS-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "L2PS-02": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "L2PS-03": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "supporting"
+      }
+    ],
+    "L2PS-04": [
+      {
+        "control": "8.16",
+        "title": "Monitoring activities",
+        "relationship": "direct"
+      }
+    ],
+    "STP-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "STP-02": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "STP-03": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "supporting"
+      }
+    ],
+    "STP-04": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "supporting"
+      }
+    ],
+    "UDLD-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "supporting"
+      }
+    ],
+    "STORM-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "DHCPSNOOP-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "DHCPSNOOP-02": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "DHCPSNOOP-03": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "DHCPSNOOP-04": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "DHCPSNOOP-05": [
+      {
+        "control": "8.2",
+        "title": "Privileged access rights",
+        "relationship": "supporting"
+      }
+    ],
+    "DAI-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "DAI-02": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "DAI-03": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "supporting"
+      }
+    ],
+    "DAI-04": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "DAI-05": [
+      {
+        "control": "8.16",
+        "title": "Monitoring activities",
+        "relationship": "supporting"
+      }
+    ],
+    "IPSG-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "TRUNK-01": [
+      {
+        "control": "8.22",
+        "title": "Segregation of networks",
+        "relationship": "direct"
+      }
+    ],
+    "TRUNK-02": [
+      {
+        "control": "8.22",
+        "title": "Segregation of networks",
+        "relationship": "direct"
+      }
+    ],
+    "TRUNK-03": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "VTP-01": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "ECHAN-01": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "supporting"
+      }
+    ],
+    "URPF-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "URPF-02": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "supporting"
+      }
+    ],
+    "RTAUTH-OSPF-01": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "RTAUTH-OSPF-02": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "supporting"
+      }
+    ],
+    "RTAUTH-EIGRP-01": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "RTAUTH-RIP-01": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "RTAUTH-BGP-01": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "RTAUTH-BGP-02": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "RTAUTH-BGP-03": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "RTAUTH-BGP-04": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "supporting"
+      }
+    ],
+    "RTAUTH-ISIS-01": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "FHRP-HSRP-01": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "FHRP-HSRP-02": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "FHRP-VRRP-01": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "ICMP-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "ICMP-02": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "ICMP-03": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "supporting"
+      }
+    ],
+    "ICMP-04": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "ICMP-05": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "ACL-01": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "supporting"
+      }
+    ],
+    "ACL-02": [
+      {
+        "control": "8.3",
+        "title": "Information access restriction",
+        "relationship": "direct"
+      }
+    ],
+    "ACL-03": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "supporting"
+      }
+    ],
+    "ACL-04": [
+      {
+        "control": "8.16",
+        "title": "Monitoring activities",
+        "relationship": "supporting"
+      }
+    ],
+    "ACL-05": [
+      {
+        "control": "8.3",
+        "title": "Information access restriction",
+        "relationship": "supporting"
+      }
+    ],
+    "TRACK-01": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "supporting"
+      }
+    ],
+    "TRACK-02": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "supporting"
+      }
+    ],
+    "COPP-01": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-ICMP": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-ROUTING": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-ARP": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-L2CTRL": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-MGMT": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-DHCP": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-FHRP": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-MCAST": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "direct"
+      }
+    ],
+    "CPURISK-01": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "direct"
+      }
+    ],
+    "CPURISK-02": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "supporting"
+      }
+    ],
+    "CPURISK-03": [
+      {
+        "control": "8.32",
+        "title": "Change management",
+        "relationship": "direct"
+      }
+    ],
+    "CPURISK-04": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "supporting"
+      }
+    ],
+    "CPURISK-05": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "supporting"
+      }
+    ],
+    "CPURISK-06": [
+      {
+        "control": "8.16",
+        "title": "Monitoring activities",
+        "relationship": "supporting"
+      }
+    ],
+    "VPN-01": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "VPN-02": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "supporting"
+      }
+    ],
+    "VPN-03": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "VPN-04": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "VPN-05": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "VPN-06": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "supporting"
+      }
+    ],
+    "VPN-07": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "ZBFW-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "ZBFW-02": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "ZBFW-03": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "ZBFW-04": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-01": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-02": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-03": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "supporting"
+      }
+    ],
+    "PKI-04": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "supporting"
+      }
+    ],
+    "PKI-05": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-06": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-07": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-08": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-09": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-10": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-11": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "supporting"
+      }
+    ],
+    "PHYS-01": [
+      {
+        "control": "7.10",
+        "title": "Storage media",
+        "relationship": "supporting"
+      }
+    ],
+    "PHYS-02": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "supporting"
+      }
+    ],
+    "PHYS-03": [
+      {
+        "control": "7.9",
+        "title": "Security of assets off-premises",
+        "relationship": "supporting"
+      }
+    ],
+    "PHYS-04": [
+      {
+        "control": "7.10",
+        "title": "Storage media",
+        "relationship": "direct"
+      },
+      {
+        "control": "7.14",
+        "title": "Secure disposal or re-use of equipment",
+        "relationship": "direct"
+      }
+    ],
+    "PHYS-05": [
+      {
+        "control": "7.1",
+        "title": "Physical security perimeters",
+        "relationship": "direct"
+      }
+    ],
+    "BOOT-01": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "BOOT-02": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "supporting"
+      }
+    ],
+    "BOOT-03": [
+      {
+        "control": "7.9",
+        "title": "Security of assets off-premises",
+        "relationship": "supporting"
+      }
+    ],
+    "BOOT-04": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "BOOT-05": [
+      {
+        "control": "8.19",
+        "title": "Installation of software on operational systems",
+        "relationship": "direct"
+      }
+    ],
+    "BOOT-06": [
+      {
+        "control": "8.19",
+        "title": "Installation of software on operational systems",
+        "relationship": "supporting"
+      }
+    ],
+    "BOOT-07": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "supporting"
+      }
+    ],
+    "BOOT-08": [
+      {
+        "control": "8.5",
+        "title": "Secure authentication",
+        "relationship": "direct"
+      }
+    ],
+    "BOOT-09": [
+      {
+        "control": "8.8",
+        "title": "Management of technical vulnerabilities",
+        "relationship": "supporting"
+      }
+    ],
+    "SVC-01": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-02": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-03": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-04": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-05": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-06": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-07": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-08": [
+      {
+        "control": "8.8",
+        "title": "Management of technical vulnerabilities",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-09": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-10": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "MISC-01": [
+      {
+        "control": "8.16",
+        "title": "Monitoring activities",
+        "relationship": "supporting"
+      }
+    ],
+    "MISC-02": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "supporting"
+      }
+    ],
+    "MISC-03": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "MISC-04": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "supporting"
+      }
+    ],
+    "MISC-05": [
+      {
+        "control": "8.22",
+        "title": "Segregation of networks",
+        "relationship": "direct"
+      }
+    ],
+    "VER-01": [
+      {
+        "control": "8.8",
+        "title": "Management of technical vulnerabilities",
+        "relationship": "supporting"
+      }
+    ],
+    "CORR-01": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-02": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "supporting"
+      }
+    ],
+    "CORR-03": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-04": [
+      {
+        "control": "8.20",
+        "title": "Networks security",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-05": [
+      {
+        "control": "8.22",
+        "title": "Segregation of networks",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-06": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "supporting"
+      }
+    ],
+    "CORR-07": [
+      {
+        "control": "8.6",
+        "title": "Capacity management",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-08": [
+      {
+        "control": "8.24",
+        "title": "Use of cryptography",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-09": [
+      {
+        "control": "8.9",
+        "title": "Configuration management",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-10": [
+      {
+        "control": "8.19",
+        "title": "Installation of software on operational systems",
+        "relationship": "supporting"
+      }
+    ]
+  }
+}

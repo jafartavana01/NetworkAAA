@@ -20,7 +20,7 @@ install that never touches it.
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime
+from sqlalchemy import DateTime, Integer
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -36,4 +36,17 @@ class AaaTemplateSettings(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     commands: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    # Admin-configurable defaults for app.services.ssh_provision's own
+    # DEFAULT_CONNECT_TIMEOUT_SECONDS / DEFAULT_COMMAND_TIMEOUT_SECONDS
+    # -- added directly in response to a real report that "Apply" got
+    # stuck with no way to adjust it for a slow/high-latency device
+    # link short of editing that file directly. Nullable so an
+    # install that's never opened the timeout settings still falls
+    # back to those same built-in defaults, the same "purely additive"
+    # convention this file's own docstring already established for
+    # `commands`.
+    connect_timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    command_timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

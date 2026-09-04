@@ -103,6 +103,15 @@ class DeviceAaaApplyRequest(BaseModel):
     ssh_password: str = Field(min_length=1, max_length=256)
     platform_ip: str = Field(min_length=1, max_length=64)
     commands: list[str] | None = None
+    # Per-apply override -- falls back to the admin's stored default
+    # (AaaTemplateSettings.connect_timeout_seconds/
+    # command_timeout_seconds) when omitted, and from there to
+    # ssh_provision's own built-in defaults. Added directly in
+    # response to a real report that a slow/high-latency device link
+    # made the previous fixed timeout too short, with no way to adjust
+    # it short of editing source code.
+    connect_timeout_seconds: int | None = Field(default=None, ge=1, le=120)
+    command_timeout_seconds: int | None = Field(default=None, ge=1, le=300)
 
 
 class DeviceAaaApplyResult(BaseModel):

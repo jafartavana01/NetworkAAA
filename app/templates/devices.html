@@ -88,6 +88,17 @@
     <p class="content-sub" style="margin-top:0;">Used whenever "Edit commands before applying" isn't opened for a specific Apply. Changes here apply to every future scan/apply, not just the next one.</p>
     <textarea id="aaa-template-editor" rows="14" style="width:100%;font-family:var(--font-mono);font-size:12px;background:var(--bg-input);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;color:var(--text-primary);"></textarea>
     <div class="field-hint" style="margin-top:6px;">One command per line. <span class="cell-mono">{platform_ip}</span> and <span class="cell-mono">{shared_secret}</span> are replaced with the real values at apply time — <strong>each device always gets its own randomly-generated secret</strong>, whether applying one device or all of them; this template is never applied with the same literal secret to more than one device.</div>
+    <div class="field-row" style="margin-top:14px;">
+      <label class="field">
+        <span class="field-label">Default connect timeout (seconds)</span>
+        <input type="number" id="aaa-template-connect-timeout" min="1" max="120" placeholder="Built-in default">
+      </label>
+      <label class="field">
+        <span class="field-label">Default command timeout (seconds)</span>
+        <input type="number" id="aaa-template-command-timeout" min="1" max="300" placeholder="Built-in default">
+      </label>
+    </div>
+    <div class="field-hint" style="margin-top:-10px;margin-bottom:6px;" id="aaa-template-timeout-hint">Applies to every future Apply that doesn't set its own override. Leave blank to use the built-in default.</div>
     <div id="aaa-template-status" class="content-sub" style="margin-top:6px;"></div>
     <div id="aaa-template-error" class="form-error" role="alert" hidden></div>
     <div style="margin-top:10px;">
@@ -168,7 +179,28 @@
         <div class="field-hint" style="margin-top:6px;">The shared key is shown as a placeholder, never the real value. Keep it as-is to push this device's already-saved secret, or replace it with a specific value to update what's stored for this device to match.</div>
       </div>
 
+      <button type="button" class="btn-ghost btn-small" id="device-aaa-timeout-toggle" style="width:auto;margin-bottom:8px;">▸ Connection timeouts</button>
+      <div id="device-aaa-timeout-section" hidden class="field-row" style="margin-bottom:14px;">
+        <label class="field">
+          <span class="field-label">Connect timeout (seconds)</span>
+          <input type="number" id="device-aaa-connect-timeout" min="1" max="120" placeholder="Default">
+        </label>
+        <label class="field">
+          <span class="field-label">Command timeout (seconds)</span>
+          <input type="number" id="device-aaa-command-timeout" min="1" max="300" placeholder="Default">
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Leave blank to use the saved default (or the built-in 8s/10s if none is saved) — a slow or high-latency link to this device may need longer. Edit the saved default itself on the AAA Command Template page.</div>
+
       <div id="device-aaa-error" class="form-error" role="alert" hidden></div>
+      <div id="device-aaa-live-progress" hidden style="margin-top:12px;">
+        <div class="bg-notif-progress-track" style="height:8px;margin-bottom:8px;"><div class="bg-notif-progress-fill" id="device-aaa-progress-fill" style="width:0%;"></div></div>
+        <div id="device-aaa-progress-status" class="content-sub" style="margin-bottom:6px;"></div>
+        <div style="height:160px;overflow-y:auto;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;">
+          <div id="device-aaa-live-lines" class="cell-mono content-sub" style="line-height:1.5;"></div>
+        </div>
+        <button type="button" class="btn-ghost btn-small" id="device-aaa-background-btn" style="width:auto;margin-top:8px;">Continue in background</button>
+      </div>
       <div id="device-aaa-result" style="margin-top:12px;"></div>
 
       <div class="modal-actions">
@@ -222,9 +254,27 @@
         <div class="field-hint" style="margin-top:6px;">One command per line, sent in this exact order. The preview above shows one representative secret — every device (including in a bulk "Apply to all") gets its own unique, randomly-generated secret automatically, <strong>unless you edit these commands yourself</strong>, in which case the edited commands (and whatever secret is in them) are sent to every target as-is. Edits here apply only to this Apply action, not saved for next time.</div>
       </div>
 
+      <button type="button" class="btn-ghost btn-small" id="scan-apply-timeout-toggle" style="width:auto;margin:0 0 8px 0;">▸ Connection timeouts</button>
+      <div id="scan-apply-timeout-section" hidden class="field-row" style="margin-bottom:14px;">
+        <label class="field">
+          <span class="field-label">Connect timeout (seconds)</span>
+          <input type="number" id="scan-apply-connect-timeout" min="1" max="120" placeholder="Default">
+        </label>
+        <label class="field">
+          <span class="field-label">Command timeout (seconds)</span>
+          <input type="number" id="scan-apply-command-timeout" min="1" max="300" placeholder="Default">
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;" id="scan-apply-timeout-hint">Leave blank to use the saved default (or the built-in 8s/10s if none is saved) — a slow or high-latency link to this device may need longer. Edit the saved default itself on the AAA Command Template page.</div>
+
       <div id="scan-apply-error" class="form-error" role="alert" hidden></div>
-      <div id="scan-apply-live-progress" hidden style="margin-top:12px;height:38px;overflow:hidden;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;">
-        <div id="scan-apply-live-lines" class="cell-mono content-sub" style="line-height:1.4;"></div>
+      <div id="scan-apply-live-progress" hidden style="margin-top:12px;">
+        <div class="bg-notif-progress-track" style="height:8px;margin-bottom:8px;"><div class="bg-notif-progress-fill" id="scan-apply-progress-fill" style="width:0%;"></div></div>
+        <div id="scan-apply-progress-status" class="content-sub" style="margin-bottom:6px;"></div>
+        <div style="height:160px;overflow-y:auto;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;">
+          <div id="scan-apply-live-lines" class="cell-mono content-sub" style="line-height:1.5;"></div>
+        </div>
+        <button type="button" class="btn-ghost btn-small" id="scan-apply-background-btn" style="width:auto;margin-top:8px;">Continue in background</button>
       </div>
       <div id="scan-apply-results" style="margin-top:12px;max-height:280px;overflow-y:auto;"></div>
 
@@ -920,6 +970,12 @@
     if (wasHidden) await refreshCommandPreview();
   });
 
+  document.getElementById('scan-apply-timeout-toggle').addEventListener('click', () => {
+    const section = document.getElementById('scan-apply-timeout-section');
+    section.hidden = !section.hidden;
+    document.getElementById('scan-apply-timeout-toggle').textContent = section.hidden ? '▸ Connection timeouts' : '▾ Connection timeouts';
+  });
+
   document.getElementById('scan-apply-cancel-btn').addEventListener('click', () => {
     document.getElementById('scan-apply-modal-backdrop').hidden = true;
   });
@@ -949,35 +1005,58 @@
     });
   }
 
-  function renderLiveProgress(log) {
-    const lastTwo = log.slice(-2);
-    const linesEl = document.getElementById('scan-apply-live-lines');
-    linesEl.innerHTML = lastTwo.map(line => {
+  function renderLiveProgress(prefix, session) {
+    const total = session.total || 1;
+    const completed = session.completed || 0;
+    const pct = Math.min(100, Math.round((completed / total) * 100));
+    document.getElementById(`${prefix}-progress-fill`).style.width = `${pct}%`;
+    document.getElementById(`${prefix}-progress-status`).textContent =
+      session.status === 'done' ? 'Finishing up…' : `${completed} / ${total} complete`;
+    const linesEl = document.getElementById(`${prefix}-live-lines`);
+    linesEl.innerHTML = (session.log || []).map(line => {
       const isPass = / Pass$/.test(line);
       const isFail = /FAIL —/.test(line);
       const color = isPass ? 'var(--signal)' : isFail ? 'var(--red)' : 'var(--text-dim)';
-      return `<div style="color:${color};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(line)}</div>`;
+      return `<div style="color:${color};">${escapeHtml(line)}</div>`;
     }).join('');
+    linesEl.scrollTop = linesEl.scrollHeight;
   }
 
-  async function pollApplyProgress(sessionId) {
-    const progressBox = document.getElementById('scan-apply-live-progress');
+  // Returns the final results array normally, or the string
+  // 'backgrounded' if the admin clicked "Continue in background"
+  // while this was still running -- the caller checks for that
+  // specifically rather than treating it as a real result set.
+  async function pollApplyProgress(prefix, sessionId, backgroundDescription) {
+    const progressBox = document.getElementById(`${prefix}-live-progress`);
     progressBox.hidden = false;
-    renderLiveProgress([]);
+    let backgrounded = false;
 
-    while (true) {
-      const res = await AAAPlatform.authedFetch(`/api/network-scan/apply-progress/${sessionId}`);
-      if (!res.ok) break;
-      const session = await res.json();
-      renderLiveProgress(session.log || []);
-      if (session.status === 'done') {
-        progressBox.hidden = true;
-        return session.results || [];
+    const bgBtn = document.getElementById(`${prefix}-background-btn`);
+    const onBackgroundClick = () => {
+      backgrounded = true;
+      AAAPlatform.trackBackgroundOperation(sessionId, backgroundDescription);
+      AAAPlatform.toast('Continuing in the background — check the topbar for progress.');
+    };
+    bgBtn.addEventListener('click', onBackgroundClick, { once: true });
+
+    try {
+      while (true) {
+        if (backgrounded) return 'backgrounded';
+        const res = await AAAPlatform.authedFetch(`/api/network-scan/apply-progress/${sessionId}`);
+        if (!res.ok) break;
+        const session = await res.json();
+        renderLiveProgress(prefix, session);
+        if (session.status === 'done') {
+          progressBox.hidden = true;
+          return session.results || [];
+        }
+        await new Promise(resolve => setTimeout(resolve, 800));
       }
-      await new Promise(resolve => setTimeout(resolve, 800));
+      progressBox.hidden = true;
+      return [];
+    } finally {
+      bgBtn.removeEventListener('click', onBackgroundClick);
     }
-    progressBox.hidden = true;
-    return [];
   }
 
   document.getElementById('scan-apply-form').addEventListener('submit', async (e) => {
@@ -993,6 +1072,10 @@
     const commandsOverride = commandsSectionOpen
       ? document.getElementById('scan-apply-commands-editor').value.split('\n').map(l => l.trim()).filter(Boolean)
       : null;
+    const connectTimeoutVal = document.getElementById('scan-apply-connect-timeout').value;
+    const commandTimeoutVal = document.getElementById('scan-apply-command-timeout').value;
+    const connectTimeout = connectTimeoutVal ? parseInt(connectTimeoutVal, 10) : null;
+    const commandTimeout = commandTimeoutVal ? parseInt(commandTimeoutVal, 10) : null;
 
     if (!platformIp) {
       errorBox.textContent = 'Select or enter this platform\'s address.';
@@ -1008,7 +1091,7 @@
     if (scanApplyMode === 'all') {
       const res = await AAAPlatform.authedFetch('/api/network-scan/apply-all', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip_addresses: scanApplyTargets, ssh_username: sshUsername, ssh_password: sshPassword, platform_ip: platformIp, device_group_id: groupId, commands: commandsOverride }),
+        body: JSON.stringify({ ip_addresses: scanApplyTargets, ssh_username: sshUsername, ssh_password: sshPassword, platform_ip: platformIp, device_group_id: groupId, commands: commandsOverride, connect_timeout_seconds: connectTimeout, command_timeout_seconds: commandTimeout }),
       });
       if (!res.ok) {
         btn.disabled = false;
@@ -1019,23 +1102,31 @@
         return;
       }
       const { session_id } = await res.json();
-      results = await pollApplyProgress(session_id);
+      results = await pollApplyProgress('scan-apply', session_id, `Applying AAA config to ${scanApplyTargets.length} device(s)`);
       btn.disabled = false;
       btn.textContent = 'Apply';
     } else {
       const res = await AAAPlatform.authedFetch('/api/network-scan/apply', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ip_address: scanApplyTargets[0], ssh_username: sshUsername, ssh_password: sshPassword, platform_ip: platformIp, device_group_id: groupId, commands: commandsOverride }),
+        body: JSON.stringify({ ip_address: scanApplyTargets[0], ssh_username: sshUsername, ssh_password: sshPassword, platform_ip: platformIp, device_group_id: groupId, commands: commandsOverride, connect_timeout_seconds: connectTimeout, command_timeout_seconds: commandTimeout }),
       });
-      btn.disabled = false;
-      btn.textContent = 'Apply';
       if (!res.ok) {
+        btn.disabled = false;
+        btn.textContent = 'Apply';
         const body = await res.json().catch(() => ({}));
         errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Apply failed.';
         errorBox.hidden = false;
         return;
       }
-      results = [await res.json()];
+      const { session_id } = await res.json();
+      results = await pollApplyProgress('scan-apply', session_id, `Applying AAA config to ${scanApplyTargets[0]}`);
+      btn.disabled = false;
+      btn.textContent = 'Apply';
+    }
+
+    if (results === 'backgrounded') {
+      document.getElementById('scan-apply-modal-backdrop').hidden = true;
+      return;
     }
 
     renderScanApplyResults(results);
@@ -1084,6 +1175,10 @@
     const data = await res.json();
     document.getElementById('aaa-template-editor').value = data.commands.join('\n');
     document.getElementById('aaa-template-status').textContent = data.is_default ? 'Using the built-in default.' : 'Using a saved customization.';
+    document.getElementById('aaa-template-connect-timeout').value = data.connect_timeout_seconds ?? '';
+    document.getElementById('aaa-template-command-timeout').value = data.command_timeout_seconds ?? '';
+    document.getElementById('aaa-template-connect-timeout').placeholder = `Built-in default (${data.default_connect_timeout_seconds}s)`;
+    document.getElementById('aaa-template-command-timeout').placeholder = `Built-in default (${data.default_command_timeout_seconds}s)`;
   }
 
   document.getElementById('aaa-template-save-btn').addEventListener('click', async () => {
@@ -1095,8 +1190,15 @@
       errorBox.hidden = false;
       return;
     }
+    const connectTimeoutVal = document.getElementById('aaa-template-connect-timeout').value;
+    const commandTimeoutVal = document.getElementById('aaa-template-command-timeout').value;
     const res = await AAAPlatform.authedFetch('/api/aaa-template', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ commands }),
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commands,
+        connect_timeout_seconds: connectTimeoutVal ? parseInt(connectTimeoutVal, 10) : null,
+        command_timeout_seconds: commandTimeoutVal ? parseInt(commandTimeoutVal, 10) : null,
+      }),
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -1192,6 +1294,11 @@
     document.getElementById('device-aaa-edit-toggle').textContent = section.hidden ? '▸ Edit commands before applying' : '▾ Edit commands before applying';
     if (wasHidden) await refreshDeviceAaaPreview();
   });
+  document.getElementById('device-aaa-timeout-toggle').addEventListener('click', () => {
+    const section = document.getElementById('device-aaa-timeout-section');
+    section.hidden = !section.hidden;
+    document.getElementById('device-aaa-timeout-toggle').textContent = section.hidden ? '▸ Connection timeouts' : '▾ Connection timeouts';
+  });
   document.getElementById('device-aaa-cancel-btn').addEventListener('click', () => {
     document.getElementById('device-aaa-modal-backdrop').hidden = true;
   });
@@ -1216,6 +1323,10 @@
     const commandsOverride = commandsSectionOpen
       ? document.getElementById('device-aaa-commands-editor').value.split('\n').map(l => l.trim()).filter(Boolean)
       : null;
+    const connectTimeoutVal = document.getElementById('device-aaa-connect-timeout').value;
+    const commandTimeoutVal = document.getElementById('device-aaa-command-timeout').value;
+    const connectTimeout = connectTimeoutVal ? parseInt(connectTimeoutVal, 10) : null;
+    const commandTimeout = commandTimeoutVal ? parseInt(commandTimeoutVal, 10) : null;
 
     const btn = document.getElementById('device-aaa-confirm-btn');
     btn.disabled = true;
@@ -1223,12 +1334,12 @@
 
     const res = await AAAPlatform.authedFetch(`/api/devices/${deviceAaaTarget.id}/apply-aaa`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ssh_username: sshUsername, ssh_password: sshPassword, platform_ip: platformIp, commands: commandsOverride }),
+      body: JSON.stringify({ ssh_username: sshUsername, ssh_password: sshPassword, platform_ip: platformIp, commands: commandsOverride, connect_timeout_seconds: connectTimeout, command_timeout_seconds: commandTimeout }),
     });
-    btn.disabled = false;
-    btn.textContent = 'Apply';
 
     if (!res.ok) {
+      btn.disabled = false;
+      btn.textContent = 'Apply';
       const body = await res.json().catch(() => ({}));
       let msg = 'Apply failed.';
       if (body.detail && typeof body.detail === 'string') msg = body.detail;
@@ -1238,7 +1349,17 @@
       return;
     }
 
-    const result = await res.json();
+    const { session_id } = await res.json();
+    const results = await pollApplyProgress('device-aaa', session_id, `Applying AAA config to ${deviceAaaTarget.name}`);
+    btn.disabled = false;
+    btn.textContent = 'Apply';
+
+    if (results === 'backgrounded') {
+      document.getElementById('device-aaa-modal-backdrop').hidden = true;
+      return;
+    }
+
+    const result = results[0];
     const resultBox = document.getElementById('device-aaa-result');
     resultBox.innerHTML = `<span style="color:${result.success ? 'var(--signal)' : 'var(--red)'};">${result.success ? '✓' : '✗'}</span> ${escapeHtml(result.message)}`;
     if (result.success) {

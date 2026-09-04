@@ -1,0 +1,140 @@
+{% extends "app_shell.html" %}
+{% block title %}Security Center — Findings — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Security Center / Findings{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Findings</h1>
+    <p class="content-sub">Every finding from each device's own most recent audit — fleet-wide, filterable.</p>
+  </div>
+
+  <div class="toolbar" style="gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+    <label class="field" style="min-width:160px;">
+      <span class="field-label">Severity</span>
+      <select id="filter-severity">
+        <option value="">All</option>
+        <option value="critical">Critical</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+        <option value="info">Info</option>
+      </select>
+    </label>
+    <label class="field" style="min-width:160px;">
+      <span class="field-label">Status</span>
+      <select id="filter-status">
+        <option value="">All</option>
+        <option value="fail">Fail</option>
+        <option value="pass">Pass</option>
+        <option value="manual_review">Manual Review</option>
+        <option value="na">Not Applicable</option>
+      </select>
+    </label>
+    <label class="field" style="min-width:220px;">
+      <span class="field-label">Device</span>
+      <select id="filter-device">
+        <option value="">All devices</option>
+      </select>
+    </label>
+  </div>
+
+  <div id="findings-table-wrap">
+    <div class="empty-state">Loading…</div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s == null ? '' : String(s);
+    return div.innerHTML;
+  }
+  function severityRail(sev) {
+    if (sev === 'critical' || sev === 'high') return 'rail-red';
+    if (sev === 'medium') return 'rail-amber';
+    return 'rail-dim';
+  }
+
+  async function loadDeviceOptions() {
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/security/devices');
+    } catch (err) {
+      return;
+    }
+    if (!res.ok) return;
+    const devices = await res.json();
+    const select = document.getElementById('filter-device');
+    devices.forEach((d) => {
+      const opt = document.createElement('option');
+      opt.value = d.id;
+      opt.textContent = d.name;
+      select.appendChild(opt);
+    });
+  }
+
+  async function loadFindings() {
+    const wrap = document.getElementById('findings-table-wrap');
+    wrap.innerHTML = '<div class="empty-state">Loading…</div>';
+
+    const params = new URLSearchParams();
+    const severity = document.getElementById('filter-severity').value;
+    const statusFilter = document.getElementById('filter-status').value;
+    const deviceId = document.getElementById('filter-device').value;
+    if (severity) params.set('severity', severity);
+    if (statusFilter) params.set('status_filter', statusFilter);
+    if (deviceId) params.set('device_id', deviceId);
+
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch(`/api/security/findings?${params.toString()}`);
+    } catch (err) {
+      res = null;
+    }
+    if (!res || !res.ok) {
+      const message = res && res.status === 403
+        ? "Your role doesn't have permission to view Security Center."
+        : 'Could not load findings.';
+      wrap.innerHTML = `<div class="empty-state">${message}</div>`;
+      return;
+    }
+
+    const findings = await res.json();
+    if (!findings.length) {
+      wrap.innerHTML = '<div class="empty-state">No findings match these filters.</div>';
+      return;
+    }
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Severity</th><th>Status</th><th>Device</th><th>Domain</th><th>Finding</th><th>Recommendation</th><th>Audited</th></tr></thead>
+        <tbody>
+          ${findings.map(f => `
+            <tr>
+              <td><span class="rail ${severityRail(f.severity)}" style="display:inline-block;width:10px;height:10px;border-radius:50%;"></span> ${escapeHtml(f.severity)}</td>
+              <td>${escapeHtml(f.status)}</td>
+              <td><a href="/security/devices/${f.device_id}">${escapeHtml(f.device_name)}</a></td>
+              <td>${escapeHtml(f.domain)}${f.interface_name ? ' — ' + escapeHtml(f.interface_name) : ''}</td>
+              <td>${escapeHtml(f.title)}</td>
+              <td class="content-sub">${escapeHtml(f.recommendation || '')}</td>
+              <td class="content-sub">${new Date(f.audited_at).toLocaleDateString()}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  document.getElementById('filter-severity').addEventListener('change', loadFindings);
+  document.getElementById('filter-status').addEventListener('change', loadFindings);
+  document.getElementById('filter-device').addEventListener('change', loadFindings);
+
+  loadDeviceOptions();
+  loadFindings();
+})();
+</script>
+{% endblock %}

@@ -127,10 +127,26 @@ def _apply_one(
     db: Session, *, ip_address: str, ssh_username: str, ssh_password: str, platform_ip: str,
     group: DeviceGroup | None, device_name: str | None, commands_override: list[str] | None,
     progress_session_id: str | None = None,
+    connect_timeout: int | None = None, command_timeout: int | None = None,
 ) -> ApplyAaaResultOut:
     def log(line: str) -> None:
         if progress_session_id:
             apply_progress.append_log(progress_session_id, line)
+
+    from ..models.aaa_template_settings import AaaTemplateSettings
+    stored_settings = db.query(AaaTemplateSettings).first()
+    # Per-apply override -> admin's stored default -> ssh_provision's
+    # own built-in default. See ApplyAaaRequest's own docstring.
+    resolved_connect_timeout = (
+        connect_timeout
+        or (stored_settings.connect_timeout_seconds if stored_settings else None)
+        or ssh_provision.DEFAULT_CONNECT_TIMEOUT_SECONDS
+    )
+    resolved_command_timeout = (
+        command_timeout
+        or (stored_settings.command_timeout_seconds if stored_settings else None)
+        or ssh_provision.DEFAULT_COMMAND_TIMEOUT_SECONDS
+    )
 
     # Overlap check first -- refuse before ever touching the device
     # over SSH if this IP would conflict with an existing one (same
@@ -147,7 +163,10 @@ def _apply_one(
     # trip either way (hostname prompt + `show version` in the same
     # SSH session, not two separate connections).
     log(f"{ip_address}: connecting to gather device information…")
-    info = ssh_provision.gather_device_info(ip_address, ssh_username, ssh_password)
+    info = ssh_provision.gather_device_info(
+        ip_address, ssh_username, ssh_password,
+        connect_timeout=resolved_connect_timeout, command_timeout=resolved_command_timeout,
+    )
     if not info.success:
         log(f"{ip_address}: FAIL — {info.message}")
         return ApplyAaaResultOut(ip_address=ip_address, success=False, message=info.message)
@@ -178,7 +197,10 @@ def _apply_one(
         commands = ssh_provision.build_cisco_ios_aaa_commands(platform_ip=platform_ip, shared_secret=secret, templates=template)
 
     log(f"{name} ({ip_address}): applying {len(commands)} command(s)…")
-    result = ssh_provision.apply_aaa_config(ip_address, ssh_username, ssh_password, commands=commands)
+    result = ssh_provision.apply_aaa_config(
+        ip_address, ssh_username, ssh_password, commands=commands,
+        connect_timeout=resolved_connect_timeout, command_timeout=resolved_command_timeout,
+    )
 
     if not result.success:
         log(f"{name} ({ip_address}): FAIL — {result.message}")
@@ -209,18 +231,51 @@ def _apply_one(
     )
 
 
-@router.post("/apply", response_model=ApplyAaaResultOut, dependencies=[Depends(verify_csrf)])
+def _apply_single_background(session_id: str, payload: ApplyAaaRequest) -> None:
+    """Same background-task pattern as _apply_all_background, applied
+    to a single target -- see that function's own docstring for why a
+    dedicated database session is needed here. Every apply (single or
+    bulk) now runs this way, so the GUI can offer "Continue in
+    background" uniformly rather than only for a bulk apply."""
+    from ..database import get_sessionmaker
+    session_local = get_sessionmaker()
+    db = session_local()
+    try:
+        group = _resolve_group(db, payload.device_group_id)
+        result = _apply_one(
+            db, ip_address=payload.ip_address, ssh_username=payload.ssh_username, ssh_password=payload.ssh_password,
+            platform_ip=payload.platform_ip, group=group, device_name=payload.device_name,
+            commands_override=payload.commands, progress_session_id=session_id,
+            connect_timeout=payload.connect_timeout_seconds, command_timeout=payload.command_timeout_seconds,
+        )
+        apply_progress.increment_completed(session_id)
+        apply_progress.finish_session(session_id, [result.model_dump()])
+    except Exception as exc:
+        apply_progress.append_log(session_id, f"Unexpected error: {exc}")
+        apply_progress.finish_session(session_id, [])
+    finally:
+        db.close()
+
+
+@router.post("/apply", dependencies=[Depends(verify_csrf)])
 def apply_aaa(
     payload: ApplyAaaRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _admin: AdminUser = Depends(require_permission("devices:write")),
 ):
-    group = _resolve_group(db, payload.device_group_id)
-    return _apply_one(
-        db, ip_address=payload.ip_address, ssh_username=payload.ssh_username, ssh_password=payload.ssh_password,
-        platform_ip=payload.platform_ip, group=group, device_name=payload.device_name,
-        commands_override=payload.commands,
+    """Runs as a background task and returns a session id immediately
+    -- same reasoning and the same GET .../apply-progress/{session_id}
+    polling endpoint as apply_aaa_all, now applied to a single target
+    too, so a slow single-device push can also offer live progress and
+    "Continue in background" rather than holding the request open with
+    no visibility until it finishes."""
+    _resolve_group(db, payload.device_group_id)  # validate early; the background task re-resolves its own copy
+    session_id = apply_progress.start_session(
+        total=1, target_description=f"Applying AAA config to {payload.device_name or payload.ip_address}",
     )
+    background_tasks.add_task(_apply_single_background, session_id, payload)
+    return {"session_id": session_id}
 
 
 def _apply_all_background(session_id: str, payload: ApplyAaaAllRequest) -> None:
@@ -241,7 +296,9 @@ def _apply_all_background(session_id: str, payload: ApplyAaaAllRequest) -> None:
                 db, ip_address=ip, ssh_username=payload.ssh_username, ssh_password=payload.ssh_password,
                 platform_ip=payload.platform_ip, group=group, device_name=None,
                 commands_override=payload.commands, progress_session_id=session_id,
+                connect_timeout=payload.connect_timeout_seconds, command_timeout=payload.command_timeout_seconds,
             ))
+            apply_progress.increment_completed(session_id)
         apply_progress.finish_session(session_id, [r.model_dump() for r in results])
     except Exception as exc:
         apply_progress.append_log(session_id, f"Unexpected error: {exc}")
@@ -284,7 +341,10 @@ def apply_aaa_all(
     is a legitimate deliberate choice in some environments, not
     always a mistake."""
     _resolve_group(db, payload.device_group_id)  # validate early; the background task re-resolves its own copy
-    session_id = apply_progress.start_session()
+    session_id = apply_progress.start_session(
+        total=len(payload.ip_addresses),
+        target_description=f"Applying AAA config to {len(payload.ip_addresses)} device(s)",
+    )
     background_tasks.add_task(_apply_all_background, session_id, payload)
     return {"session_id": session_id}
 

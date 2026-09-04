@@ -39,8 +39,14 @@ import re
 from dataclasses import dataclass, field
 
 _PROMPT_PATTERN = re.compile(r"([A-Za-z0-9_.\-]+)[>#]\s*$")
-_CONNECT_TIMEOUT_SECONDS = 8
-_COMMAND_TIMEOUT_SECONDS = 10
+# Defaults only -- both are now admin-configurable (see
+# app.models.aaa_template_settings's connect_timeout_seconds /
+# command_timeout_seconds, exposed on the "Apply AAA config" dialog),
+# in direct response to a real report that a slow/high-latency device
+# link made the previous hard-coded 8s/10s too short and left "Apply"
+# stuck with no way to adjust it short of editing this file directly.
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 8
+DEFAULT_COMMAND_TIMEOUT_SECONDS = 10
 
 
 @dataclass
@@ -67,7 +73,11 @@ _SHOW_VERSION_PLATFORM_PATTERNS = [
 ]
 
 
-def gather_device_info(host: str, username: str, password: str, *, port: int = 22) -> SshResult:
+def gather_device_info(
+    host: str, username: str, password: str, *, port: int = 22,
+    connect_timeout: int = DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    command_timeout: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+) -> SshResult:
     """
     Connects, reads the initial prompt (for a hostname suggestion),
     then runs `show version` in the SAME session (one connection, not
@@ -92,15 +102,15 @@ def gather_device_info(host: str, username: str, password: str, *, port: int = 2
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        client.connect(host, port=port, username=username, password=password, timeout=_CONNECT_TIMEOUT_SECONDS, look_for_keys=False, allow_agent=False)
+        client.connect(host, port=port, username=username, password=password, timeout=connect_timeout, look_for_keys=False, allow_agent=False)
         shell = client.invoke_shell()
-        shell.settimeout(_COMMAND_TIMEOUT_SECONDS)
-        buffer = _read_until_idle(shell)
+        shell.settimeout(command_timeout)
+        buffer = _read_until_idle(shell, timeout=command_timeout)
         match = _PROMPT_PATTERN.search(buffer.strip())
         hostname = match.group(1) if match else None
 
         shell.send("show version\n")
-        version_output = _read_until_idle(shell)
+        version_output = _read_until_idle(shell, timeout=command_timeout)
         # Strip the echoed command itself and the trailing prompt line
         # so what's stored is just the device's own output.
         version_output = version_output.strip()
@@ -125,11 +135,11 @@ def gather_device_info(host: str, username: str, password: str, *, port: int = 2
         client.close()
 
 
-def _read_until_idle(shell, *, max_bytes: int = 8192) -> str:
+def _read_until_idle(shell, *, max_bytes: int = 8192, timeout: int = DEFAULT_COMMAND_TIMEOUT_SECONDS) -> str:
     import time
 
     buffer = ""
-    deadline = time.time() + _COMMAND_TIMEOUT_SECONDS
+    deadline = time.time() + timeout
     while time.time() < deadline:
         if shell.recv_ready():
             chunk = shell.recv(max_bytes).decode(errors="replace")
@@ -231,27 +241,35 @@ def extract_shared_secret(commands: list[str]) -> str | None:
 
 
 def apply_aaa_config(
-    host: str, username: str, password: str, *, commands: list[str], port: int = 22
+    host: str, username: str, password: str, *, commands: list[str], port: int = 22,
+    connect_timeout: int = DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    command_timeout: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
 ) -> SshResult:
     """Connects, runs each command in `commands` in an interactive
     shell (needed for `configure terminal`-style multi-command
     sessions, not one-shot exec), and returns the full transcript so
     the admin can verify exactly what happened -- never a bare
-    success/fail with no way to check the device's own responses."""
+    success/fail with no way to check the device's own responses.
+
+    `connect_timeout`/`command_timeout` are admin-configurable (see
+    module-level DEFAULT_* constants' own comment) -- a slow or
+    high-latency device link can genuinely need longer than the
+    built-in defaults, and previously had no way to adjust that short
+    of editing this file directly."""
     import paramiko
 
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     log: list[str] = []
     try:
-        client.connect(host, port=port, username=username, password=password, timeout=_CONNECT_TIMEOUT_SECONDS, look_for_keys=False, allow_agent=False)
+        client.connect(host, port=port, username=username, password=password, timeout=connect_timeout, look_for_keys=False, allow_agent=False)
         shell = client.invoke_shell()
-        shell.settimeout(_COMMAND_TIMEOUT_SECONDS)
-        _read_until_idle(shell)  # drain the initial banner/prompt before sending anything
+        shell.settimeout(command_timeout)
+        _read_until_idle(shell, timeout=command_timeout)  # drain the initial banner/prompt before sending anything
 
         for cmd in commands:
             shell.send(cmd + "\n")
-            output = _read_until_idle(shell)
+            output = _read_until_idle(shell, timeout=command_timeout)
             log.append(f"> {cmd}\n{output.strip()}")
 
         return SshResult(success=True, message="Configuration applied.", command_log=log)

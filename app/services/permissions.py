@@ -54,6 +54,9 @@ PERMISSION_CATALOG: list[Permission] = [
     Permission("network_ops:view", "View Network Operations", "See command jobs, their targets, and raw command output."),
     Permission("network_ops:execute", "Run Command Jobs", "Create and run command jobs against devices and device groups."),
     Permission("network_ops:templates", "Manage Command Templates", "Create, edit, and delete reusable command templates."),
+    Permission("security:view", "View Security Center", "See security audit findings, scores, compliance results, and audit history."),
+    Permission("security:audit", "Run Security Audits", "Trigger a device or interface security audit (live SSH, uploaded config, or stored snapshot)."),
+    Permission("security:remediate", "Apply Security Remediation", "Send a security finding's recommended fix through the configuration Apply workflow."),
 ]
 
 PERMISSION_KEYS = {p.key for p in PERMISSION_CATALOG}

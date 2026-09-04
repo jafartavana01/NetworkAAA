@@ -12,6 +12,414 @@ it was built alongside.
 
 ## 2026-09-03
 
+### Added — Security Center "Findings": fleet-wide, filterable, across every device
+
+`GET /api/security/findings` -- every finding from each device's own
+LATEST completed audit only (never an older, superseded run, so a
+fixed issue from three audits ago can't reappear just because it's
+still sitting in an old run's rows), filterable server-side by
+severity/status/device/domain. `/security/findings` is the page:
+severity/status/device dropdowns, a real severity-priority sort (see
+the real bug caught below), and each row links to its device's own
+detail page.
+
+A real bug caught before shipping: the first version sorted findings
+with `.order_by(AuditFinding.severity.asc())` -- alphabetical, which
+puts "info" and "low" ahead of "high" and "medium" (`critical` <
+`high` < `info` < `low` < `medium` as plain strings). Fixed by sorting
+in Python against an explicit severity-priority mapping instead.
+
+Also refactored rather than adding a third copy of the same logic:
+the "most recent completed audit run per device" query -- already
+duplicated once between `/overview` and `/devices` -- is now one
+shared `_latest_completed_runs_by_device()` helper, used by all three
+endpoints including the new one, so the definition of "current fleet
+posture" can't drift between them.
+
+Learning directly from the view_scripts bug fixed just below in this
+same day's log: verified the new template's script lands inside
+`#view-scripts-container` by checking the actual rendered HTML, not
+assumed from having written it correctly, and re-ran the project-wide
+systematic scan for that exact bug class -- still zero instances found
+anywhere, confirming both the earlier fix held and this new page
+didn't reintroduce it. All 31 templates parse; zero ID mismatches;
+extracted script passes Node syntax checks; every new/refactored field
+reference re-verified against the real database schema; the new nav
+entry confirmed appearing correctly under Security Center.
+
+---
+
+### Fixed — Security Center pages stuck on "Loading…" forever when reached via the sidebar
+
+Direct report, with screenshots: Overview and Devices both hung
+indefinitely with no error. Root cause, found by re-deriving the
+actual mechanics rather than guessing: this project's shell
+(`app_shell.html`) is an SPA loader (`spa.js`) that swaps page content
+into `#view-root` via `innerHTML` on every in-app navigation --
+**script elements inserted through `innerHTML` never execute**, a
+standard browser behavior. Every other page in this project puts its
+`<script>` in a separate `{% block view_scripts %}`, which lives
+OUTSIDE `#view-root` in its own `#view-scripts-container` and is
+specifically, individually re-executed by `spa.js` on each navigation
+(via `createElement` + `appendChild`, which DOES run). All three new
+Security Center pages (`security_overview.html`, `security_devices.html`,
+`security_device_detail.html`) had their `<script>` inside
+`{% block view_content %}` instead -- so on a hard refresh or direct
+URL visit the script ran fine (the whole document loads and executes
+normally), but navigating to any of them via a sidebar click meant the
+script never ran at all: not a failure, simply nothing ever attempting
+to fetch anything, which is exactly why nothing ever errored either --
+matching the screenshots precisely.
+
+Fixed by moving each page's `<script>` into its own `{% block
+view_scripts %}`, matching the one correct pattern already used by
+every other page in this project.
+
+Given how severe and silent this bug class is (a page that renders
+fine on direct load, with the identical HTML, silently does nothing at
+all via the SPA -- a gap neither a Jinja parse check nor a Node syntax
+check would ever catch, since both are blind to which Jinja block a
+script sits in), searched the entire project for the same pattern
+rather than trusting that only the reported pages were affected.
+Confirmed zero further instances -- this was specific to the three
+newest pages, not a pre-existing or widespread issue.
+
+While in this code, also hardened three fetch call sites
+(`loadOverview()`, `loadDeviceSummary()`, `loadDevices()`, `loadHistory()`)
+that previously left their "Loading…" state on screen forever on any
+API failure (`if (!res.ok) return;`, with no user-facing message) --
+now show a real error, and a distinct message when the failure is a
+403 (a role lacking the `security:view` permission, since that
+permission is new and existing roles created before it existed
+wouldn't have it granted automatically).
+
+Verified: all 3 templates parse; block structure confirmed balanced
+and the script now lands inside `#view-scripts-container` specifically
+(checked directly against the rendered HTML, not assumed); zero ID
+mismatches; every extracted script passes Node syntax checks; a
+project-wide systematic scan (script-tag position vs. block
+boundaries, run before and after the fix) confirms the bug is fully
+resolved and doesn't recur elsewhere.
+
+---
+
+### Changed — sidebar sections now behave as a true accordion, collapsed by default
+
+Direct request: every section collapsed on login, and expanding one
+closes whichever other section was open, rather than each section
+toggling independently.
+
+The two requirements interact in a way worth spelling out: "collapsed
+by default on login" and "auto-expand the section containing wherever
+the user currently is" (an earlier requirement) are NOT in tension --
+login lands on Dashboard, which was already rendered standalone,
+outside every section, so it has no section to auto-expand and every
+section is correctly collapsed as a direct consequence, not a special
+case. Landing directly on a sub-page (a deep link or a refresh) still
+opens that one page's own section, same as before -- now simply
+`the` open one, since only one can be, ever.
+
+Previously each section's collapsed state was tracked independently
+and persisted to localStorage across page loads. That persistence
+directly contradicted "collapsed by default on every login," so it's
+removed rather than reconciled -- accordion state now lives only in
+the current page's own DOM, reset fresh on every real page load
+(`setOpenSection(activeKey)`, called with `null` -- collapsing
+everything -- whenever the current page isn't inside any section).
+Search remains a deliberate exception: matches can span several
+sections, so search force-opens every section with a hit rather than
+being constrained to the single accordion slot, and restores normal
+accordion state the moment the query is cleared.
+
+Verified: server-side rendering confirmed correct for both cases
+(landing on Dashboard renders every section collapsed; landing on a
+sub-page renders only its own section open, matching the no-JS
+fallback principle this project already established for the original
+sidebar). The accordion state machine itself was verified with 5
+scenario tests (initial Dashboard landing, initial sub-page landing,
+manual open-while-elsewhere-active, re-closing an open section,
+SPA-navigating between sections) -- all passed. Full project-wide
+template/compile checks and an ID cross-check confirm nothing else
+regressed.
+
+---
+
+### Fixed — Ctrl+K palette permanently visible, blocking the entire page
+
+Direct report, with a screenshot: the search palette showed on every
+page load and blocked all clicks to the rest of the app. Root cause:
+`.cmdk-backdrop` set `display: flex` with no `[hidden]` override --
+the `hidden` HTML attribute and a class rule that also sets `display`
+have EQUAL CSS specificity, so which one wins depends on cascade
+order, not the attribute being present; my author stylesheet's rule
+was overriding the browser's own default `[hidden] { display: none }`.
+This project already had the correct, proven fix for this exact bug
+class on `.modal-backdrop[hidden]` -- I'd simply failed to replicate
+it for the new palette.
+
+Given a report of one instance, searched the entire project
+systematically rather than fixing only the reported case: every CSS
+class with an explicit non-`none` `display` declaration, cross-
+referenced against every element in every template that combines that
+class with the `hidden` attribute. Found and fixed four more real,
+previously-unnoticed instances of the identical bug -- `.panel-grid`
+(this session's own new device-detail score grid), and, more
+significantly, `.field`, `.field-row`, and `.badge`, three widely-used
+foundational classes present across many pages, each now given the
+same `[hidden] { display: none }` override. Re-ran the same systematic
+search after the fixes and confirmed zero remaining instances anywhere
+in the project.
+
+---
+
+### Added — Security Center "Devices" list and per-device detail page
+
+The Overview page's audit trigger had nowhere for its results to
+persist to beyond that one page. Added:
+
+- `GET /api/security/devices` -- every NetworkAAA device (reusing the
+  existing `NetworkDevice` inventory, not a second one) paired with its
+  own most recent completed audit's score/risk/date if it has one, so
+  this list is also where "which devices haven't been audited yet" is
+  discoverable, not just already-audited ones.
+- `/security/devices` -- the list page. Initially used an invented
+  `.clickable-row` pattern; caught during review that this project
+  already has an established list-to-detail pattern (a real `<a
+  class="btn-secondary btn-small">` in a `.cell-actions` column, per
+  `network_ops_jobs.html`), and switched to matching it instead of
+  introducing a new one.
+- `/security/devices/{id}` -- per-device detail: score/risk/last-
+  audited summary, a live-SSH-or-paste-config audit trigger (SSH
+  fields follow the exact `.field`/`.field-label` markup
+  `devices.html`'s own "Apply AAA Configuration" dialog already
+  established), the latest audit's domain scores/findings/compliance,
+  and full audit history.
+- `security_module.py`'s nav entries and `sidebar.py`'s path-to-
+  section mapping both updated for the new `/security/devices` path.
+
+Verified: all 30 templates (28 + 2 new) parse; both new templates'
+extracted scripts pass Node syntax checks; zero ID mismatches; every
+new API field reference cross-checked against the real model schema
+(same AST-based verification used throughout this migration, given
+SQLAlchemy still isn't installed in this sandbox); the new nav entry
+confirmed appearing correctly under Security Center via the same
+isolated-logic test used for the sidebar redesign itself.
+
+---
+
+### Redesigned — sidebar navigation: collapsible sections, search, Ctrl+K
+
+The sidebar had grown to one long, flat list under 4 top-level
+groups (23 items). Redesigned into 5 collapsible sections (Identity &
+Access, TACACS+ / RADIUS, Network Operations, Security Center, System)
+plus a standalone Dashboard link, following the exact information
+architecture requested -- every existing route preserved unchanged,
+zero fake/placeholder links added.
+
+Inspected the existing architecture first, as instructed, and found a
+mechanism that would have silently broken if missed: `spa.js` is a
+persistent-shell SPA loader whose own `setActiveNav()` re-syncs the
+sidebar's active-link highlighting on every client-side navigation
+(not full page reloads) by querying `.nav-item` elements by `href` --
+any redesign had to keep that exact contract. `spa.js` was extended
+with one minimal addition (a `spa:navigated` custom event, dispatched
+on both initial load and every SPA transition) rather than teaching it
+about "sections," keeping it sidebar-agnostic; the new sidebar-specific
+reactions (auto-expanding the active item's section) listen for that
+event instead.
+
+**New `app/modules/sidebar.py`**: regroups the nav entries every
+module already contributes via `all_modules()` into the new sections
+-- without moving a single `NavEntry` between `core_module.py`/
+`tacacs_module.py`/`network_ops_module.py`/`security_module.py`, each
+of which keeps owning its own nav entries exactly as before. Grouping-
+for-display is a presentation concern, kept separate from which module
+implements a feature. Superadmin gating (previously enforced only at
+the whole-group level -- e.g. the old "Platform" group) is now
+evaluated per item, a necessary change since the new Identity & Access
+section mixes previously-separate gated and non-gated items; the
+effective visibility of every existing item is unchanged. Verified
+against data reconstructed exactly from the real module files (FastAPI
+isn't installed in this sandbox, so tested with equivalent standalone
+dataclasses): all 24 items present with zero loss for a superadmin,
+correctly restricted to 19 for a non-admin.
+
+**Search**: filters the already-rendered sidebar client-side (no API
+call), matching against each item's own keyword aliases (e.g.
+"device" -> Devices/Device Groups; "ad"/"ldap"/"directory" -> Active
+Directory) plus its label. A matching section force-expands so results
+are actually visible regardless of its stored collapse state.
+
+**Ctrl+K / Cmd+K**: opens a command palette built by reading the
+sidebar's own already-rendered DOM, grouped by section, with arrow-
+key/Enter/Escape navigation. Deliberately reads from the DOM rather
+than a separately-maintained list: an item hidden from a non-superadmin
+was never rendered server-side in the first place, so it's structurally
+impossible for Ctrl+K to surface a page that admin doesn't have.
+
+**Collapsible sections**: state persisted per-section in localStorage;
+a section containing the currently-active page always force-expands
+regardless of stored state, "so the user is never left having to
+manually discover where they currently are" -- re-evaluated on every
+SPA navigation via the `spa:navigated` event, not only on first load.
+
+**A real accessibility issue caught and fixed during review**: the new
+search/Ctrl+K inputs' own `:focus` CSS initially overrode this
+project's existing, better global `input:focus` style (a visible
+signal-colored glow) with a dimmer, custom one -- removed entirely so
+the existing convention applies untouched, rather than introducing a
+weaker one.
+
+**Deferred, per the requesting spec's own explicit priority order**:
+Favorites, Recent pages, and a collapsed icon-only sidebar mode --
+this project has no existing icon-rendering system to reuse (`NavEntry.icon`
+was already-unused, dead data before this change), and introducing one
+solely for a lower-priority, explicitly-conditional feature would risk
+exactly the "different visual style" the spec asked to avoid.
+
+**Testing performed**: every one of the 28 templates parses; the
+5 real page-render tests (dashboard, devices, network-ops audits,
+security overview, plus the sidebar/shell templates directly) all
+render without error; every extracted `<script>` block (9 total across
+those pages) passes Node.js syntax checking; every `getElementById`/
+class-based `querySelector` in the new shell script cross-checked
+against real IDs/classes in the rendered HTML; CSS brace balance and
+every CSS variable used confirmed defined; full project-wide Python
+compile check passed clean.
+
+---
+
+### Added — Security Center: Cisco device security auditing, migrated from two legacy projects
+
+The two legacy repositories (`cisco-ios-security-auditor`,
+`cisco-interface-security-audit`) were fully read as real source code
+before any migration began -- not summarized from their READMEs --
+including running each one's own tools/tests against their own real
+sample configs to confirm documented behavior actually held. A
+capability matrix and migration architecture were produced and agreed
+before any NetworkAAA code was written, per explicit direction.
+
+**Migrated, every domain individually verified byte-identical against
+the real original source, not just "looks right":**
+
+- The device-wide config parser (`app/security_center/parser/cisco_config.py`),
+  preserving both real bugs the original project's README documents and
+  fixes (a `re.MULTILINE` default, and a compiled-pattern/`flags`
+  branch) -- verified identical output against a real sample config.
+- The per-interface parser (`interface_config.py`) -- verified
+  identical against both of the interface-security project's own
+  bundled sample configs, run in a separate subprocess to work around
+  a real namespace collision (both legacy projects use the top-level
+  package name `app`).
+- All 9 device-level check domains (`app/security_center/checks/`) --
+  37 check functions, 593 individual findings verified byte-identical
+  across 4 real sample configs. Extracted programmatically from source
+  rather than retyped, specifically to eliminate transcription risk --
+  retyping the first migrated domain (Management Plane) by hand had
+  already produced one real bug (a lost double-space in one finding's
+  evidence string), caught by an AST-level string-constant diff
+  against the real source and fixed before moving on.
+- The 10-rule correlation engine and all 4 compliance framework JSON
+  files (byte-identical checksums confirmed against the originals,
+  including the CIS Benchmark's deliberately sparse 2-control coverage
+  and the DISA STIG's real V-IDs).
+- The 33-rule interface security engine -- migrated via a direct,
+  `diff`-confirmed file copy rather than retyping 605 lines of rule
+  logic, given the size; verified end-to-end (parse -> assess -> unified
+  finding) against real sample configs, 145 findings including scores,
+  compliance, and maturity sub-scores all matching exactly.
+
+**New, not a straight port of either original:** unified scoring
+(`app/security_center/engine/scoring.py`), applying the interface
+engine's self-normalizing `earned/applicable-weight` model consistently
+to both device- and interface-level findings, rather than the device
+auditor's own flat subtractive model (which doesn't account for how
+many checks were actually applicable) or the interface engine's
+unexplained 65/35 "maturity" blend (dropped -- an unjustified magic
+constant doesn't meet this project's own "scoring must be explainable"
+bar). Building this surfaced a real bug: the migrated `F()` helper
+(correctly reproducing the original's own PASS/NA-severity-downgrade-
+to-INFO behavior) silently zeroed out nearly every finding's
+contribution to the new normalized model, since that model needs each
+finding's TRUE severity to compute a fair denominator. Fixed by adding
+a `true_severity` field to the unified `Finding` model, preserved from
+before the downgrade, rather than changing the already-verified
+`severity` field's behavior. Re-verified all ~750 previously-checked
+findings still matched after the fix.
+
+**API, persistence, and GUI (Phase 6, in progress):** new
+`security_audit_runs`/`security_audit_findings`/
+`security_audit_domain_scores`/`security_audit_compliance` tables
+(purely additive); `app/api/routes_security.py` (upload-config and
+live-SSH audit triggers -- the live path reuses Network Operations'
+own `run_commands_on_device`, not a second SSH implementation --
+plus get/list/compare/overview endpoints); a new `security` RBAC
+permission set (`security:view`/`:audit`/`:remediate`, matching this
+project's existing `<resource>:<action>` convention); a new,
+non-mandatory `security_module.py` registered the same way
+`network_ops_module.py` is; and a real, working Security Center
+Overview page (live fleet stats, a paste-config-and-audit flow with
+scored results, recent-audits table) -- not a placeholder. The
+remaining planned pages (Devices, Interfaces, Findings, Compliance,
+Remediation, Security Builder, Audit History) are deliberately not
+stubbed in as dead nav links.
+
+**Not yet done:** interface-level auditing isn't wired into the same
+API/persistence flow as device-level auditing yet (a real, flagged
+product decision -- see `orchestrator.py`'s own docstring on why
+combining them wasn't decided silently), and remediation isn't yet
+wired into the existing configuration Apply workflow.
+
+### Fixed — session detail showed a literal `\n` instead of line breaks
+
+Direct report, with a screenshot. Root cause: the session-detail
+timeline was joined with `'\\n'` in the JS source -- a double
+backslash, which JavaScript parses as the two-character string
+`\n` (backslash, letter n), not an actual newline escape (`'\n'`,
+single backslash). `.diff-view` already uses `white-space: pre`, so
+fixing the escaping alone was sufficient -- reproduced the exact
+broken output and confirmed the fix with a real test against
+JavaScript's own string-escaping semantics.
+
+### Added — admin-configurable SSH timeouts for Apply
+
+Direct report that "Apply" could take too long with no way to adjust
+it short of editing source code. `ssh_provision.py`'s previously
+hard-coded 8s/10s constants are now parameters
+(DEFAULT_CONNECT_TIMEOUT_SECONDS / DEFAULT_COMMAND_TIMEOUT_SECONDS),
+resolved in order: a per-apply override in the GUI -> an admin's
+saved default (new `AaaTemplateSettings.connect_timeout_seconds` /
+`command_timeout_seconds`, editable on the AAA Command Template
+section) -> the original built-in default. Wired through every apply
+path: the single-device apply modal, the Network Scan & Provision
+apply modal (single and bulk), and their underlying API endpoints.
+
+### Added — live progress with a real progress bar, and "Continue in background"
+
+Every apply endpoint (`/api/network-scan/apply`, `/apply-all`, and
+`/api/devices/{id}/apply-aaa`) now runs as a background task and
+returns a session id immediately instead of blocking the request --
+`app.services.apply_progress` extended with `total`/`completed`
+counters specifically to back a real percentage-based progress bar,
+not just a scrolling log. Both apply modals now show a taller,
+scrollable live output box with that progress bar above it, backed by
+a single generalized `pollApplyProgress(prefix, sessionId,
+description)` function shared by both rather than two separate
+implementations.
+
+"Continue in background": clicking it during an apply hands the
+session off to a new shared `AAAPlatform.trackBackgroundOperation`
+poller and closes the modal -- the operation keeps running
+server-side regardless. A persistent notification widget in the
+topbar (bell icon + badge + dropdown with its own progress bars),
+added to `app_shell.html` specifically because that file persists
+across SPA navigation (unlike a page's own script), so navigating
+away from Devices doesn't lose track of an apply still in progress.
+Shows a completion toast and clears itself once each tracked
+operation finishes.
+
+---
+
 ### Fixed — the real root cause of AD group authorization: `AD_GROUP_PREFIX` must be defined, not merely non-empty
 
 Confirmed with a live, controlled before/after test against the real

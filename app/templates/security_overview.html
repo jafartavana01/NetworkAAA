@@ -1,0 +1,224 @@
+{% extends "app_shell.html" %}
+{% block title %}Security Center — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Security Center / Overview{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Security Center</h1>
+    <p class="content-sub">Cisco IOS/IOS-XE device security auditing — 9 domains, correlation, and compliance mapping against NIST 800-53, ISO 27002, CIS, and DISA STIG.</p>
+  </div>
+
+  <section class="panel-grid" id="overview-grid" aria-live="polite">
+    <div class="panel" data-skeleton>
+      <div class="panel-head"><span class="rail rail-dim" id="overview-score-rail"></span>Average Security Score</div>
+      <div class="panel-body panel-loading" id="overview-score">Loading…</div>
+    </div>
+    <div class="panel" data-skeleton>
+      <div class="panel-head"><span class="rail rail-dim"></span>Devices Audited</div>
+      <div class="panel-body panel-loading" id="overview-devices">Loading…</div>
+    </div>
+    <div class="panel" data-skeleton>
+      <div class="panel-head"><span class="rail rail-red"></span>Critical Findings</div>
+      <div class="panel-body panel-loading" id="overview-critical">Loading…</div>
+    </div>
+    <div class="panel" data-skeleton>
+      <div class="panel-head"><span class="rail rail-amber"></span>High Findings</div>
+      <div class="panel-body panel-loading" id="overview-high">Loading…</div>
+    </div>
+    <div class="panel" data-skeleton>
+      <div class="panel-head"><span class="rail rail-dim"></span>Medium Findings</div>
+      <div class="panel-body panel-loading" id="overview-medium">Loading…</div>
+    </div>
+    <div class="panel" data-skeleton>
+      <div class="panel-head"><span class="rail rail-dim"></span>Manual Review</div>
+      <div class="panel-body panel-loading" id="overview-manual">Loading…</div>
+    </div>
+  </section>
+
+  <div class="content-head" style="margin-top:32px;">
+    <h2>Run an Audit</h2>
+    <p class="content-sub">Paste a device's full <span class="cell-mono">show running-config</span> output. Live SSH auditing of an existing device is available from that device's own page.</p>
+  </div>
+  <div class="panel" style="padding:16px;">
+    <label class="field">
+      <span class="field-label">Device name (optional — detected from the config's own hostname if left blank)</span>
+      <input type="text" id="audit-device-name" placeholder="e.g. CORE-SW01" maxlength="64">
+    </label>
+    <label class="field" style="margin-top:12px;">
+      <span class="field-label">Configuration text</span>
+      <textarea id="audit-config-text" rows="10" style="width:100%;font-family:var(--font-mono);font-size:12px;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;color:var(--text-primary);" placeholder="hostname CORE-SW01&#10;!&#10;..."></textarea>
+    </label>
+    <div id="audit-error" class="form-error" role="alert" hidden></div>
+    <div style="margin-top:12px;">
+      <button type="button" class="btn-primary btn-small" id="run-audit-btn" style="width:auto;">Run Audit</button>
+    </div>
+  </div>
+
+  <div id="audit-result-panel" hidden style="margin-top:24px;">
+    <div class="content-head">
+      <h2>Audit Result</h2>
+    </div>
+    <div class="panel" style="padding:16px;">
+      <div id="audit-result-summary" style="margin-bottom:16px;"></div>
+      <div id="audit-result-findings"></div>
+    </div>
+  </div>
+
+  <div class="content-head" style="margin-top:32px;">
+    <h2>Recent Audits</h2>
+  </div>
+  <div id="recent-audits-table-wrap">
+    <div class="empty-state">Loading…</div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s == null ? '' : String(s);
+    return div.innerHTML;
+  }
+
+  function severityRail(sev) {
+    if (sev === 'critical' || sev === 'high') return 'rail-red';
+    if (sev === 'medium') return 'rail-amber';
+    return 'rail-dim';
+  }
+
+  function scoreRail(score) {
+    if (score == null) return 'rail-dim';
+    if (score >= 85) return 'rail-signal';
+    if (score >= 60) return 'rail-amber';
+    return 'rail-red';
+  }
+
+  async function loadOverview() {
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/security/overview');
+    } catch (err) {
+      // A genuine network-level failure (fetch() itself rejects, e.g.
+      // the connection dropped) -- distinct from a resolved
+      // non-2xx response, which the branch below handles.
+      res = null;
+    }
+    if (!res || !res.ok) {
+      let message = 'Could not load the security overview.';
+      if (res && res.status === 403) message = "Your role doesn't have permission to view Security Center.";
+      document.querySelectorAll('#overview-grid .panel-body').forEach((el) => { el.textContent = '—'; el.className = 'panel-body'; });
+      document.getElementById('recent-audits-table-wrap').innerHTML = `<div class="empty-state">${message}</div>`;
+      return;
+    }
+    const data = await res.json();
+
+    document.getElementById('overview-score').textContent = data.average_score != null ? `${data.average_score} / 100` : '—';
+    document.getElementById('overview-score-rail').className = `rail ${scoreRail(data.average_score)}`;
+    document.getElementById('overview-devices').textContent = data.devices_audited;
+    document.getElementById('overview-critical').textContent = data.critical_findings;
+    document.getElementById('overview-high').textContent = data.high_findings;
+    document.getElementById('overview-medium').textContent = data.medium_findings;
+    document.getElementById('overview-manual').textContent = data.manual_review_findings;
+
+    const wrap = document.getElementById('recent-audits-table-wrap');
+    if (!data.recent_audits.length) {
+      wrap.innerHTML = '<div class="empty-state">No audits run yet — use the form above to run your first one.</div>';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Device</th><th>Source</th><th>Status</th><th>Score</th><th>Started</th></tr></thead>
+        <tbody>
+          ${data.recent_audits.map(a => `
+            <tr>
+              <td>${escapeHtml(a.device_name)}</td>
+              <td>${escapeHtml(a.source)}</td>
+              <td>${escapeHtml(a.status)}</td>
+              <td>${a.overall_score != null ? a.overall_score : '—'}</td>
+              <td>${new Date(a.started_at).toLocaleString()}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  function renderAuditResult(result) {
+    const panel = document.getElementById('audit-result-panel');
+    panel.hidden = false;
+
+    const summary = document.getElementById('audit-result-summary');
+    summary.innerHTML = `
+      <div style="display:flex;gap:24px;align-items:baseline;flex-wrap:wrap;">
+        <div><strong style="font-size:22px;">${result.overall_score != null ? result.overall_score : '—'}</strong> / 100</div>
+        <div class="content-sub">${escapeHtml(result.risk_level || '')} risk</div>
+        <div class="content-sub">${escapeHtml(result.device_name)}</div>
+      </div>
+    `;
+
+    const allFindings = [...result.correlation_findings, ...result.findings.filter(f => f.status === 'fail')];
+    const findingsBox = document.getElementById('audit-result-findings');
+    if (!allFindings.length) {
+      findingsBox.innerHTML = '<div class="empty-state">No failing or correlated findings.</div>';
+      return;
+    }
+    findingsBox.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Severity</th><th>Domain</th><th>Finding</th><th>Recommendation</th></tr></thead>
+        <tbody>
+          ${allFindings.map(f => `
+            <tr>
+              <td><span class="rail ${severityRail(f.severity)}" style="display:inline-block;width:10px;height:10px;border-radius:50%;"></span> ${escapeHtml(f.severity)}</td>
+              <td>${escapeHtml(f.domain)}</td>
+              <td>${escapeHtml(f.title)}</td>
+              <td class="content-sub">${escapeHtml(f.recommendation || f.why || '')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  document.getElementById('run-audit-btn').addEventListener('click', async () => {
+    const errorBox = document.getElementById('audit-error');
+    errorBox.hidden = true;
+    const configText = document.getElementById('audit-config-text').value.trim();
+    if (!configText) {
+      errorBox.textContent = 'Paste the configuration text first.';
+      errorBox.hidden = false;
+      return;
+    }
+    const deviceName = document.getElementById('audit-device-name').value.trim() || null;
+
+    const btn = document.getElementById('run-audit-btn');
+    btn.disabled = true;
+    btn.textContent = 'Running audit…';
+
+    const res = await AAAPlatform.authedFetch('/api/security/audit/upload', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ raw_config: configText, device_name: deviceName }),
+    });
+
+    btn.disabled = false;
+    btn.textContent = 'Run Audit';
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Audit failed.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const result = await res.json();
+    renderAuditResult(result);
+    AAAPlatform.toast(`Audit complete — score ${result.overall_score != null ? result.overall_score : '—'}/100.`);
+    loadOverview();
+  });
+
+  loadOverview();
+})();
+</script>
+{% endblock %}

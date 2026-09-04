@@ -27,6 +27,11 @@ class ApplyAaaRequest(BaseModel):
     device_group_id: str | None = None
     device_name: str | None = Field(default=None, max_length=64)
     commands: list[str] | None = None  # admin-edited override; auto-generated when omitted
+    # See app.schemas.device.DeviceAaaApplyRequest's own docstring for
+    # why these exist -- same per-apply-override, falls back to the
+    # admin's stored default, then ssh_provision's own built-in one.
+    connect_timeout_seconds: int | None = Field(default=None, ge=1, le=120)
+    command_timeout_seconds: int | None = Field(default=None, ge=1, le=300)
 
 
 class ApplyAaaAllRequest(BaseModel):
@@ -36,6 +41,8 @@ class ApplyAaaAllRequest(BaseModel):
     platform_ip: str = Field(min_length=1, max_length=64)
     device_group_id: str | None = None
     commands: list[str] | None = None
+    connect_timeout_seconds: int | None = Field(default=None, ge=1, le=120)
+    command_timeout_seconds: int | None = Field(default=None, ge=1, le=300)
 
 
 class ApplyAaaResultOut(BaseModel):

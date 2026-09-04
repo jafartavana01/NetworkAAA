@@ -359,5 +359,81 @@ window.AAAPlatform = (function () {
   });
   window.addEventListener('scroll', closeContextMenu, true);
 
-  return { readCookie, authedFetch, toast, setupQuickAdd, onViewLeave, runViewCleanup, showContextMenu };
+  // ---------- global background-operation tracking (topbar notification widget) ----------
+  // Backs "Continue in background" on the Apply flows: a page hands
+  // a session id off here via trackBackgroundOperation, and this
+  // single shared poller (not one per page/modal) keeps updating the
+  // topbar widget regardless of which view is currently showing --
+  // the widget lives in app_shell.html, which persists across SPA
+  // navigation (see that file's own comments on #view-root), so
+  // tracking here rather than in a page's own script means a
+  // navigation away from Devices doesn't lose the in-progress apply.
+  const _bgSessions = new Map(); // sessionId -> { description }
+  let _bgPollTimer = null;
+
+  function _renderBgWidget() {
+    const widget = document.getElementById('bg-notif-widget');
+    const badge = document.getElementById('bg-notif-badge');
+    if (!widget || !badge) return; // a page rendered without the shell (e.g. /login) has no widget at all
+    widget.hidden = _bgSessions.size === 0;
+    badge.textContent = String(_bgSessions.size);
+  }
+
+  async function _pollBgSessions() {
+    if (_bgSessions.size === 0) {
+      clearInterval(_bgPollTimer);
+      _bgPollTimer = null;
+      return;
+    }
+    const panel = document.getElementById('bg-notif-panel');
+    const entries = [];
+    for (const [sessionId, meta] of Array.from(_bgSessions.entries())) {
+      let session;
+      try {
+        const res = await authedFetch(`/api/network-scan/apply-progress/${sessionId}`);
+        if (!res.ok) { _bgSessions.delete(sessionId); continue; }
+        session = await res.json();
+      } catch {
+        continue; // a transient network blip shouldn't drop the tracked session
+      }
+      const total = session.total || 1;
+      const completed = session.completed || 0;
+      const pct = Math.min(100, Math.round((completed / total) * 100));
+      entries.push(`
+        <div class="bg-notif-entry">
+          <div class="bg-notif-entry-title">${meta.description}</div>
+          <div class="bg-notif-progress-track"><div class="bg-notif-progress-fill" style="width:${pct}%;"></div></div>
+          <div class="bg-notif-entry-status">${session.status === 'done' ? 'Done' : `${completed} / ${total} complete`}</div>
+        </div>
+      `);
+      if (session.status === 'done') {
+        toast(`${meta.description} — finished.`);
+        _bgSessions.delete(sessionId);
+      }
+    }
+    if (panel) panel.innerHTML = entries.join('') || '<div class="bg-notif-entry-status" style="padding:6px;">Nothing in progress.</div>';
+    _renderBgWidget();
+  }
+
+  function trackBackgroundOperation(sessionId, description) {
+    _bgSessions.set(sessionId, { description });
+    _renderBgWidget();
+    if (!_bgPollTimer) _bgPollTimer = setInterval(_pollBgSessions, 1500);
+    _pollBgSessions();
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const bell = document.getElementById('bg-notif-bell-btn');
+    const panel = document.getElementById('bg-notif-panel');
+    if (!bell || !panel) return;
+    bell.addEventListener('click', (e) => {
+      e.stopPropagation();
+      panel.hidden = !panel.hidden;
+    });
+    document.addEventListener('click', (e) => {
+      if (!panel.hidden && !panel.contains(e.target) && e.target !== bell) panel.hidden = true;
+    });
+  });
+
+  return { readCookie, authedFetch, toast, setupQuickAdd, onViewLeave, runViewCleanup, showContextMenu, trackBackgroundOperation };
 })();

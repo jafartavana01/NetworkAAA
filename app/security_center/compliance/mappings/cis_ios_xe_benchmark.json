@@ -1,0 +1,23 @@
+{
+  "framework_id": "cis_benchmark",
+  "framework_name": "CIS Cisco IOS XE 17.x Benchmark v2.1.0",
+  "license_note": "CIS Benchmarks are freely referenceable; full PDF requires CIS SecureSuite registration. Only directly-verified entries are populated -- see comments in generate_mappings.py for scope.",
+  "checks": {
+    "AAA-01": [
+      {
+        "control": "1.1.1",
+        "title": "Enable 'aaa new-model' (Automated)",
+        "relationship": "direct",
+        "source": "CIS Cisco IOS XE 17.x Benchmark v2.1.0"
+      }
+    ],
+    "AAA-02": [
+      {
+        "control": "1.1.2",
+        "title": "Enable 'aaa authentication login' (Automated)",
+        "relationship": "direct",
+        "source": "CIS Cisco IOS XE 17.x Benchmark v2.1.0"
+      }
+    ]
+  }
+}

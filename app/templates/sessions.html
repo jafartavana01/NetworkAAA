@@ -136,7 +136,7 @@
       <div class="readout"><span class="readout-k">port</span><span class="readout-v">${escapeHtml(session.port)}</span></div>
       <div class="readout"><span class="readout-k">source</span><span class="readout-v">${escapeHtml(session.source_ip)}</span></div>
       <div class="readout"><span class="readout-k">duration</span><span class="readout-v">${formatDuration(session.start_at, session.stop_at)}</span></div>
-      <div style="margin-top:16px;" class="diff-view">${timeline.map(escapeHtml).join('\\n')}</div>
+      <div style="margin-top:16px;" class="diff-view">${timeline.map(escapeHtml).join('\n')}</div>
     `;
     document.getElementById('session-modal-backdrop').hidden = false;
   }
