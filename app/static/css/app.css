@@ -658,6 +658,15 @@ select { color-scheme: dark; }
   font-weight: 500;
 }
 .btn-secondary:hover { border-color: var(--text-dim); }
+/* Selected-filter state -- for a row of toggleable filter buttons
+   (e.g. Device Risk Overview's All/High/Medium/Low), distinct from
+   .btn-primary (reserved for the page's actual primary action) so a
+   selected filter doesn't read as "the main button on this page." */
+.btn-secondary.is-active {
+  background: var(--bg-panel);
+  border-color: var(--signal);
+  color: var(--signal);
+}
 
 .btn-danger {
   background: transparent;

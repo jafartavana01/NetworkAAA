@@ -23,13 +23,15 @@ from sqlalchemy.orm import Session
 from .. import security
 from ..database import get_db
 from ..models.admin import AdminUser
+from ..models.audit_batch import AuditBatch
 from ..models.audit_run import AuditComplianceResult, AuditDomainScore, AuditFinding, AuditRun
 from ..models.audit_schedule_settings import AuditScheduleSettings
 from ..models.device import NetworkDevice
 from ..schemas.security_audit import (
-    AuditCompareOut, AuditLiveRequest, AuditRunDetailOut, AuditRunSummaryOut, AuditScheduleOut,
-    AuditScheduleUpdateRequest, AuditUploadRequest, DomainScoreOut, FindingOut, FleetFindingOut,
-    SecurityDeviceOut, SecurityOverviewOut,
+    AuditBatchSummaryListItemOut, AuditBatchSummaryOut, AuditCompareOut, AuditLiveRequest, AuditRunDetailOut,
+    AuditRunSummaryOut, AuditScheduleOut,
+    AuditScheduleUpdateRequest, AuditUploadRequest, BatchCategoryCountOut, BatchDeviceRowOut, BatchTopFindingOut,
+    DomainScoreOut, FindingOut, FleetFindingOut, SecurityDeviceOut, SecurityOverviewOut,
 )
 from ..security_center.engine.finding import Severity, Status
 from ..security_center.engine.orchestrator import run_device_audit
@@ -507,7 +509,9 @@ def run_schedule_now(
     if not s.ssh_username or not s.ssh_password_encrypted:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Set a username and password first.")
 
-    result = run_scheduled_audit(db, ssh_username=s.ssh_username, ssh_password_encrypted=s.ssh_password_encrypted)
+    result = run_scheduled_audit(
+        db, ssh_username=s.ssh_username, ssh_password_encrypted=s.ssh_password_encrypted, batch_source="manual",
+    )
     s.last_run_at = datetime.now(timezone.utc)
     s.last_run_status = result.status
     s.last_run_summary = result.summary
@@ -517,4 +521,130 @@ def run_schedule_now(
         enabled=s.enabled, ssh_username=s.ssh_username, has_password=bool(s.ssh_password_encrypted),
         daily_run_time=s.daily_run_time, management_ip_note=s.management_ip_note,
         last_run_at=s.last_run_at, last_run_status=s.last_run_status, last_run_summary=s.last_run_summary,
+    )
+
+
+_SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+
+
+@router.get("/batches", response_model=list[AuditBatchSummaryListItemOut])
+def list_audit_batches(
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("security:view")),
+):
+    """Every fleet-wide audit report, newest first -- backs the
+    reference design's own "Recent Audit Reports" list."""
+    batches = db.query(AuditBatch).order_by(AuditBatch.started_at.desc()).limit(20).all()
+    return [
+        AuditBatchSummaryListItemOut(
+            id=str(b.id), display_number=b.display_number, status=b.status,
+            started_at=b.started_at, total_devices=b.total_devices,
+        )
+        for b in batches
+    ]
+
+
+@router.get("/batches/{display_number}", response_model=AuditBatchSummaryOut)
+def get_audit_batch_summary(
+    display_number: int,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("security:view")),
+):
+    """
+    Everything the fleet-wide Audit Report dashboard needs, in one
+    call -- aggregated here rather than in the browser, per this
+    feature's own design note on avoiding N+1 queries and
+    recalculating the same aggregates client-side. Grouping/counting
+    is done in Python over the batch's own rows rather than SQL-side
+    GROUP BY -- the same reasoning as `_latest_completed_runs_by_device`
+    above: no existing precedent in this codebase for the more complex
+    aggregate queries this would need, and getting one wrong silently
+    is a worse failure mode than the modest extra cost here, since a
+    single batch's own device count is bounded by the fleet size, not
+    an unbounded table scan.
+    """
+    from ..security_center.engine.scoring import risk_level
+
+    batch = db.query(AuditBatch).filter(AuditBatch.display_number == display_number).first()
+    if not batch:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Audit report not found.")
+
+    runs = db.query(AuditRun).filter(AuditRun.batch_id == batch.id).order_by(AuditRun.device_name.asc()).all()
+    run_ids = [r.id for r in runs]
+    findings = db.query(AuditFinding).filter(AuditFinding.audit_run_id.in_(run_ids)).all() if run_ids else []
+
+    device_ids = [r.device_id for r in runs if r.device_id]
+    ip_by_device: dict = {}
+    if device_ids:
+        for d in db.query(NetworkDevice).filter(NetworkDevice.id.in_(device_ids)).all():
+            ip_by_device[d.id] = d.ip_address
+
+    findings_by_run: dict = {}
+    for f in findings:
+        findings_by_run.setdefault(f.audit_run_id, []).append(f)
+
+    severity_totals = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    category_totals: dict = {}
+    top_finding_groups: dict = {}  # (check_id, title, severity) -> set of device_id
+
+    device_rows: list[BatchDeviceRowOut] = []
+    scores = []
+    for run in runs:
+        run_findings = findings_by_run.get(run.id, [])
+        run_high = run_medium = run_low = 0
+        for f in run_findings:
+            if f.status != Status.FAIL.value:
+                continue
+            if f.severity == Severity.CRITICAL.value or f.severity == Severity.HIGH.value:
+                run_high += 1
+            elif f.severity == Severity.MEDIUM.value:
+                run_medium += 1
+            elif f.severity == Severity.LOW.value:
+                run_low += 1
+            if f.severity in severity_totals:
+                severity_totals[f.severity] += 1
+            category_totals[f.domain] = category_totals.get(f.domain, 0) + 1
+            key = (f.check_id, f.title, f.severity)
+            top_finding_groups.setdefault(key, set()).add(run.device_id or run.id)
+
+        if run.overall_score is not None:
+            scores.append(run.overall_score)
+
+        device_rows.append(BatchDeviceRowOut(
+            device_id=str(run.device_id) if run.device_id else None,
+            device_name=run.device_name,
+            ip_address=ip_by_device.get(run.device_id) if run.device_id else None,
+            high=run_high, medium=run_medium, low=run_low,
+            score=run.overall_score,
+            risk_level=risk_level(run.overall_score) if run.overall_score is not None else None,
+            status=run.status, last_scan_at=run.started_at,
+        ))
+
+    category_breakdown = [
+        BatchCategoryCountOut(domain=domain, fail_count=count)
+        for domain, count in sorted(category_totals.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
+    top_findings = sorted(
+        (
+            BatchTopFindingOut(check_id=check_id, title=title, severity=severity, device_count=len(device_set))
+            for (check_id, title, severity), device_set in top_finding_groups.items()
+        ),
+        key=lambda f: (_SEVERITY_RANK.get(f.severity, 99), -f.device_count),
+    )[:5]
+
+    duration_seconds = None
+    if batch.completed_at:
+        duration_seconds = int((batch.completed_at - batch.started_at).total_seconds())
+
+    return AuditBatchSummaryOut(
+        id=str(batch.id), display_number=batch.display_number, status=batch.status, source=batch.source,
+        target_description=batch.target_description, started_by_admin_username=batch.started_by_admin_username,
+        started_at=batch.started_at, completed_at=batch.completed_at, duration_seconds=duration_seconds,
+        total_devices=batch.total_devices, devices_succeeded=batch.devices_succeeded, devices_failed=batch.devices_failed,
+        total_checks=len(findings),
+        critical_count=severity_totals["critical"], high_count=severity_totals["high"],
+        medium_count=severity_totals["medium"], low_count=severity_totals["low"],
+        average_score=round(sum(scores) / len(scores), 1) if scores else None,
+        category_breakdown=category_breakdown, top_findings=top_findings, devices=device_rows,
     )

@@ -1,0 +1,81 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Audit Reports — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Security Center / Audit Reports{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Audit Reports</h1>
+    <p class="content-sub">Every fleet-wide audit run — scheduled or manually triggered — grouped as one numbered report.</p>
+  </div>
+
+  <div id="reports-table-wrap">
+    <div class="empty-state">Loading…</div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  // Pre-rendered server-side via Jinja (see the top-of-file macro
+  // import) since this markup is built client-side, per table row.
+  const ICON_VIEW = '{{ icons.icon("eye", 14) }}';
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s == null ? '' : String(s);
+    return div.innerHTML;
+  }
+  function statusRail(status) {
+    if (status === 'completed') return 'rail-signal';
+    if (status === 'partial') return 'rail-amber';
+    if (status === 'failed') return 'rail-red';
+    return 'rail-dim';
+  }
+
+  async function loadReports() {
+    const wrap = document.getElementById('reports-table-wrap');
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/security/batches');
+    } catch (err) {
+      res = null;
+    }
+    if (!res || !res.ok) {
+      wrap.innerHTML = `<div class="empty-state">${res && res.status === 403 ? "Your role doesn't have permission to view this page." : 'Could not load audit reports.'}</div>`;
+      return;
+    }
+    const batches = await res.json();
+    if (!batches.length) {
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-title">No fleet-wide audit reports yet</div>
+          <p class="empty-state-desc">Reports appear here once a scheduled or manually-triggered fleet-wide audit runs — a single device's own audit (from that device's own page) doesn't create one.</p>
+        </div>
+      `;
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Report</th><th>Status</th><th>Devices</th><th>Started</th><th></th></tr></thead>
+        <tbody>
+          ${batches.map(b => `
+            <tr>
+              <td class="cell-mono">#${b.display_number}</td>
+              <td><span class="rail ${statusRail(b.status)}" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;"></span>${escapeHtml(b.status)}</td>
+              <td>${b.total_devices}</td>
+              <td>${new Date(b.started_at).toLocaleString()}</td>
+              <td class="cell-actions"><a href="/security/reports/${b.display_number}" class="btn-secondary btn-small btn-with-icon">${ICON_VIEW}View</a></td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  loadReports();
+})();
+</script>
+{% endblock %}

@@ -12,6 +12,93 @@ it was built alongside.
 
 ## 2026-09-03
 
+### Added — fleet-wide Audit Report dashboard (Security Audit → Device View redesign)
+
+Detailed spec plus a reference screenshot. Per its own instruction,
+inspected the existing implementation before writing anything --
+which surfaced a real architectural gap rather than a pure
+presentation task.
+
+**The gap, confirmed not assumed**: `AuditRun` is strictly one row per
+device per audit, with no concept tying "these N devices were audited
+together" under one numbered report. The requested dashboard is
+inherently fleet-wide ("Audit Report #100", 39 devices scanned), so
+this grouping had to exist before any of it could show real data.
+Adding it was necessary, not a rewrite of working audit logic -- the
+audit engine, scoring, findings, and per-device flows are all
+untouched.
+
+**New `AuditBatch` model** -- groups multiple `AuditRun` rows under
+one sequential, human-readable `display_number`. First drafted using
+a PostgreSQL `Sequence` object, then reverted: this sandbox has no
+way to confirm `create_all()` provisions a sequence correctly for a
+fresh install, so it now uses the `MAX(column) + 1` pattern this
+project's own `ConfigVersion.version_number` already proves works
+(app.services.config_compiler._next_version_number). A verified
+existing convention over an unverifiable new one.
+
+**`AuditRun.batch_id`** added as nullable -- single-device audits run
+from a device's own page are completely unaffected and keep working
+exactly as before. Both new models added to `init_db()`'s import list
+in the same edits that created them (the omission that caused the
+recent Security Center outage, deliberately not repeated).
+
+**Two new aggregate endpoints** (`GET /api/security/batches`,
+`GET /api/security/batches/{display_number}`) returning the executive
+summary, risk distribution, category breakdown, top critical findings
+(grouped by check across devices, sorted by severity then device
+count), and the per-device risk table -- all from real audit rows,
+aggregated server-side in one call per the spec's own note about
+avoiding N+1 queries and client-side recalculation.
+
+**Two new pages**: `/security/reports` (the report list) and
+`/security/reports/{n}` (the dashboard itself) -- executive summary
+cards, a Chart.js donut for risk distribution with a real total in
+the center, category breakdown bars, top critical findings, quick
+actions wired only to real destinations, and a filterable/searchable
+device risk table. The existing sidebar is untouched, as the spec
+explicitly required; both pages use the shell, icon system, panel,
+status-card, and rail conventions already established in this
+project, so they read as the same application rather than a
+bolted-on dashboard.
+
+**Two real bugs caught during verification, not shipped:**
+
+1. `.is-active` (used for the selected device-risk filter) had NO
+   button styling anywhere in the stylesheet -- the selected filter
+   would have been visually indistinguishable from the unselected
+   ones. Found by grepping for the class rather than assuming it
+   existed; added a proper style distinct from `.btn-primary`, which
+   stays reserved for a page's actual primary action.
+2. The risk filters were drafted as All/High/Medium/Low, but
+   `scoring.risk_level()` actually returns SIX values --
+   Minimal/Low/Medium/High/Severe/Critical. Devices scoring
+   `Minimal`, `Severe`, or `Critical` would have been silently
+   invisible under every single filter, including the most dangerous
+   ones. Found by reading that function's real return values instead
+   of assuming the obvious three, then fixed and verified with a test
+   confirming all six values are each reachable by exactly one filter
+   and all are matched by "All".
+
+**Verified**: every new/changed Python file compiles; every model
+field, constructor kwarg, and schema-construction call cross-checked
+against real definitions via AST inspection (one flagged mismatch
+investigated and confirmed a false positive from two same-named
+variables in different scopes, not a real error); both templates
+parse with correct block structure and zero ID mismatches; every
+icon constant confirmed to contain real rendered SVG; every CSS class
+and variable used confirmed to exist; extracted scripts pass Node
+syntax checks; project-wide `view_scripts` sweep still finds zero
+instances.
+
+**Not built this pass**, and deliberately not stubbed as dead UI: the
+Findings Trend chart (needs multiple historical batches to be
+meaningful -- the spec itself says not to fabricate a trend), the
+paginated All Findings table, export (PDF/CSV/JSON), and the finding
+detail modal.
+
+---
+
 ### Added — Scheduled Audits: a platform-owned service account for unattended daily device auditing
 
 Direct request: give NetworkAAA its own account for reaching devices,

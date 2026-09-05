@@ -85,7 +85,7 @@ def init_db() -> None:
         policy_command_set, policy_version, policy_condition_group, policy_condition,
         device_access_grant, ad_settings, monitoring_settings, aaa_template_settings,
         command_template, command_job, network_ops_check, network_ops_audit, audit_run,
-        audit_schedule_settings,
+        audit_schedule_settings, audit_batch,
     )
 
     Base.metadata.create_all(bind=get_engine())

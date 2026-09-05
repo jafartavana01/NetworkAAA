@@ -1,0 +1,371 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Audit Report — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Security Center / Audit Reports / Detail{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div id="report-not-found" class="content-head" hidden>
+    <h1>Audit report not found</h1>
+  </div>
+
+  <div id="report-body" hidden>
+    <div class="panel panel-wide" style="padding:16px;margin-bottom:20px;display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px;">
+      <div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <h1 style="margin:0;font-size:18px;" id="report-title">Audit Report</h1>
+          <span class="badge" id="report-status-badge"></span>
+        </div>
+        <div class="content-sub" style="margin-top:6px;" id="report-meta-line"></div>
+      </div>
+      <button type="button" class="btn-secondary btn-with-icon" id="report-run-again-btn" style="width:auto;">{{ icons.icon('activity', 16) }}Run New Audit</button>
+    </div>
+
+    <div class="content-head">
+      <h2>Executive Summary</h2>
+    </div>
+    <div class="status-card-grid" id="summary-grid" style="margin-bottom:24px;"></div>
+
+    <section class="panel-grid" style="grid-template-columns: 1fr 1fr; margin-bottom:1px;">
+      <div class="panel panel-wide">
+        <div class="panel-head"><span class="rail rail-dim"></span>Risk Distribution</div>
+        <div class="panel-body" style="height:220px;position:relative;">
+          <canvas id="risk-chart"></canvas>
+          <div id="risk-chart-center" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;">
+            <div style="font-size:22px;font-weight:700;font-family:var(--font-mono);color:var(--text-primary);" id="risk-chart-total">—</div>
+            <div style="font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.05em;">Total Findings</div>
+          </div>
+        </div>
+      </div>
+      <div class="panel panel-wide">
+        <div class="panel-head"><span class="rail rail-dim"></span>Quick Actions</div>
+        <div class="panel-body" id="quick-actions-body" style="display:flex;flex-direction:column;gap:8px;"></div>
+      </div>
+    </section>
+
+    <section class="panel-grid" style="grid-template-columns: 1.4fr 1fr; margin-top:20px;margin-bottom:1px;">
+      <div class="panel panel-wide">
+        <div class="panel-head"><span class="rail rail-dim"></span>Category Breakdown</div>
+        <div class="panel-body" id="category-breakdown-body"></div>
+      </div>
+      <div class="panel panel-wide">
+        <div class="panel-head"><span class="rail rail-red"></span>Top Critical Findings</div>
+        <div class="panel-body" id="top-findings-body"></div>
+      </div>
+    </section>
+
+    <div class="content-head">
+      <h2>Device Risk Overview</h2>
+    </div>
+    <div class="toolbar" style="margin-bottom:12px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;" id="device-risk-filters">
+        <button type="button" class="btn-secondary btn-small is-active" data-filter="all">All</button>
+        <button type="button" class="btn-secondary btn-small" data-filter="critical">Critical</button>
+        <button type="button" class="btn-secondary btn-small" data-filter="severe">Severe</button>
+        <button type="button" class="btn-secondary btn-small" data-filter="high">High</button>
+        <button type="button" class="btn-secondary btn-small" data-filter="medium">Medium</button>
+        <button type="button" class="btn-secondary btn-small" data-filter="low">Low</button>
+        <button type="button" class="btn-secondary btn-small" data-filter="minimal">Minimal</button>
+      </div>
+      <input type="text" id="device-search-input" placeholder="Search device…" style="max-width:220px;">
+    </div>
+    <div id="device-table-wrap">
+      <div class="empty-state">Loading…</div>
+    </div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  // Pre-rendered server-side via Jinja (see the top-of-file macro
+  // import) since this markup is built client-side.
+  const ICON_ACTIVITY = '{{ icons.icon("activity", 16) }}';
+  const ICON_CALENDAR = '{{ icons.icon("history", 16) }}';
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s == null ? '' : String(s);
+    return div.innerHTML;
+  }
+
+  function ensureChartJsLoaded() {
+    // Same on-demand loading technique as dashboard.html's own chart
+    // -- not a plain <script src> tag, since spa.js only re-executes
+    // inline scripts on navigation, not external tags; see that
+    // file's own comment for the full reasoning.
+    return new Promise((resolve, reject) => {
+      if (window.Chart) { resolve(); return; }
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Could not load the charting library.'));
+      document.head.appendChild(script);
+    });
+  }
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  const pathParts = window.location.pathname.split('/').filter(Boolean);
+  const displayNumber = pathParts[pathParts.length - 1];
+
+  function statusBadgeClass(status) {
+    if (status === 'completed') return 'badge-on';
+    return '';
+  }
+
+  function riskRail(riskLevel) {
+    // The six values app.security_center.engine.scoring.risk_level
+    // actually returns -- verified against that function directly
+    // rather than assumed: Minimal / Low / Medium / High / Severe /
+    // Critical.
+    if (!riskLevel) return 'rail-dim';
+    if (riskLevel === 'Critical' || riskLevel === 'Severe' || riskLevel === 'High') return 'rail-red';
+    if (riskLevel === 'Medium') return 'rail-amber';
+    return 'rail-signal';
+  }
+
+  let riskChart = null;
+  let currentDevices = [];
+  let currentFilter = 'all';
+
+  function renderSummary(s) {
+    document.getElementById('summary-grid').innerHTML = `
+      <div class="status-card">
+        <div class="status-card-icon">${ICON_SERVER}</div>
+        <div class="status-card-body">
+          <div class="status-card-title">Devices Scanned</div>
+          <div class="status-card-value">${s.devices_succeeded} / ${s.total_devices}</div>
+        </div>
+      </div>
+      <div class="status-card">
+        <div class="status-card-icon">${ICON_ACTIVITY}</div>
+        <div class="status-card-body">
+          <div class="status-card-title">Checks Executed</div>
+          <div class="status-card-value">${s.total_checks}</div>
+        </div>
+      </div>
+      <div class="status-card is-red">
+        <div class="status-card-icon">${ICON_ACTIVITY}</div>
+        <div class="status-card-body">
+          <div class="status-card-title">Critical</div>
+          <div class="status-card-value">${s.critical_count}</div>
+        </div>
+      </div>
+      <div class="status-card is-red">
+        <div class="status-card-icon">${ICON_ACTIVITY}</div>
+        <div class="status-card-body">
+          <div class="status-card-title">High Risk</div>
+          <div class="status-card-value">${s.high_count}</div>
+        </div>
+      </div>
+      <div class="status-card is-amber">
+        <div class="status-card-icon">${ICON_ACTIVITY}</div>
+        <div class="status-card-body">
+          <div class="status-card-title">Medium Risk</div>
+          <div class="status-card-value">${s.medium_count}</div>
+        </div>
+      </div>
+      <div class="status-card is-signal">
+        <div class="status-card-icon">${ICON_ACTIVITY}</div>
+        <div class="status-card-body">
+          <div class="status-card-title">Low Risk</div>
+          <div class="status-card-value">${s.low_count}</div>
+        </div>
+      </div>
+      <div class="status-card ${s.average_score != null && s.average_score >= 85 ? 'is-signal' : (s.average_score != null && s.average_score >= 60 ? 'is-amber' : 'is-red')}">
+        <div class="status-card-icon">${ICON_ACTIVITY}</div>
+        <div class="status-card-body">
+          <div class="status-card-title">Avg Security Score</div>
+          <div class="status-card-value">${s.average_score != null ? s.average_score + '%' : '—'}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  async function renderRiskChart(s) {
+    await ensureChartJsLoaded();
+    const total = s.critical_count + s.high_count + s.medium_count + s.low_count;
+    document.getElementById('risk-chart-total').textContent = total > 0 ? total : '—';
+    const canvas = document.getElementById('risk-chart');
+    const existing = window.Chart.getChart(canvas);
+    if (existing) existing.destroy();
+
+    const redColor = cssVar('--red') || '#e05252';
+    const amberColor = cssVar('--amber') || '#e0a83e';
+    const signalColor = cssVar('--signal') || '#4fd1a5';
+    const textFaint = cssVar('--text-faint') || '#57616c';
+    const textDim = cssVar('--text-dim') || '#8fa39d';
+
+    riskChart = new window.Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        labels: total > 0 ? ['Critical', 'High', 'Medium', 'Low'] : ['No findings'],
+        datasets: [{
+          data: total > 0 ? [s.critical_count, s.high_count, s.medium_count, s.low_count] : [1],
+          backgroundColor: total > 0 ? [redColor, '#c0392b', amberColor, signalColor] : [textFaint],
+          borderColor: 'transparent',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { position: 'bottom', labels: { color: textDim, boxWidth: 12, font: { size: 11 } } },
+          tooltip: { enabled: total > 0 },
+        },
+      },
+    });
+  }
+
+  function renderCategoryBreakdown(categories) {
+    const body = document.getElementById('category-breakdown-body');
+    if (!categories.length) {
+      body.innerHTML = '<div class="empty-state">No failing checks in any category.</div>';
+      return;
+    }
+    const maxCount = Math.max(...categories.map(c => c.fail_count));
+    const shown = categories.slice(0, 8);
+    body.innerHTML = shown.map(c => `
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <div style="flex:1;font-size:12.5px;color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px;">${escapeHtml(c.domain)}</div>
+        <div style="flex:2;background:var(--bg-panel-raised);border-radius:3px;height:8px;overflow:hidden;">
+          <div style="width:${Math.max(4, (c.fail_count / maxCount) * 100)}%;height:100%;background:var(--amber);"></div>
+        </div>
+        <div class="cell-mono" style="width:32px;text-align:right;font-size:12px;color:var(--text-primary);">${c.fail_count}</div>
+      </div>
+    `).join('');
+    if (categories.length > 8) {
+      body.innerHTML += `<div class="content-sub" style="margin-top:8px;">+ ${categories.length - 8} more categories</div>`;
+    }
+  }
+
+  function severityRail(sev) {
+    if (sev === 'critical' || sev === 'high') return 'rail-red';
+    if (sev === 'medium') return 'rail-amber';
+    return 'rail-dim';
+  }
+
+  function renderTopFindings(findings) {
+    const body = document.getElementById('top-findings-body');
+    if (!findings.length) {
+      body.innerHTML = '<div class="empty-state">No failing findings — nothing critical to flag.</div>';
+      return;
+    }
+    body.innerHTML = findings.map(f => `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line-soft);">
+        <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+          <span class="rail ${severityRail(f.severity)}" style="display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0;"></span>
+          <span style="font-size:12.5px;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(f.title)}</span>
+        </div>
+        <span class="content-sub" style="flex-shrink:0;margin-left:8px;">${f.device_count} device${f.device_count === 1 ? '' : 's'}</span>
+      </div>
+    `).join('');
+  }
+
+  function renderQuickActions() {
+    document.getElementById('quick-actions-body').innerHTML = `
+      <a href="/security/schedule" class="btn-secondary btn-with-icon" style="justify-content:flex-start;text-decoration:none;">${ICON_CALENDAR}Schedule Audit</a>
+      <a href="/security/devices" class="btn-secondary btn-with-icon" style="justify-content:flex-start;text-decoration:none;">${ICON_SERVER}View All Devices</a>
+      <a href="/security/reports" class="btn-secondary btn-with-icon" style="justify-content:flex-start;text-decoration:none;">${ICON_ACTIVITY}All Audit Reports</a>
+    `;
+  }
+
+  function renderDeviceTable() {
+    const wrap = document.getElementById('device-table-wrap');
+    const search = document.getElementById('device-search-input').value.trim().toLowerCase();
+    let rows = currentDevices;
+    if (currentFilter !== 'all') {
+      rows = rows.filter(d => (d.risk_level || '').toLowerCase() === currentFilter);
+    }
+    if (search) {
+      rows = rows.filter(d => d.device_name.toLowerCase().includes(search) || (d.ip_address || '').includes(search));
+    }
+    if (!rows.length) {
+      wrap.innerHTML = '<div class="empty-state">No devices match these filters.</div>';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Device</th><th>IP Address</th><th>High</th><th>Medium</th><th>Low</th><th>Score</th><th>Status</th><th>Last Scan</th></tr></thead>
+        <tbody>
+          ${rows.map(d => `
+            <tr>
+              <td>${d.device_id ? `<a href="/security/devices/${d.device_id}">${escapeHtml(d.device_name)}</a>` : escapeHtml(d.device_name)}</td>
+              <td class="cell-mono">${escapeHtml(d.ip_address || '—')}</td>
+              <td>${d.high}</td>
+              <td>${d.medium}</td>
+              <td>${d.low}</td>
+              <td>${d.score != null ? d.score : '—'}</td>
+              <td><span class="rail ${riskRail(d.risk_level)}" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;"></span>${escapeHtml(d.risk_level || d.status)}</td>
+              <td class="content-sub">${new Date(d.last_scan_at).toLocaleString()}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  }
+
+  document.querySelectorAll('#device-risk-filters button').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      currentFilter = btn.dataset.filter;
+      document.querySelectorAll('#device-risk-filters button').forEach((b) => b.classList.toggle('is-active', b === btn));
+      renderDeviceTable();
+    });
+  });
+  document.getElementById('device-search-input').addEventListener('input', renderDeviceTable);
+
+  document.getElementById('report-run-again-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('report-run-again-btn');
+    btn.disabled = true;
+    const res = await AAAPlatform.authedFetch('/api/security/schedule/run-now', { method: 'POST' });
+    btn.disabled = false;
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      AAAPlatform.toast((body.detail && typeof body.detail === 'string') ? body.detail : 'Could not start a new audit.', 'error');
+      return;
+    }
+    AAAPlatform.toast('New audit started — view it from Audit Reports once complete.');
+  });
+
+  async function loadReport() {
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch(`/api/security/batches/${displayNumber}`);
+    } catch (err) {
+      res = null;
+    }
+    if (!res || !res.ok) {
+      document.getElementById('report-not-found').hidden = false;
+      document.getElementById('report-not-found').querySelector('h1').textContent =
+        res && res.status === 403 ? "Your role doesn't have permission to view this report." : 'Audit report not found';
+      return;
+    }
+    const s = await res.json();
+    document.getElementById('report-body').hidden = false;
+
+    document.getElementById('report-title').textContent = `Audit Report #${s.display_number}`;
+    const badge = document.getElementById('report-status-badge');
+    badge.textContent = s.status;
+    badge.className = `badge ${statusBadgeClass(s.status)}`;
+    document.getElementById('report-meta-line').textContent =
+      `${escapeHtml(s.target_description)} — Started ${new Date(s.started_at).toLocaleString()}` +
+      (s.duration_seconds != null ? ` — Duration ${Math.floor(s.duration_seconds / 60)}m ${s.duration_seconds % 60}s` : '') +
+      (s.started_by_admin_username ? ` — by ${escapeHtml(s.started_by_admin_username)}` : '');
+
+    renderSummary(s);
+    renderQuickActions();
+    await renderRiskChart(s);
+    renderCategoryBreakdown(s.category_breakdown);
+    renderTopFindings(s.top_findings);
+    currentDevices = s.devices;
+    renderDeviceTable();
+  }
+
+  loadReport();
+})();
+</script>
+{% endblock %}

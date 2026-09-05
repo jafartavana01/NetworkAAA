@@ -152,3 +152,62 @@ class AuditScheduleUpdateRequest(BaseModel):
     ssh_password: str | None = Field(default=None, max_length=256, description="Leave blank to keep the current password.")
     daily_run_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$", description="24-hour HH:MM, server-local time.")
     management_ip_note: str | None = Field(default=None, max_length=255)
+
+
+class BatchDeviceRowOut(BaseModel):
+    device_id: str | None
+    device_name: str
+    ip_address: str | None
+    high: int
+    medium: int
+    low: int
+    score: float | None
+    risk_level: str | None
+    status: str
+    last_scan_at: datetime
+
+
+class BatchCategoryCountOut(BaseModel):
+    domain: str
+    fail_count: int
+
+
+class BatchTopFindingOut(BaseModel):
+    check_id: str
+    title: str
+    severity: str
+    device_count: int
+
+
+class AuditBatchSummaryOut(BaseModel):
+    id: str
+    display_number: int
+    status: str
+    source: str
+    target_description: str
+    started_by_admin_username: str | None
+    started_at: datetime
+    completed_at: datetime | None
+    duration_seconds: int | None
+
+    total_devices: int
+    devices_succeeded: int
+    devices_failed: int
+    total_checks: int
+    critical_count: int
+    high_count: int
+    medium_count: int
+    low_count: int
+    average_score: float | None
+
+    category_breakdown: list[BatchCategoryCountOut]
+    top_findings: list[BatchTopFindingOut]
+    devices: list[BatchDeviceRowOut]
+
+
+class AuditBatchSummaryListItemOut(BaseModel):
+    id: str
+    display_number: int
+    status: str
+    started_at: datetime
+    total_devices: int

@@ -31,10 +31,12 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from .. import security
 from ..database import get_sessionmaker
+from ..models.audit_batch import AuditBatch
 from ..models.audit_run import AuditRun
 from ..models.audit_schedule_settings import AuditScheduleSettings
 from ..models.device import NetworkDevice
@@ -78,7 +80,18 @@ def _bare_ip(device: NetworkDevice) -> str:
     return device.ip_address.split("/")[0].strip()
 
 
-def run_scheduled_audit(db: Session, *, ssh_username: str, ssh_password_encrypted: str) -> ScheduledAuditResult:
+def _next_batch_display_number(db: Session) -> int:
+    """Same MAX(column) + 1 convention this project's own
+    ConfigVersion.version_number already uses
+    (app.services.config_compiler._next_version_number) -- not a
+    database-level SEQUENCE object."""
+    current_max = db.query(func.max(AuditBatch.display_number)).scalar()
+    return (current_max or 0) + 1
+
+
+def run_scheduled_audit(
+    db: Session, *, ssh_username: str, ssh_password_encrypted: str, batch_source: str = "scheduled",
+) -> ScheduledAuditResult:
     """
     Audits every device in sequence (not in parallel -- a fleet-wide
     unattended job has no one watching it fail loudly, so a single
@@ -91,16 +104,33 @@ def run_scheduled_audit(db: Session, *, ssh_username: str, ssh_password_encrypte
     misconfigured device doesn't abort auditing every device after it
     -- the whole point of an unattended job is that it keeps going
     without a human there to restart it.
+
+    Every device audited here gets grouped under one new
+    app.models.audit_batch.AuditBatch row -- `batch_source` is
+    "scheduled" for the daily background job (the default) or
+    "manual" for an admin's own on-demand "Run Now" trigger; either
+    way, each individual AuditRun's own `source` stays "scheduled"
+    (it describes HOW the device was reached -- the fleet-wide
+    service-account mechanism -- not WHO triggered this particular
+    run, which is what the batch's own `source` records instead).
     """
     ssh_password = security.decrypt_secret(ssh_password_encrypted)
     devices = db.query(NetworkDevice).filter(NetworkDevice.enabled.is_(True)).order_by(NetworkDevice.name.asc()).all()
+
+    batch = AuditBatch(
+        display_number=_next_batch_display_number(db), source=batch_source, status="running",
+        total_devices=len(devices),
+    )
+    db.add(batch)
+    db.commit()
+    db.refresh(batch)
 
     result = ScheduledAuditResult(total_devices=len(devices))
 
     for device in devices:
         run = AuditRun(
             device_id=device.id, device_name=device.name, source="scheduled", status="running",
-            started_by_admin_username="(scheduled)",
+            started_by_admin_username="(scheduled)", batch_id=batch.id,
         )
         db.add(run)
         db.commit()
@@ -127,6 +157,12 @@ def run_scheduled_audit(db: Session, *, ssh_username: str, ssh_password_encrypte
             db.commit()
             result.failed += 1
             result.failures.append(f"{device.name}: {exc}")
+
+    batch.devices_succeeded = result.succeeded
+    batch.devices_failed = result.failed
+    batch.status = result.status
+    batch.completed_at = datetime.now(timezone.utc)
+    db.commit()
 
     return result
 

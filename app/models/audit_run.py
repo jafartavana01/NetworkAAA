@@ -55,8 +55,21 @@ class AuditRun(Base):
     )
     device_name: Mapped[str] = mapped_column(String(64), nullable=False)
 
-    # "live" (SSH show running-config), "upload" (pasted/uploaded text),
-    # or "snapshot" (a previously stored config, once that source exists).
+    # NULL for a single-device audit triggered from that device's own
+    # page (every AuditRun before this field existed, and most going
+    # forward) -- set only when this run is part of a fleet-wide batch
+    # (app.models.audit_batch.AuditBatch), scheduled or manually
+    # triggered. A device dropped from the fleet keeps its own audit
+    # history even if the batch itself is later removed, hence SET NULL
+    # rather than CASCADE.
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("security_audit_batches.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # "live" (SSH show running-config, triggered from a device's own
+    # page), "upload" (pasted/uploaded text), "scheduled" (the
+    # unattended daily fleet job -- app.services.scheduled_audit), or
+    # "snapshot" (a previously stored config, once that source exists).
     source: Mapped[str] = mapped_column(String(16), nullable=False)
 
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")  # running | completed | failed

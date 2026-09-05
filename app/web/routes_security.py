@@ -88,3 +88,20 @@ def schedule_settings_page(
     # device unattended, the same risk profile app.web.routes_platform
     # already gates AD's own service-account page behind.
     return _render(request, session_token, "security_schedule.html", require_superadmin=True)
+
+
+@router.get("/security/reports", response_class=HTMLResponse)
+def audit_reports_list_page(
+    request: Request,
+    session_token: str | None = Cookie(default=None, alias=security.SESSION_COOKIE_NAME),
+):
+    return _render(request, session_token, "security_reports.html")
+
+
+@router.get("/security/reports/{display_number}", response_class=HTMLResponse)
+def audit_report_detail_page(
+    display_number: int,
+    request: Request,
+    session_token: str | None = Cookie(default=None, alias=security.SESSION_COOKIE_NAME),
+):
+    return _render(request, session_token, "security_report_detail.html")
