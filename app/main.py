@@ -9,6 +9,7 @@ shell.
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -160,6 +161,18 @@ def create_app() -> FastAPI:
             # level, not just by convention.
             if module.router and (module.mandatory or module.key in enabled):
                 app.include_router(module.router)
+
+    @app.on_event("startup")
+    async def _start_scheduled_audit_loop() -> None:
+        # A separate startup handler, deliberately -- _on_startup above
+        # is sync and does one-time setup; this one is async and starts
+        # a task that runs for the entire lifetime of the process.
+        # Folding this into the sync handler would require it to
+        # schedule the task itself in a way that isn't the normal,
+        # straightforward `asyncio.create_task` an async handler gets
+        # for free.
+        from .services.scheduled_audit import scheduler_loop
+        asyncio.create_task(scheduler_loop())
 
     return app
 

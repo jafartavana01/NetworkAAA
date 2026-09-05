@@ -34,6 +34,11 @@
 
 * { box-sizing: border-box; }
 
+/* ---------- shared icon set (partials/icons.html) ---------- */
+.ui-icon { flex-shrink: 0; vertical-align: -3px; }
+.nav-item .ui-icon, .nav-section-toggle .ui-icon { color: var(--text-dim); }
+.nav-item.active .ui-icon { color: var(--signal); }
+
 /* ---------- modern scrollbars (webkit + firefox) ---------- */
 * {
   scrollbar-width: thin;
@@ -144,6 +149,22 @@ button {
 
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field[hidden] { display: none; }
+
+/* Icon-in-field pattern: <div class="field-icon-wrap"><span class="field-icon">...</span><input ...></div>,
+   nested inside a normal .field. Purely additive -- a plain .field with no
+   .field-icon-wrap wrapper renders exactly as before, so existing forms
+   that don't opt in are unaffected. */
+.field-icon-wrap { position: relative; display: flex; align-items: center; }
+.field-icon {
+  position: absolute;
+  left: 11px;
+  color: var(--text-faint);
+  pointer-events: none;
+  display: flex;
+}
+.field-icon-wrap input[type="text"], .field-icon-wrap input[type="password"], .field-icon-wrap input[type="number"], .field-icon-wrap select {
+  padding-left: 34px;
+}
 .field-label { font-size: 12px; color: var(--text-dim); letter-spacing: 0.03em; text-transform: uppercase; }
 
 input[type="text"], input[type="password"], input[type="number"], input[type="datetime-local"], textarea {
@@ -214,6 +235,7 @@ select { color-scheme: dark; }
   margin-top: 4px;
 }
 .btn-primary:hover { filter: brightness(1.08); }
+.btn-with-icon { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
 
 .btn-ghost {
   background: transparent;
@@ -310,6 +332,7 @@ select { color-scheme: dark; }
   padding: 10px 10px 6px;
   font-family: inherit;
 }
+.nav-section-toggle-label { display: flex; align-items: center; gap: 8px; }
 .nav-section-toggle:hover { color: var(--text-dim); }
 .nav-section-chevron {
   display: inline-block;
@@ -510,7 +533,7 @@ select { color-scheme: dark; }
   padding: 16px;
   transition: background-color 180ms ease;
 }
-.panel-wide { border: 1px solid var(--line); }
+.panel-wide { border: 1px solid var(--line); border-radius: 8px; }
 
 .panel-head {
   font-size: 12px;
@@ -521,6 +544,56 @@ select { color-scheme: dark; }
 }
 
 .panel-loading { color: var(--text-faint); font-size: 13px; }
+
+/* ---------- status cards (icon badge + colored glow border) ---------- */
+/* Deliberately its own component, not a .panel variant -- .panel is
+   used in 100+ places across this project for plain, hairline-bordered
+   content blocks; status cards need their own grid (real gaps between
+   rounded cards, not .panel-grid's shared-hairline-via-background-color
+   technique) and their own border/glow treatment without touching any
+   of those existing .panel usages. */
+.status-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+.status-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+.status-card-icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-panel-raised);
+  color: var(--text-faint);
+}
+.status-card-body { min-width: 0; }
+.status-card-title { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+.status-card-value { font-size: 16px; font-weight: 600; color: var(--text-primary); font-family: var(--font-mono); }
+.status-card-sub { font-size: 12px; color: var(--text-faint); margin-top: 3px; }
+
+.status-card.is-signal { border-color: var(--signal-dim); box-shadow: 0 0 0 1px var(--signal-dim), 0 0 16px -6px var(--signal); }
+.status-card.is-signal .status-card-icon { background: rgba(79, 209, 165, 0.12); color: var(--signal); }
+.status-card.is-signal .status-card-value { color: var(--signal); }
+
+.status-card.is-amber { border-color: var(--amber); }
+.status-card.is-amber .status-card-icon { background: rgba(224, 168, 62, 0.12); color: var(--amber); }
+.status-card.is-amber .status-card-value { color: var(--amber); }
+
+.status-card.is-red { border-color: var(--red); }
+.status-card.is-red .status-card-icon { background: rgba(224, 97, 90, 0.12); color: var(--red); }
+.status-card.is-red .status-card-value { color: var(--red); }
 
 .readout { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; }
 .readout-k { color: var(--text-dim); }
@@ -650,6 +723,72 @@ table.data-table tr:hover td { background: var(--bg-panel-raised); }
   color: var(--text-dim);
   font-size: 13px;
 }
+/* Richer variant, opt-in: <div class="empty-state"><div class="empty-state-title">...</div>
+   <p class="empty-state-desc">...</p><button>...</button></div> -- the bare single-line
+   .empty-state text pattern used throughout this project still works unchanged; these are
+   additive sub-parts for pages that want to say what's missing, why it matters, and offer
+   an action, not a replacement for the simpler form. */
+.empty-state-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+.empty-state-desc {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  max-width: 420px;
+  margin: 0 auto 16px;
+  line-height: 1.5;
+}
+/* Dashed icon circle -- opt-in decorative element for an empty state
+   that wants a large, low-emphasis icon above its title (reference
+   screenshot's "Access Grants" panel), not a replacement for the
+   plain .empty-state-title/.empty-state-desc text, which still
+   carries the actual information. */
+.empty-state-icon-circle {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 16px;
+  border: 1.5px dashed var(--line-bright);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+}
+.empty-state .btn-primary, .empty-state .btn-secondary {
+  width: auto;
+  display: inline-flex;
+  margin: 0 auto;
+}
+
+/* Error / permission-denied state -- distinct from .empty-state: something went
+   wrong or is disallowed, not simply "nothing here yet." Same layout skeleton so
+   the two read as siblings, not different components, but a red rail marks it. */
+.error-state {
+  padding: 40px 20px;
+  text-align: center;
+  border-left: 2px solid var(--red);
+  background: rgba(224, 97, 90, 0.05);
+}
+.error-state-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--red);
+  margin-bottom: 6px;
+}
+.error-state-desc {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  max-width: 420px;
+  margin: 0 auto 14px;
+  line-height: 1.5;
+}
+.error-state.is-permission { border-left-color: var(--amber); }
+.error-state.is-permission .error-state-title { color: var(--amber); }
 
 .modal-backdrop {
   position: fixed;
@@ -668,16 +807,39 @@ table.data-table tr:hover td { background: var(--bg-panel-raised); }
 .modal {
   background: var(--bg-panel);
   border: 1px solid var(--line-bright);
+  border-radius: 14px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
   width: fit-content;
   min-width: 400px;
   max-width: min(92vw, 480px);
   max-height: min(90vh, 100%);
-  padding: 24px 24px 0 24px;
+  padding: 26px 26px 0 26px;
   overflow-y: auto;
   animation: modal-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
 }
-.modal h2 { margin: 0 0 18px; font-size: 15px; }
+.modal h2 {
+  margin: 0 0 18px;
+  padding-bottom: 18px;
+  padding-right: 32px;
+  border-bottom: 1px solid var(--line);
+  font-size: 22px;
+  font-weight: 700;
+}
+.modal-close-btn {
+  position: absolute;
+  top: 22px;
+  right: 22px;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 4px;
+  display: flex;
+  border-radius: 6px;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+.modal-close-btn:hover { color: var(--text-primary); background: var(--bg-panel-raised); }
 .modal .field { margin-bottom: 14px; }
 .modal .field, .modal .field-row { width: 100%; }
 .modal-actions {
@@ -694,8 +856,93 @@ table.data-table tr:hover td { background: var(--bg-panel-raised); }
 .field-row { display: flex; gap: 12px; }
 .field-row[hidden] { display: none; }
 .field-row .field { flex: 1; }
+
+/* Visual grouping within a longer form (spec example: DEVICE IDENTITY /
+   NETWORK / PLATFORM / AAA as separate labeled groups within one form) --
+   a section label plus a hairline divider, matching this project's own
+   "group labels distinguishable from links" convention already
+   established in the sidebar, applied here to forms. Purely additive:
+   existing forms with no .form-section wrapper are unaffected. */
+.form-section { margin-top: 20px; }
+.form-section:first-child { margin-top: 0; }
+.form-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 6px;
+  margin-bottom: 14px;
+}
+.form-section .field + .field,
+.form-section .field-row + .field,
+.form-section .field + .field-row,
+.form-section .field-row + .field-row {
+  margin-top: 12px;
+}
 .checkbox-field { display: flex; flex-direction: row; align-items: center; gap: 8px; }
 .checkbox-field input { width: auto; }
+
+/* Custom checkbox -- filled signal-green square with a checkmark when
+   checked, replacing the native browser checkbox. Encoded as a
+   background-image data URI on :checked, the same technique this
+   file's own <select> arrow already uses (see that rule), not a new
+   pattern. */
+.checkbox-field input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border: 1.5px solid var(--line-bright);
+  border-radius: 5px;
+  background-color: var(--bg-input);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.checkbox-field input[type="checkbox"]:checked {
+  background-color: var(--signal);
+  border-color: var(--signal);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2306120e' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 13px 13px;
+}
+.checkbox-field input[type="checkbox"]:focus-visible {
+  box-shadow: 0 0 0 3px rgba(79, 209, 165, 0.25);
+}
+
+/* Toggle switch -- for a genuine binary on/off setting (e.g. "Enable
+   monitoring mode"), distinct from .checkbox-field's square checkbox
+   (used for "select this item"/agreement-style checkboxes). Standard
+   hidden-checkbox-plus-styled-sibling-label technique, so it stays a
+   real, keyboard-and-screen-reader-operable checkbox underneath. */
+.toggle-field { display: flex; flex-direction: row; align-items: center; gap: 10px; }
+.toggle-switch { position: relative; display: inline-block; width: 40px; height: 22px; flex-shrink: 0; }
+.toggle-switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.toggle-switch-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-input);
+  border: 1.5px solid var(--line-bright);
+  border-radius: 999px;
+  transition: background-color 150ms ease, border-color 150ms ease;
+  pointer-events: none;
+}
+.toggle-switch-slider::before {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  left: 3px;
+  top: 2.5px;
+  background: var(--text-faint);
+  border-radius: 50%;
+  transition: transform 150ms ease, background-color 150ms ease;
+}
+.toggle-switch input:checked ~ .toggle-switch-slider { background: var(--signal); border-color: var(--signal); }
+.toggle-switch input:checked ~ .toggle-switch-slider::before { transform: translateX(18px); background: #06120e; }
+.toggle-switch input:focus-visible ~ .toggle-switch-slider { box-shadow: 0 0 0 3px rgba(79, 209, 165, 0.25); }
 
 .diff-view {
   font-family: var(--font-mono);

@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Configuration — AAA Management Platform{% endblock %}
 {% block breadcrumb %}TACACS+ / Configuration{% endblock %}
 
@@ -47,6 +48,7 @@
 
 <div class="modal-backdrop" id="diff-modal-backdrop" hidden>
   <div class="modal" style="max-width: 720px;">
+    <button type="button" class="modal-close-btn" id="diff-modal-close-x-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2 id="diff-modal-title">Diff</h2>
     <div class="diff-view" id="diff-modal-body"></div>
     <div class="modal-actions">
@@ -205,6 +207,9 @@
   }
 
   document.getElementById('diff-modal-close').addEventListener('click', () => {
+    document.getElementById('diff-modal-backdrop').hidden = true;
+  });
+  document.getElementById('diff-modal-close-x-btn').addEventListener('click', () => {
     document.getElementById('diff-modal-backdrop').hidden = true;
   });
   document.getElementById('diff-modal-backdrop').addEventListener('click', (e) => {

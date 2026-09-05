@@ -1,0 +1,187 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Scheduled Audits — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Security Center / Scheduled Audits{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Scheduled Audits</h1>
+    <p class="content-sub">A platform-owned SSH account NetworkAAA uses to audit every enabled device on its own, once a day, without a human logging in each time.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;border-color:var(--amber);">
+    <div class="panel-body" style="font-size:12px;color:var(--amber);">
+      ⚠ This account can reach every enabled device unattended — treat its password with the same care as a device's own TACACS+ shared secret. It is never displayed once saved. Restrict where it can actually be used to sign in by allow-listing this platform's own management IP on each device's own SSH access-list — NetworkAAA has no way to configure that restriction on a device itself, so it's on you to set it up there; use the field below to note that IP for your own reference.
+    </div>
+  </div>
+
+  <form id="schedule-form">
+    <label class="toggle-field field" style="margin-bottom:16px;">
+      <span class="toggle-switch">
+        <input type="checkbox" id="schedule-enabled">
+        <span class="toggle-switch-slider"></span>
+      </span>
+      <span>Enable daily scheduled auditing</span>
+    </label>
+
+    <div class="field-row">
+      <label class="field">
+        <span class="field-label">SSH username</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('user', 14) }}</span>
+          <input type="text" id="schedule-ssh-username" required maxlength="128">
+        </div>
+      </label>
+      <label class="field">
+        <span class="field-label">SSH password <span class="badge badge-on cell-mono" id="schedule-password-badge" hidden style="margin-left:6px;"></span></span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('lock', 14) }}</span>
+          <input type="password" id="schedule-ssh-password" placeholder="" autocomplete="new-password">
+        </div>
+      </label>
+    </div>
+    <div class="field-hint" style="margin-top:-6px;margin-bottom:14px;" id="schedule-password-hint">Leave blank to keep the current password.</div>
+
+    <div class="field-row">
+      <label class="field">
+        <span class="field-label">Daily run time (server local time)</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('history', 14) }}</span>
+          <input type="time" id="schedule-run-time" required>
+        </div>
+      </label>
+      <label class="field">
+        <span class="field-label">Management IP note (for your own reference)</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('network', 14) }}</span>
+          <input type="text" id="schedule-ip-note" placeholder="e.g. 10.0.0.5">
+        </div>
+      </label>
+    </div>
+    <div class="field-hint" style="margin-top:-6px;margin-bottom:14px;">The polling loop checks every few minutes, so the actual run may start a few minutes after this time, not to the exact second.</div>
+
+    <div id="schedule-form-error" class="form-error" role="alert" hidden></div>
+
+    <div style="display:flex;gap:10px;margin-top:8px;">
+      <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save Settings</button>
+      <button type="button" class="btn-secondary btn-with-icon" id="schedule-run-now-btn" style="width:auto;">{{ icons.icon('activity', 16) }}Run Now</button>
+    </div>
+  </form>
+
+  <div class="content-head">
+    <h2>Last Run</h2>
+  </div>
+  <div class="panel panel-wide" id="schedule-last-run-panel">
+    <div class="panel-body mono" id="schedule-last-run-body">
+      <div class="readout"><span class="readout-k">status</span><span class="readout-v">Loading…</span></div>
+    </div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s == null ? '' : String(s);
+    return div.innerHTML;
+  }
+
+  function renderReadout(label, value) {
+    return `<div class="readout"><span class="readout-k">${label}</span><span class="readout-v">${value}</span></div>`;
+  }
+
+  function renderLastRun(s) {
+    const body = document.getElementById('schedule-last-run-body');
+    if (!s.last_run_at) {
+      body.innerHTML = '<div class="empty-state">No scheduled or manual run has completed yet.</div>';
+      return;
+    }
+    const statusColor = s.last_run_status === 'completed' ? 'var(--signal)' : (s.last_run_status === 'partial' ? 'var(--amber)' : 'var(--red)');
+    body.innerHTML = `
+      ${renderReadout('last run', new Date(s.last_run_at).toLocaleString())}
+      ${renderReadout('status', `<span style="color:${statusColor};">${escapeHtml(s.last_run_status || 'unknown')}</span>`)}
+      <div style="margin-top:10px;white-space:pre-wrap;font-size:12.5px;color:var(--text-dim);">${escapeHtml(s.last_run_summary || '')}</div>
+    `;
+  }
+
+  function applySettings(s) {
+    document.getElementById('schedule-enabled').checked = s.enabled;
+    document.getElementById('schedule-ssh-username').value = s.ssh_username;
+    document.getElementById('schedule-run-time').value = s.daily_run_time;
+    document.getElementById('schedule-ip-note').value = s.management_ip_note || '';
+    document.getElementById('schedule-password-badge').hidden = !s.has_password;
+    if (s.has_password) document.getElementById('schedule-password-badge').textContent = 'configured';
+    document.getElementById('schedule-password-hint').textContent = s.has_password
+      ? 'A password is already saved. Leave blank to keep it.'
+      : 'No password saved yet.';
+    renderLastRun(s);
+  }
+
+  async function loadSettings() {
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/security/schedule');
+    } catch (err) {
+      res = null;
+    }
+    if (!res || !res.ok) {
+      document.getElementById('schedule-last-run-body').innerHTML =
+        `<div class="empty-state">${res && res.status === 403 ? "Your role doesn't have permission to view this page." : 'Could not load settings.'}</div>`;
+      return;
+    }
+    applySettings(await res.json());
+  }
+
+  document.getElementById('schedule-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('schedule-form-error');
+    errorBox.hidden = true;
+
+    const payload = {
+      enabled: document.getElementById('schedule-enabled').checked,
+      ssh_username: document.getElementById('schedule-ssh-username').value,
+      daily_run_time: document.getElementById('schedule-run-time').value,
+      management_ip_note: document.getElementById('schedule-ip-note').value || null,
+    };
+    const password = document.getElementById('schedule-ssh-password').value;
+    if (password) payload.ssh_password = password;
+
+    const res = await AAAPlatform.authedFetch('/api/security/schedule', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not save settings.';
+      errorBox.hidden = false;
+      return;
+    }
+    document.getElementById('schedule-ssh-password').value = '';
+    applySettings(await res.json());
+    AAAPlatform.toast('Schedule settings saved.');
+  });
+
+  document.getElementById('schedule-run-now-btn').addEventListener('click', async () => {
+    const errorBox = document.getElementById('schedule-form-error');
+    errorBox.hidden = true;
+    const btn = document.getElementById('schedule-run-now-btn');
+    btn.disabled = true;
+    const res = await AAAPlatform.authedFetch('/api/security/schedule/run-now', { method: 'POST' });
+    btn.disabled = false;
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Run failed.';
+      errorBox.hidden = false;
+      return;
+    }
+    applySettings(await res.json());
+    AAAPlatform.toast('Audit run complete — see Last Run below.');
+  });
+
+  loadSettings();
+})();
+</script>
+{% endblock %}

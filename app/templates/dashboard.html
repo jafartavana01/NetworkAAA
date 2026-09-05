@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Dashboard — AAA Management Platform{% endblock %}
 {% block breadcrumb %}Dashboard{% endblock %}
 
@@ -9,28 +10,28 @@
     <p class="content-sub">Live read from the management API — nothing on this page is cached.</p>
   </div>
 
-  <section class="panel-grid" id="status-grid" aria-live="polite">
-    <div class="panel" data-skeleton>
-      <div class="panel-head"><span class="rail rail-dim"></span>Management API</div>
-      <div class="panel-body panel-loading">Loading…</div>
+  <section class="status-card-grid" id="status-grid" aria-live="polite">
+    <div class="status-card" data-skeleton>
+      <div class="status-card-icon">{{ icons.icon('activity', 20) }}</div>
+      <div class="status-card-body">
+        <div class="status-card-title">Management API</div>
+        <div class="status-card-value panel-loading">Loading…</div>
+      </div>
     </div>
-    <div class="panel" data-skeleton>
-      <div class="panel-head"><span class="rail rail-dim"></span>tac_plus-ng</div>
-      <div class="panel-body panel-loading">Loading…</div>
+    <div class="status-card" data-skeleton>
+      <div class="status-card-icon">{{ icons.icon('shield', 20) }}</div>
+      <div class="status-card-body">
+        <div class="status-card-title">tac_plus-ng</div>
+        <div class="status-card-value panel-loading">Loading…</div>
+      </div>
     </div>
-    <div class="panel" data-skeleton>
-      <div class="panel-head"><span class="rail rail-dim"></span>Database</div>
-      <div class="panel-body panel-loading">Loading…</div>
+    <div class="status-card" data-skeleton>
+      <div class="status-card-icon">{{ icons.icon('database', 20) }}</div>
+      <div class="status-card-body">
+        <div class="status-card-title">Database</div>
+        <div class="status-card-value panel-loading">Loading…</div>
+      </div>
     </div>
-  </section>
-
-  <section class="content-head">
-    <h2>System — Core Information</h2>
-    <p class="content-sub">Exact upstream commit, build profile, and enabled features recorded at install time (spec §11).</p>
-  </section>
-
-  <section class="panel panel-wide" id="build-info-panel">
-    <div class="panel-loading">Loading build information…</div>
   </section>
 
   <div class="content-head">
@@ -64,10 +65,23 @@
     </div>
     <div class="panel panel-wide">
       <div class="panel-head"><span class="rail rail-dim"></span>Authorization Results</div>
-      <div class="panel-body" style="height:220px;">
+      <div class="panel-body" style="height:220px;position:relative;">
         <canvas id="results-chart"></canvas>
+        <div id="results-chart-center-label" style="position:absolute;top:50%;left:50%;transform:translate(-50%,calc(-50% - 14px));text-align:center;pointer-events:none;">
+          <div style="font-size:24px;font-weight:700;font-family:var(--font-mono);color:var(--text-primary);" id="results-chart-center-pct">—</div>
+          <div style="font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.05em;" id="results-chart-center-label">Success</div>
+        </div>
       </div>
     </div>
+  </section>
+
+  <section class="content-head">
+    <h2>System — Core Information</h2>
+    <p class="content-sub">Exact upstream commit, build profile, and enabled features recorded at install time (spec §11).</p>
+  </section>
+
+  <section class="panel panel-wide" id="build-info-panel">
+    <div class="panel-loading">Loading build information…</div>
   </section>
 </main>
 
@@ -165,6 +179,7 @@
     const redColor = cssVar('--red') || '#e05252';
     const lineColor = cssVar('--line') || '#2a3330';
     const textDim = cssVar('--text-dim') || '#8fa39d';
+    const textFaintColor = cssVar('--text-faint') || '#57616c';
 
     const activityCanvas = document.getElementById('activity-chart');
     const existingActivity = window.Chart.getChart(activityCanvas);
@@ -204,10 +219,17 @@
     resultsChart = new window.Chart(resultsCanvas, {
       type: 'doughnut',
       data: {
-        labels: ['Permit', 'Non-permit'],
+        // Genuinely no data yet -> a single neutral-gray "empty ring"
+        // segment, labeled as such. The chart previously fell back to
+        // [1, 0] with the SAME green/red colors real data uses, which
+        // rendered a full green ring -- visually indistinguishable
+        // from "100% permit", when the true state was "no requests
+        // recorded at all." Misleading in exactly the way a real
+        // status indicator must not be.
+        labels: hasData ? ['Permit', 'Non-permit'] : ['No data yet'],
         datasets: [{
-          data: hasData ? [data.permit_count, data.non_permit_count] : [1, 0],
-          backgroundColor: [signalColor, redColor],
+          data: hasData ? [data.permit_count, data.non_permit_count] : [1],
+          backgroundColor: hasData ? [signalColor, redColor] : [textFaintColor],
           borderColor: 'transparent',
         }],
       },
@@ -220,6 +242,14 @@
         },
       },
     });
+
+    const centerPctEl = document.getElementById('results-chart-center-pct');
+    const centerLabelEl = document.getElementById('results-chart-center-label');
+    if (centerPctEl) {
+      const total = data.permit_count + data.non_permit_count;
+      centerPctEl.textContent = total > 0 ? `${Math.round((data.permit_count / total) * 100)}%` : '—';
+      if (centerLabelEl) centerLabelEl.textContent = total > 0 ? 'Success' : 'No Data';
+    }
   }
 
   function escapeHtml(s) {
@@ -340,6 +370,15 @@
 </script>
 
 <script>
+  // Pre-rendered server-side via Jinja (see the top-of-file macro
+  // import) and stored as constants rather than re-invoking the icon
+  // macro from inside this JS -- Jinja renders once, server-side,
+  // before this script ever runs; these are just the resulting SVG
+  // strings.
+  const ICON_ACTIVITY = '{{ icons.icon("activity", 20) }}';
+  const ICON_SHIELD = '{{ icons.icon("shield", 20) }}';
+  const ICON_DATABASE = '{{ icons.icon("database", 20) }}';
+
   const statusColor = (state) => {
     if (state === 'active' || state === 'connected') return 'signal';
     if (state === 'activating' || state === 'reloading') return 'amber';
@@ -363,25 +402,28 @@
       const tac = data.services['tac-plus-ng.service'] || {};
 
       grid.innerHTML = `
-        <div class="panel">
-          <div class="panel-head"><span class="rail rail-${statusColor(mgmt.active_state)}"></span>Management API</div>
-          <div class="panel-body mono">
-            ${renderReadout('state', mgmt.active_state || 'unknown')}
-            ${renderReadout('enabled', mgmt.enabled ?? 'unknown')}
+        <div class="status-card is-${statusColor(mgmt.active_state)}">
+          <div class="status-card-icon">${ICON_ACTIVITY}</div>
+          <div class="status-card-body">
+            <div class="status-card-title">Management API</div>
+            <div class="status-card-value">${mgmt.active_state || 'unknown'}</div>
+            <div class="status-card-sub">enabled: ${mgmt.enabled ?? 'unknown'}</div>
           </div>
         </div>
-        <div class="panel">
-          <div class="panel-head"><span class="rail rail-${statusColor(tac.active_state)}"></span>tac_plus-ng</div>
-          <div class="panel-body mono">
-            ${renderReadout('state', tac.active_state || 'unknown')}
-            ${renderReadout('enabled', tac.enabled ?? 'unknown')}
+        <div class="status-card is-${statusColor(tac.active_state)}">
+          <div class="status-card-icon">${ICON_SHIELD}</div>
+          <div class="status-card-body">
+            <div class="status-card-title">tac_plus-ng</div>
+            <div class="status-card-value">${tac.active_state || 'unknown'}</div>
+            <div class="status-card-sub">enabled: ${tac.enabled ?? 'unknown'}</div>
           </div>
         </div>
-        <div class="panel">
-          <div class="panel-head"><span class="rail rail-${statusColor(data.database)}"></span>Database</div>
-          <div class="panel-body mono">
-            ${renderReadout('status', data.database)}
-            ${renderReadout('os', data.os)}
+        <div class="status-card is-${statusColor(data.database)}">
+          <div class="status-card-icon">${ICON_DATABASE}</div>
+          <div class="status-card-body">
+            <div class="status-card-title">Database</div>
+            <div class="status-card-value">${data.database}</div>
+            <div class="status-card-sub">${data.os || ''}</div>
           </div>
         </div>
       `;
@@ -406,6 +448,7 @@
       }
     } catch (err) {
       grid.innerHTML = `<div class="panel"><div class="panel-body">Could not reach the management API.</div></div>`;
+      buildPanel.innerHTML = `<div class="panel-body">Could not reach the management API.</div>`;
     }
   }
 

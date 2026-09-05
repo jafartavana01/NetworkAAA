@@ -12,6 +12,639 @@ it was built alongside.
 
 ## 2026-09-03
 
+### Added — Scheduled Audits: a platform-owned service account for unattended daily device auditing
+
+Direct request: give NetworkAAA its own account for reaching devices,
+run Security Center audits against every device automatically once a
+day, and gate this behind the same "trusted host" mental model
+already used for TACACS+ users -- restricting where the credential
+can actually be used to sign in to this platform's own management IP.
+NCM (config change management) was explicitly deferred to its own
+follow-up request and is NOT part of this entry.
+
+**New `AuditScheduleSettings` model** -- a singleton settings row
+(same convention as `AdSettings`) storing the SSH username, a
+Fernet-encrypted password using the exact same
+`encrypt_secret`/`decrypt_secret` mechanism already protecting device
+shared secrets and the AD bind password (this credential is at least
+as sensitive as either), a single daily run time, a free-text
+"management IP note" field, and the last run's status/summary. The
+IP note is deliberately admin-entered, not auto-detected -- this
+platform may have multiple interfaces, and presenting a wrong guess
+as authoritative would be worse than asking the admin to state it
+themselves; it exists purely so the admin has something to allow-list
+on each device's own SSH ACL, since NetworkAAA has no ability to
+configure a device's own access control. Added to `init_db()`'s model
+import list in the same edit that created the model -- the exact
+mistake that caused the recent Security Center database outage, not
+repeated here.
+
+**New `app/services/scheduled_audit.py`**: `run_scheduled_audit()`
+audits every enabled device in sequence (deliberately not in
+parallel -- an unattended fleet-wide job has no one watching it fail,
+so bounding total run time predictably and avoiding simultaneous
+management-plane sessions against many devices at once matters more
+here than raw speed), reusing the exact same SSH-execution and
+audit-persistence pipeline the existing live-audit API endpoint
+already uses, not a second implementation of it. Every device is
+wrapped in its own try/except so one unreachable device can never
+abort auditing the rest of the fleet.
+
+**`should_run_now()`** -- the actual "is it time yet" decision,
+deliberately pulled out as its own pure function specifically so it
+could be verified independent of the database/SSH/asyncio machinery
+around it. Verified with 5 real scenarios (before scheduled time,
+after it, already run today, last run was yesterday, exactly at the
+scheduled minute) -- then re-extracted directly from the real file
+and re-tested against the same 5 cases a second time, specifically to
+rule out any transcription drift between what was tested and what
+actually shipped.
+
+**`scheduler_loop()`** -- a plain asyncio background task, not a new
+dependency: this project has zero existing scheduling infrastructure
+(no APScheduler, no Celery, no cron integration), and a single
+poll-every-5-minutes loop covers the one real requirement (a daily
+fleet audit) without taking on a general-purpose job-scheduling
+library for it. The actual audit always runs via `asyncio.to_thread`,
+never directly in the loop's own coroutine, so a slow or hanging
+device can never block the web server from handling ordinary requests
+while a scheduled run is in progress. Wired into `app/main.py` as a
+second, separate `@app.on_event("startup")` handler -- deliberately
+not merged into the existing sync one, which does one-time setup, not
+something meant to run for the process's entire lifetime.
+
+**Three new API endpoints** (`GET`/`PUT /api/security/schedule`,
+`POST /api/security/schedule/run-now`), gated to superadmin only --
+matching the exact convention `app.api.routes_ad_settings` already
+established for AD's own service-account credential, given the
+identical risk profile (a shared credential capable of reaching
+everything unattended).
+
+**New `/security/schedule` page** -- toggle, username/password/
+schedule-time/IP-note fields (all with the established field-icon
+treatment), a Save button and a separate Run Now button for testing
+the credential without waiting for the schedule, and a Last Run
+status panel. Superadmin-gated at the web-route layer too (not just
+the API), matching `app.web.routes_platform`'s own established
+`require_superadmin` pattern for AD/platform settings pages -- added
+that exact capability to Security Center's own `_render()`, which
+didn't have it before since nothing in Security Center needed
+superadmin-only gating until now. New nav entry added with
+`requires_superadmin=True`, verified hidden for a non-superadmin and
+visible for one via the same isolated logic test used throughout this
+project's sidebar work.
+
+**Verified**: every new/changed Python file compiles; every model
+field reference and schema-construction call cross-checked against
+the real field definitions via AST inspection; the new template
+parses, has zero ID mismatches, and its script confirmed landing
+inside `#view-scripts-container` by checking the actual rendered
+HTML; a full project-wide sweep for the `view_scripts` placement bug
+(the one that broke Security Center earlier this session) still finds
+zero instances anywhere, including this new page; full project-wide
+compile/template/CSS-balance checks all pass.
+
+---
+
+### Fixed — two real bugs: SPA navigation timing, and a misleading "100% success" chart
+
+Direct report, with screenshots.
+
+**"Device not found" when clicking into a device from the Security
+Center list, despite the list itself showing devices correctly.**
+Root cause traced to `spa.js` itself, not the Security Center --
+`navigateTo()` was re-executing the newly-loaded page's own inline
+scripts BEFORE calling `history.pushState()`. Any page whose own
+script reads `window.location.pathname` to extract a dynamic URL
+segment (a device ID, a job ID) would read the OLD url -- wherever
+the user was navigating FROM, not TO -- every single time it was
+reached via an in-app link click, and only work correctly on a hard
+refresh or direct URL visit (which involve a real page load, where
+the URL is already correct from the start). Confirmed this wasn't
+isolated to Security Center by grepping the whole project for the
+same `window.location.pathname` pattern -- `network_ops_job_detail.html`
+has the identical latent bug, not yet reported but fixed by the same
+change. Fixed by moving `history.pushState()` to run before the new
+page's scripts execute, so `window.location` is already correct by
+the time any page reads it. The back/forward-button path (`popstate`)
+was already correct and is untouched by this change, since the
+browser itself updates the URL before that handler ever fires,
+independent of anything this file does.
+
+**Dashboard's Authorization Results chart showed a full green ring
+implying 100% success when there was actually zero data recorded.**
+The chart's own "no data yet" fallback rendered `[1, 0]` using the
+SAME green/red colors real data uses -- visually identical to "100%
+permit," when the true state was "no requests recorded at all."
+Fixed to render a single neutral-gray segment labeled "No data yet"
+instead, and the center-label overlay (added earlier this session)
+now shows "No Data" rather than "Success" underneath the dash in
+that state, so every part of the panel agrees on what it's showing
+instead of implying a real result. The percentage math underneath
+this was re-verified with the same test cases as before, plus the
+new label-agreement logic, all passing.
+
+Verified: `spa.js` and `dashboard.html` both pass their syntax/parse
+checks; full project-wide compile and template checks pass; ID
+cross-check on `dashboard.html` returns zero mismatches.
+
+**On the third part of the report** (scheduled daily device auditing,
+a platform-owned service credential for reaching devices
+unattended, and a Network Configuration/Change Management section):
+investigated rather than guessed at scope before building anything --
+confirmed this project has zero existing scheduling/background-task
+infrastructure (no APScheduler, no Celery, no cron integration), and
+that `AuditRun.raw_config`/`config_snapshot_hash` (built earlier this
+session for Security Center) already stores a timestamped device
+config snapshot on every audit, which is most of NCM's actual data
+model already in place as a side effect. Given this touches new
+scheduling architecture and a genuinely security-sensitive
+shared-credential design, a concrete proposal is owed before writing
+code, not a unilateral implementation -- see the conversation itself
+for that proposal.
+
+---
+
+### Fixed — Security Center's own database tables were never created
+
+Direct report, with screenshots: Overview showed every stat as a dash,
+Devices and Findings both showed "Could not load...". All three
+failing together, with nothing in common except the Security Center
+API, pointed at something shared rather than three separate bugs.
+
+Root cause: `app/database.py`'s `init_db()` -- the only place in this
+project that creates database tables -- imports an explicit, hardcoded
+list of model modules before calling `create_all()`, specifically so
+SQLAlchemy knows to create their tables. `audit_run` (the module
+holding `AuditRun`/`AuditFinding`/`AuditDomainScore`/
+`AuditComplianceResult` -- the tables the entire Security Center reads
+and writes) was never added to that list. `init_db()` itself is only
+ever called once, from `setup.py`, during initial installation --
+confirmed by grepping the entire project for every call site, not
+assumed. The running application (`main.py`) never calls `create_all()`
+itself; it relies entirely on setup having already created every
+table. So the `security_audit_*` tables were never created in the
+first place, and no amount of restarting the running app would ever
+fix that, since the app was never the thing responsible for creating
+them.
+
+Fixed by adding `audit_run` to `init_db()`'s import list -- this
+covers every fresh install going forward. This does NOT retroactively
+fix an already-deployed database that was set up before this change,
+since `init_db()` isn't called again on ordinary app restarts.
+Confirmed `init_db()` is self-contained and safe to call in isolation
+(it uses `get_settings().database_url`, the exact same configuration
+the already-running app uses, and `create_all()` only ever creates
+tables that don't already exist -- it never touches or recreates
+existing ones): running `python3 -c "from app.database import
+init_db; init_db()"` from the application's own directory/environment
+will create just the missing Security Center tables, without invoking
+any of `setup.py`'s other system-level steps (users, groups, certs,
+systemd units).
+
+Verified: `database.py` compiles; full project-wide compile check
+passes; confirmed via direct code reading (not assumption) that no
+other model added this session was missed from this same list.
+
+---
+
+### Continued — Dashboard chart panels, global panel rounding, Active Directory field icons
+
+**`.panel-wide` now has rounded corners (8px) globally** -- checked
+the scale first (18 files use this class) before changing it, and
+deliberately left the base `.panel`/`.panel-grid` combination alone:
+`.panel-grid` shares hairline borders between adjacent items via a
+background-color trick, and rounding those individual items would
+show odd corner gaps rather than a clean look, so only `.panel-wide`
+(genuinely standalone, bordered panels) got the change.
+
+**Dashboard's Authorization Results chart** now shows the real
+success-rate percentage in its center, matching the reference
+screenshot's circular-progress-with-center-label style -- this
+already existed as a Chart.js doughnut chart (confirmed by reading
+the actual chart config, not assumed), so no new charting component
+was needed, just a center-label overlay computed from the same
+permit/non-permit counts the chart itself already uses. The
+percentage math (permit / total, rounded) was verified with 5 real
+test cases including the zero-data and rounding edge cases -- the
+one part of this addition I could verify programmatically. The
+label's exact vertical centering relative to the doughnut (which sits
+above a bottom-positioned legend, not centered in the full panel
+height) is a reasonable approximation I could not visually confirm in
+this environment; flagged here rather than presented as certain.
+
+**Active Directory**: icons macro imported, field icons added to
+Domain/Username/Password, and an icon added to the Save Settings
+button. Checked "Test Connection" the same way as the Dashboard/
+Security Center buttons before it and found the identical risk (its
+own `.textContent` gets overwritten to "Testing…" during the
+request) -- left it alone rather than ship an icon that would vanish
+on click, consistent with every other button this pivot has
+deliberately skipped for the same reason.
+
+**Verified**: both templates parse; ID cross-checks return zero
+mismatches on both; the new field-icon count on Active Directory
+confirmed exactly 3 as expected; every extracted script passes Node
+syntax checks; full project-wide compile/template/CSS-balance checks
+pass after the global `.panel-wide` change specifically, given its
+reach across 18 files.
+
+---
+
+### Continued — Devices page brought fully in line with the reference screenshot
+
+Devices was named the most important page in the original request;
+finished the remaining gap against its reference screenshot (device-
+row icons, a real toggle switch for monitoring mode, and the
+dashed-icon-circle Access Grants empty state).
+
+**Device row icons** -- a small server icon next to each device name
+in the table, using the same pre-rendered-icon-as-JS-constant
+technique already established for Dashboard's status cards and
+Security Center's per-row links (this table is built client-side, one
+row per device, so a static Jinja icon call doesn't apply). Uses
+`display: flex` directly on a `<td>` -- confirmed this is already a
+proven pattern in this exact file (`.cell-actions` already does the
+same for the actions column), not a new risk introduced here.
+
+**New `.toggle-field`/`.toggle-switch` component** -- a real pill-
+shaped switch with a sliding circle, for genuine binary settings like
+"Enable monitoring mode", replacing what was previously the same
+square checkbox used for "select this item" checkboxes elsewhere. A
+real CSS cascade bug caught and fixed before it shipped: `.toggle-
+field`'s `display: flex` alone wasn't enough to lay the switch and its
+label out side-by-side, because `.field`'s own `flex-direction:
+column` (declared earlier in the file, but for a property `.toggle-
+field` didn't touch) would have kept applying and stacked them
+vertically instead. Fixed by having `.toggle-field` explicitly
+declare `flex-direction: row`, verified by checking both rules' exact
+line numbers to confirm the override order, not just assumed correct.
+
+**New `.empty-state-icon-circle`** -- a large dashed-border circle
+around an icon, an opt-in addition to the existing empty-state
+pattern (title/description/action are unchanged, this just adds the
+icon above them). Applied to the Access Grants empty state, whose
+action button reuses the real "Add access grant" button's own full
+click logic (including its existing "create a group first" guard)
+via a synthetic click, rather than duplicating that check in a second
+place.
+
+**Verified**: template parses; full ID cross-check (101 references,
+zero mismatches); both new icon constants confirmed to contain real
+rendered SVG via direct HTML inspection; extracted scripts pass Node
+syntax checks; CSS brace-balanced with every new variable reference
+confirmed defined.
+
+---
+
+### Completed — icon/modal redesign rolled out to every remaining page
+
+Continuing the visual pivot: every modal in the entire project now has
+the redesigned style (close button, icon-in-field, icon-on-primary-
+button), and every Security Center page received icon treatment where
+it was actually safe to add.
+
+**Every modal in the project, closed out this pass**: Network Ops
+Audits, Network Ops Job Detail (view-only output modal), Sessions
+(view-only session detail modal), Accounting (Promote to Command Set),
+and Config (view-only diff modal) -- each got the same treatment as
+every other modal from this pivot: import, X close button wired to
+that file's own existing close logic (never a new close mechanism),
+icon on the primary button where one exists, field icons where
+semantically clear. Combined with the previous pass, this is now
+every single modal in the project, confirmed by having grepped for
+`modal-backdrop` across every template rather than guessing which
+pages had one. Also confirmed, by direct inspection rather than
+assumption, that AAA Health, Diagnostics, Effective Access, Policy
+Simulator, and Network Ops Checks have zero modals -- nothing skipped
+there, there was simply nothing to change.
+
+**Two real risks caught and fixed on Security Center pages, not just
+assumed safe:**
+
+1. `security_overview.html`'s and `security_device_detail.html`'s
+   "Run Audit" buttons both overwrite their own `.textContent` during
+   the audit ("Running audit…" / "Run Audit"), which would silently
+   strip any icon added via static HTML the moment the button updates
+   -- checked this before adding anything, and deliberately left both
+   buttons alone rather than ship an icon that would vanish on first
+   click.
+2. `security_device_detail.html`'s Live-SSH/Paste-Config mode toggle
+   buttons fully replace their own `className` on click
+   (`'btn-primary btn-small'`, no `btn-with-icon`) -- adding icons
+   without also fixing this would have made the icon's flex layout
+   break the instant either button was clicked. Fixed by updating
+   both `className` assignments to include `btn-with-icon`, not just
+   adding the class to the initial markup and hoping.
+
+**`security_devices.html`'s per-row "View" link** (built client-side,
+one per device row) needed the same pre-rendered-icon-as-JS-constant
+technique Dashboard's status cards already established, not a static
+HTML edit -- confirmed the constant contains real rendered SVG via
+direct inspection, not assumed from the pattern alone.
+
+**`security_findings.html`**'s three filter dropdowns (Severity/
+Status/Device) and **`security_device_detail.html`**'s SSH username/
+password fields got the standard field-icon treatment.
+
+**Verified, every page, no exceptions**: Jinja parse, full ID
+cross-check (zero mismatches on every single page touched this
+session), and Node syntax check on every extracted script. Final
+full-project pass before packaging: all 31 top-level templates plus
+both partials parse, CSS brace-balanced, `app.js`/`spa.js` both valid,
+all 31 named icons re-confirmed as well-formed XML, and -- given how
+severe that bug was earlier this session -- a full project-wide
+re-sweep for the `view_scripts` placement bug across every template,
+still zero instances found anywhere.
+
+---
+
+### Continued — global modal redesign, custom checkbox, comprehensive icon treatment
+
+Explicitly asked to redesign every popup to match the "Add user"
+reference screenshot specifically, plus continue Dashboard/Devices --
+prioritized the modal redesign first since it's shared CSS: one
+change to `.modal`/`.modal h2`/`.checkbox-field` automatically
+upgrades every modal in the project, not just the one being directly
+edited.
+
+**`.modal`** -- rounded corners (14px, up from square), title enlarged
+to 22px/700 weight with its own bottom divider (was 15px, no
+divider), padding increased to match. **New `.modal-close-btn`** -- no
+modal anywhere in this project had an X close button before this
+(confirmed by checking every modal's markup first, not assumed);
+every existing modal instead relied on a footer Cancel button and
+backdrop-click alone. Added the pattern and wired it into the Add
+User and Add Device modals specifically, calling each modal's own
+already-existing `closeModal()` -- not a new close mechanism, the
+same one Cancel already used.
+
+**New custom checkbox** -- `.checkbox-field input[type="checkbox"]`
+now renders as a filled signal-green square with a checkmark when
+checked, replacing the native browser checkbox, using the exact same
+background-image-data-URI technique this file's own `<select>` arrow
+already used (not a new pattern). Verified the checkmark's SVG data
+URI decodes to well-formed XML programmatically, the same way every
+icon in the new icon set was verified. This one CSS change reached
+all 10 files that use `.checkbox-field` -- checked each one's context
+first to confirm none of them use it inside a cramped table cell
+where the larger 20px size would misfit; all 10 are labeled form/
+filter toggles, the context this sizing was designed for.
+
+**New `.btn-with-icon` utility** -- deliberately not baked into
+`.btn-primary` itself (used on many icon-less buttons project-wide);
+an additive class instead, so only buttons that opt in get the
+icon-gap flex layout.
+
+**Add User modal** now comprehensively matches the reference: icons
+in all 4 real fields (Authentication/Username/Group/Password), the X
+close button, and an icon on the Save button. Add Device modal
+brought to the same close-button/icon-button consistency.
+
+**Verified**: full project-wide compile and template checks pass; ID
+cross-checks on both modified pages (zero mismatches, including a new
+100-reference check on `devices.html`); every icon confirmed present
+as real rendered SVG via direct HTML inspection, not assumed from
+markup alone; extracted scripts pass Node syntax checks; CSS
+brace-balanced throughout.
+
+**Honestly still ahead**: every other modal in the project (Groups,
+Policies, Command Sets, Active Directory, and more) still needs its
+own close button and field icons -- only Users and Devices have the
+full treatment so far, though all of them already inherited the
+rounded corners/bigger title/custom checkbox from the shared CSS
+change. Dashboard's chart panels and Devices' table-row icons /
+monitoring-toggle switch / Access-Grants dashed-border empty state
+(all visible in the reference screenshots) haven't been touched yet.
+
+---
+
+### Started — full visual pivot: icon system, superseding the earlier "no icons" design spec
+
+Explicit, confirmed direction change: shown 4 screenshots of an
+icon-rich, glowing-card aesthetic and asked to adopt it everywhere,
+overriding this same day's earlier detailed spec that had explicitly
+said the opposite ("do NOT use emoji as UI icons," "not a generic
+SaaS admin dashboard"). Confirmed directly before proceeding, given
+the earlier spec was followed carefully across 7 pages this same day.
+
+**New `partials/icons.html`** -- 32 hand-authored SVG icons. This
+project has no network access to pull in a real icon library and no
+build pipeline to add one as a dependency, so these are hand-authored
+geometric SVG primitives (circle/rect/line/polyline/path) following
+Lucide's own visual conventions (24x24 viewBox, stroke-based, round
+caps/joins, currentColor) rather than copied library path data.
+Verified two ways, not just visually assumed: every icon rendered
+through Jinja and parsed as well-formed XML programmatically (all 32
+passed), and every path command flagged by an automated "coordinates
+outside 0-24" sanity check was individually traced by hand to confirm
+they were valid relative-coordinate SVG path syntax (a real limitation
+of that particular check, not real errors) rather than dismissed.
+
+**Sidebar icons wired end-to-end** -- `NavEntry.icon` existed as
+unused, dead data before this session (confirmed the first time this
+came up); now actually rendered for Dashboard and all 5 accordion
+section headers, via a new per-section icon assignment in
+`app/modules/sidebar.py` (sections don't map 1:1 to any single
+existing module, so there's no automatic source to derive one from).
+A real risk caught during this change: the new markup nests the
+section label in an inner `<span>`, which could have silently broken
+Ctrl+K's label-reading `querySelector` -- fixed to target that inner
+span explicitly rather than rely on SVG elements happening to
+contribute nothing to `.textContent`.
+
+**New `.status-card` component** (Dashboard's Management API/
+tac_plus-ng/Database cards) -- built as its own class, not a `.panel`
+variant, since `.panel` is used 100+ places elsewhere and this needed
+its own layout (real gaps between rounded, glow-bordered cards, not
+`.panel-grid`'s shared-hairline-via-background technique). Icon SVGs
+are rendered once server-side via Jinja and passed into the page's
+existing JS as constants, not regenerated client-side on every
+15-second refresh.
+
+**A real, confirmed Jinja bug caught and fixed**: a JS comment
+referencing "the top-of-file `{% import %}`" literally contained
+Jinja's own delimiter syntax -- Jinja parses `{% %}`/`{{ }}` anywhere
+in a template file regardless of surrounding HTML/JS context, so this
+broke the whole page with a template syntax error. Reworded the
+comment to avoid the literal delimiter characters, then swept every
+other template touched this pass for the same pattern -- clean.
+
+**New `.field-icon-wrap` pattern** -- icon positioned inside a form
+field, matching the reference screenshots' input style. A real
+specificity conflict caught before it could silently fail: the
+project's existing global `input[type="text"]`/`select` rules have
+equal CSS specificity to a naive `.field-icon-wrap input` selector
+and are declared later in the file, so cascade order alone would have
+let the global padding silently win. Fixed with a properly
+higher-specificity selector instead of relying on file ordering.
+Applied to 3 fields in the Devices form (Name/IPv4/Shared secret) as
+a verified demonstration of the pattern, not yet rolled out further.
+
+**Verified throughout**: every icon confirmed as real rendered SVG
+content (not just present-in-markup) in both the sidebar and the
+Devices form; full project-wide template parse (31 top-level
+templates + both partials); ID cross-checks on every touched file;
+Node syntax checks on every extracted script; CSS brace-balanced.
+
+**Honestly scoped**: this is the foundation (icon system, sidebar,
+one status-card set, one form's worth of field icons) for a pivot the
+reference screenshots show applied to every page, every card, and
+every form field. That full scope -- glow-bordered panels everywhere,
+icons in every remaining form across every remaining page, redesigned
+tables/buttons/modals to match -- is still ahead.
+
+---
+
+### Continued — UI/UX design system pass: Dashboard, Users, Groups, Active Directory, Policies, Command Sets
+
+Continuing the pass started earlier today (Devices was Phase 3's first
+page) through the rest of the spec's own priority order.
+
+**Dashboard** — a real bug fixed, not just cosmetic: `loadStatus()`'s
+error handler only ever updated the health-status grid, never the
+separate build-info panel, so a network failure while loading the
+dashboard could leave that panel stuck on "Loading build
+information…" forever. Fixed to update both. Reordered content to
+match the spec's own 4-question framework (health → usage/
+correctness → lowest-priority build/version info, which moved from
+second-on-the-page to last) -- pure reordering of existing sections,
+no data or logic changed.
+
+**Users** — form restructured into Authentication / Identity / Access
+/ Password / Restrictions sections. Done carefully around the
+existing AD-vs-local conditional show/hide logic: `.form-section` was
+added directly onto the already-toggled elements (`#user-ad-auth-fields`,
+`#user-local-auth-fields`) rather than introducing new wrapper divs,
+so the exact same three-line `.hidden = isAd` toggle in the existing
+JS needed zero changes.
+
+**Active Directory** — new connection-status summary at the top of
+the page (status/directory/protocol/server), built entirely from
+fields `/api/ad-settings` already returns -- no new backend endpoint,
+no invented data. The manual "Run health check" button's own handler
+now also updates this summary (one source of truth for "current known
+status," not two independent displays), and it's auto-triggered on
+page load, but only when AD is actually enabled -- otherwise a
+never-configured environment would land on this page to an immediate,
+alarming "failed" reading for settings nobody has filled in yet.
+
+A real, serious editing mistake made and caught during this specific
+change: an intermediate edit closed `loadSettings()`'s closing brace
+too early, orphaning about a dozen lines of the original function
+(domain/username field reconstruction) outside the function entirely.
+Caught by reading the surrounding code after the edit rather than
+trusting the diff alone, and fixed by merging the orphaned block back
+inside before the real closing brace -- re-verified with a full parse,
+ID cross-check, and Node syntax check afterward, not just assumed
+fixed.
+
+**Groups, Policies, Command Sets** — empty states upgraded to the
+requested what's-missing/why-it-matters/action pattern; the two
+larger pages' (Policies at 1118 lines, with its own condition-tree
+builder; Command Sets) forms were deliberately left as-is beyond
+that -- both already show conceptually sound information (Policies'
+list already renders a compact, human-readable condition summary per
+row rather than raw IDs; Command Sets already separates permit/deny
+into two distinct lists) and restructuring 1000+ lines of existing,
+working condition-builder logic under this pass's time constraints
+carried more risk than the visual gain justified.
+
+A pattern caught and fixed three separate times this pass: each new
+empty-state edit's `old_str` matched only the single line being
+replaced, and the original code already had its own `return;`
+immediately after it -- so several of these edits initially produced
+a duplicate `return;` statement (harmless dead code, but sloppy).
+Caught each time by checking the surrounding lines after the edit
+rather than assuming the diff was complete.
+
+**Verified across all six pages**: every template parses; every
+`getElementById` reference cross-checked against real IDs (zero
+mismatches on any page, including 40 references on the largest,
+`policies.html`); every extracted script passes Node syntax checks;
+div-nesting balance confirmed on the two heavily-restructured forms
+(Users: 33 opens/33 closes; Active Directory's `loadSettings()`
+re-verified after the brace-mismatch fix); full project-wide compile
+and template checks pass; CSS brace-balanced; and a project-wide
+systematic re-scan for the `view_scripts` bug class (the one that
+broke Security Center earlier this session) still finds zero
+instances anywhere, confirming none of today's six pages
+reintroduced it.
+
+---
+
+### Started — enterprise UI/UX design system pass (Phase 1-3, Devices page complete)
+
+A large-scope request: make the whole application feel like a mature
+network/security operations console rather than a collection of
+individual admin pages, without introducing any frontend framework,
+build pipeline, or architectural change -- FastAPI/Jinja2/vanilla JS/
+the existing SPA shell all preserved, per explicit instruction.
+Followed the requested process exactly: Phase 1 audit before touching
+anything, Phase 2 design-system additions, Phase 3 applying them --
+starting with Devices, the page the request itself named most
+important.
+
+**Phase 1 audit findings (evidence-based, not assumed):** the
+foundation is better than the request anticipated -- `.badge`/
+`.btn-primary`/`.btn-secondary`/`.btn-danger`/`.toolbar`/`.content-head`
+are already used consistently project-wide (checked: every delete
+button in `devices.html`/`command_sets.html` already uses
+`.btn-danger`, not a mix). The real, confirmed gaps: no form-section
+visual grouping exists anywhere (spec's own "DEVICE IDENTITY / NETWORK
+/ PLATFORM / AAA" example has no equivalent today), and empty states
+are uniformly a single bare sentence with no action ("No devices yet.
+Add one to get started." -- text only, no button), never the
+what's-missing/why-it-matters/action pattern requested.
+
+**Phase 2 -- new reusable, additive CSS** (`app/static/css/app.css`):
+`.form-section`/`.form-section-title` for visual grouping within
+longer forms; `.empty-state-title`/`.empty-state-desc` as opt-in
+richer sub-parts of the existing `.empty-state` (every current bare
+`<div class="empty-state">text</div>` usage across the project is
+completely unaffected); `.error-state` as a new, visually distinct
+sibling for "something failed" or "not permitted," separate from
+"nothing here yet." Every new CSS variable reference verified defined;
+brace balance confirmed.
+
+**Phase 3 -- Devices page** (`devices.html`), the page named most
+important: the Add/Edit device form restructured into the requested
+four `.form-section` groups (Identity, Network, Platform, AAA) --
+every single `id`/`required`/`pattern`/`placeholder` attribute
+preserved exactly, since the JS's own `getElementById` calls depend on
+them unchanged; only grouping and field order changed (Description
+moved into Identity, next to Name, matching the spec's own example).
+The empty state upgraded to the requested pattern -- title,
+explanation, and a working "+ Add device" button wired to the same
+`openModal()` the header's own Add button already uses, not a second
+implementation.
+
+**Two real issues caught and fixed during this pass, not just
+assumed correct:** field-hint spacing initially diverged from this
+project's own established `margin-top:-10px;margin-bottom:14px;`
+convention (confirmed via `grep` across `accounting.html`/
+`admin_users.html`) -- reverted to match rather than introduce a third
+variant; and a duplicated `return;` statement left over from an edit,
+caught by reading the surrounding code after the change rather than
+trusting the diff alone.
+
+**Verified:** template parses; all 98 `getElementById` references in
+`devices.html` cross-checked against real IDs with zero mismatches;
+full render through Jinja with both extracted scripts passing Node
+syntax checks; project-wide compile and template checks pass; CSS
+brace-balanced.
+
+**Honestly scoped, not claimed complete:** this is one page of the
+roughly dozen the request names (Dashboard, Users, Groups, Active
+Directory, Policies, Command Sets, Accounting, Sessions, AAA Health,
+Network Operations, Security Center all still ahead), matching the
+request's own "do this incrementally" instruction -- a project this
+size isn't realistically finishable to this session's verification
+standard in one pass, and claiming otherwise would be worse than
+being direct about what's left.
+
+---
+
 ### Added — Security Center "Findings": fleet-wide, filterable, across every device
 
 `GET /api/security/findings` -- every finding from each device's own

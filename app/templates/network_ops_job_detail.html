@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Job Detail — AAA Management Platform{% endblock %}
 {% block breadcrumb %}Network Operations / Command Jobs / Detail{% endblock %}
 
@@ -45,6 +46,7 @@
 
 <div class="modal-backdrop" id="output-modal-backdrop" hidden>
   <div class="modal" style="max-width: min(92vw, 800px);max-height:88vh;overflow-y:auto;">
+    <button type="button" class="modal-close-btn" id="output-modal-close-x-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2 id="output-modal-title">Command Output</h2>
     <div id="output-modal-body" class="cell-mono content-sub" style="white-space:pre-wrap;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:12px;max-height:60vh;overflow-y:auto;"></div>
     <div class="modal-actions">
@@ -127,6 +129,9 @@
   }
 
   document.getElementById('output-modal-close-btn').addEventListener('click', () => {
+    document.getElementById('output-modal-backdrop').hidden = true;
+  });
+  document.getElementById('output-modal-close-x-btn').addEventListener('click', () => {
     document.getElementById('output-modal-backdrop').hidden = true;
   });
   document.getElementById('output-modal-backdrop').addEventListener('click', (e) => {

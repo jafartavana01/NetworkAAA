@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Sessions — AAA Management Platform{% endblock %}
 {% block breadcrumb %}TACACS+ / Sessions{% endblock %}
 
@@ -46,6 +47,7 @@
 
 <div class="modal-backdrop" id="session-modal-backdrop" hidden>
   <div class="modal" style="max-width: 600px;">
+    <button type="button" class="modal-close-btn" id="session-detail-close-x-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2>Session detail</h2>
     <div id="session-detail-body" class="mono"></div>
     <div class="modal-actions">
@@ -142,6 +144,9 @@
   }
 
   document.getElementById('session-detail-close-btn').addEventListener('click', () => {
+    document.getElementById('session-modal-backdrop').hidden = true;
+  });
+  document.getElementById('session-detail-close-x-btn').addEventListener('click', () => {
     document.getElementById('session-modal-backdrop').hidden = true;
   });
   document.getElementById('session-modal-backdrop').addEventListener('click', (e) => {

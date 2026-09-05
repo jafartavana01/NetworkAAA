@@ -133,3 +133,22 @@ class FleetFindingOut(BaseModel):
     recommendation: str
     fix_command: str
     correlation_id: str | None
+
+
+class AuditScheduleOut(BaseModel):
+    enabled: bool
+    ssh_username: str
+    has_password: bool
+    daily_run_time: str
+    management_ip_note: str | None
+    last_run_at: datetime | None
+    last_run_status: str | None
+    last_run_summary: str | None
+
+
+class AuditScheduleUpdateRequest(BaseModel):
+    enabled: bool
+    ssh_username: str = Field(min_length=1, max_length=128)
+    ssh_password: str | None = Field(default=None, max_length=256, description="Leave blank to keep the current password.")
+    daily_run_time: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$", description="24-hour HH:MM, server-local time.")
+    management_ip_note: str | None = Field(default=None, max_length=255)

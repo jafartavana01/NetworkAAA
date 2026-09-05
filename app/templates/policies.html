@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Policies — AAA Management Platform{% endblock %}
 {% block breadcrumb %}TACACS+ / Policies{% endblock %}
 
@@ -31,6 +32,7 @@
 
 <div class="modal-backdrop" id="policy-modal-backdrop" hidden>
   <div class="modal" style="max-width: min(95vw, 820px); max-height: 90vh; overflow-y: auto;">
+    <button type="button" class="modal-close-btn" id="policy-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2 id="policy-modal-title">Add policy</h2>
     <form id="policy-form">
       <input type="hidden" id="policy-id">
@@ -149,7 +151,7 @@
 
       <div class="modal-actions">
         <button type="button" class="btn-ghost" id="policy-cancel-btn">Cancel</button>
-        <button type="submit" class="btn-primary" style="width:auto;">Save policy</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save policy</button>
       </div>
     </form>
   </div>
@@ -157,6 +159,7 @@
 
 <div class="modal-backdrop" id="history-modal-backdrop" hidden>
   <div class="modal" style="max-width: 640px; max-height: 88vh; overflow-y: auto;">
+    <button type="button" class="modal-close-btn" id="history-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2 id="history-modal-title">Version History</h2>
     <div id="history-list"></div>
     <div class="modal-actions">
@@ -688,7 +691,14 @@
     document.getElementById('policy-count').textContent = policies.length + (policies.length === 1 ? ' policy' : ' policies');
 
     if (policies.length === 0) {
-      wrap.innerHTML = '<div class="empty-state">No policies yet. Add one to get started.</div>';
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-title">No authorization policies</div>
+          <p class="empty-state-desc">Policies decide who can access which devices and with what command set — nothing is authorized until at least one exists.</p>
+          <button type="button" class="btn-primary btn-small" id="empty-state-add-policy-btn">+ Add policy</button>
+        </div>
+      `;
+      document.getElementById('empty-state-add-policy-btn').addEventListener('click', () => openModal(null));
       return;
     }
 
@@ -917,6 +927,7 @@
 
   document.getElementById('add-policy-btn').addEventListener('click', () => openModal(null));
   document.getElementById('policy-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('policy-modal-close-btn').addEventListener('click', closeModal);
   document.getElementById('policy-modal-backdrop').addEventListener('click', (e) => {
     if (e.target.id === 'policy-modal-backdrop') closeModal();
   });
@@ -1104,6 +1115,9 @@
   }
 
   document.getElementById('history-close-btn').addEventListener('click', () => {
+    document.getElementById('history-modal-backdrop').hidden = true;
+  });
+  document.getElementById('history-modal-close-btn').addEventListener('click', () => {
     document.getElementById('history-modal-backdrop').hidden = true;
   });
   document.getElementById('history-modal-backdrop').addEventListener('click', (e) => {

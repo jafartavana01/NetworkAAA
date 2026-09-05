@@ -5,12 +5,11 @@ Security Center. A new, non-mandatory module -- same enable/disable
 mechanism as app.modules.network_ops_module (see that file's own
 docstring for the reasoning, identical here).
 
-Overview, the device list, per-device detail, and a fleet-wide
-findings view are now wired into navigation -- see
-app.web.routes_security's own docstring for why the rest of the
+Overview, the device list, per-device detail, the fleet-wide findings
+view, and scheduled-audit settings are now wired into navigation --
+see app.web.routes_security's own docstring for why the rest of the
 planned navigation (Interfaces, Compliance as its own page,
-Remediation, Security Builder, Audit History comparison) isn't
-stubbed in here as dead links.
+Remediation, Security Builder) isn't stubbed in here as dead links.
 """
 from __future__ import annotations
 
@@ -42,6 +41,7 @@ def _build_module() -> Module:
                     NavEntry(label="Overview", path="/security/overview"),
                     NavEntry(label="Devices", path="/security/devices"),
                     NavEntry(label="Findings", path="/security/findings"),
+                    NavEntry(label="Scheduled Audits", path="/security/schedule", requires_superadmin=True),
                 ],
             ),
         ],

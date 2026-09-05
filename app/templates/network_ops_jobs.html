@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Command Jobs — AAA Management Platform{% endblock %}
 {% block breadcrumb %}Network Operations / Command Jobs{% endblock %}
 
@@ -27,11 +28,15 @@
 
 <div class="modal-backdrop" id="job-modal-backdrop" hidden>
   <div class="modal" style="max-width: min(92vw, 720px);max-height:88vh;overflow-y:auto;">
+    <button type="button" class="modal-close-btn" id="job-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2>New Command Job</h2>
     <form id="job-form">
       <label class="field">
         <span class="field-label">Name</span>
-        <input type="text" id="job-name" required maxlength="128">
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('terminal', 14) }}</span>
+          <input type="text" id="job-name" required maxlength="128">
+        </div>
       </label>
       <label class="field">
         <span class="field-label">Description</span>
@@ -110,7 +115,7 @@
 
       <div class="modal-actions">
         <button type="button" class="btn-ghost" id="job-cancel-btn">Cancel</button>
-        <button type="submit" class="btn-primary" style="width:auto;">Execute Job</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Execute Job</button>
       </div>
     </form>
   </div>
@@ -216,6 +221,7 @@
   }
   document.getElementById('new-job-btn').addEventListener('click', openJobModal);
   document.getElementById('job-cancel-btn').addEventListener('click', () => { document.getElementById('job-modal-backdrop').hidden = true; });
+  document.getElementById('job-modal-close-btn').addEventListener('click', () => { document.getElementById('job-modal-backdrop').hidden = true; });
   document.getElementById('job-modal-backdrop').addEventListener('click', (e) => {
     if (e.target.id === 'job-modal-backdrop') document.getElementById('job-modal-backdrop').hidden = true;
   });

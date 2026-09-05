@@ -41,18 +41,24 @@ class SidebarItem:
 class SidebarSection:
     key: str
     label: str
+    icon: str = "circle"
     items: list[SidebarItem] = field(default_factory=list)
 
 
-# Display order and section labels. "dashboard" is handled separately
-# (rendered standalone, above every collapsible section) -- see
-# build_sidebar_sections()'s own docstring.
-_SECTION_ORDER: list[tuple[str, str]] = [
-    ("identity", "Identity & Access"),
-    ("tacacs", "TACACS+ / RADIUS"),
-    ("network_ops", "Network Operations"),
-    ("security", "Security Center"),
-    ("system", "System"),
+# Display order, section labels, and each section's own icon --
+# sections don't map 1:1 to any single existing module (e.g. Identity
+# & Access draws items from both core_module.py and tacacs_module.py),
+# so there's no single canonical icon to derive automatically the way
+# individual item icons could theoretically come from their owning
+# module; assigned directly here instead. "dashboard" is handled
+# separately (rendered standalone, above every collapsible section)
+# -- see build_sidebar_sections()'s own docstring.
+_SECTION_ORDER: list[tuple[str, str, str]] = [
+    ("identity", "Identity & Access", "users"),
+    ("tacacs", "TACACS+ / RADIUS", "shield"),
+    ("network_ops", "Network Operations", "terminal"),
+    ("security", "Security Center", "shield-check"),
+    ("system", "System", "settings"),
 ]
 
 # path -> (section_key, search keywords). One entry per real nav path
@@ -89,6 +95,7 @@ _SECTION_BY_PATH: dict[str, tuple[str, list[str]]] = {
     "/security/overview": ("security", ["security", "security center", "overview", "audit", "findings", "compliance"]),
     "/security/devices": ("security", ["security devices", "device security", "device audit", "audit device"]),
     "/security/findings": ("security", ["findings", "security findings", "vulnerabilities", "issues", "gaps"]),
+    "/security/schedule": ("security", ["schedule", "scheduled audit", "automatic audit", "daily audit", "service account"]),
 
     # ---- System ----
     "/tacacs/config": ("system", ["configuration", "config", "tac_plus", "compile"]),
@@ -122,7 +129,7 @@ def build_sidebar_sections(modules: list[Module], *, is_superadmin: bool) -> tup
     superadmin-only now.
     """
     sections: dict[str, SidebarSection] = {
-        key: SidebarSection(key=key, label=label) for key, label in _SECTION_ORDER
+        key: SidebarSection(key=key, label=label, icon=icon) for key, label, icon in _SECTION_ORDER
     }
     dashboard_item: SidebarItem | None = None
 
@@ -166,10 +173,10 @@ def build_sidebar_sections(modules: list[Module], *, is_superadmin: bool) -> tup
                     keywords=keywords, requires_superadmin=gated,
                 ))
 
-    ordered_sections = [sections[key] for key, _ in _SECTION_ORDER if sections[key].items]
+    ordered_sections = [sections[key] for key, _, _ in _SECTION_ORDER if sections[key].items]
     # Any fallback sections (not in _SECTION_ORDER) come last, in
     # whatever order they were first encountered.
-    ordered_keys = {key for key, _ in _SECTION_ORDER}
+    ordered_keys = {key for key, _, _ in _SECTION_ORDER}
     for key, section in sections.items():
         if key not in ordered_keys and section.items:
             ordered_sections.append(section)

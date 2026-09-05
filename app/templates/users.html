@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Users — AAA Management Platform{% endblock %}
 {% block breadcrumb %}TACACS+ / Users{% endblock %}
 
@@ -35,26 +36,34 @@
 
 <div class="modal-backdrop" id="user-modal-backdrop" hidden>
   <div class="modal">
+    <button type="button" class="modal-close-btn" id="user-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2 id="user-modal-title">Add user</h2>
     <form id="user-form">
       <input type="hidden" id="user-id">
 
-      <label class="field">
-        <span class="field-label">Authentication</span>
-        <select id="user-auth-source">
-          <option value="local">Local — password stored and verified by this platform</option>
-          <option value="ad">Active Directory — authenticates via tac_plus-ng's AD integration</option>
-        </select>
-      </label>
-      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;" id="user-auth-source-hint">Requires Active Directory to be configured and enabled under Platform → Active Directory to actually take effect in the generated configuration.</div>
+      <div class="form-section">
+        <div class="form-section-title">Authentication</div>
+        <label class="field">
+          <span class="field-label">Authentication</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('shield', 14) }}</span>
+            <select id="user-auth-source">
+              <option value="local">Local — password stored and verified by this platform</option>
+              <option value="ad">Active Directory — authenticates via tac_plus-ng's AD integration</option>
+            </select>
+          </div>
+        </label>
+        <div class="field-hint" style="margin-top:-10px;" id="user-auth-source-hint">Requires Active Directory to be configured and enabled under Platform → Active Directory to actually take effect in the generated configuration.</div>
+      </div>
 
-      <div class="panel panel-wide" id="user-ad-no-apply-note" style="margin:-4px 0 16px 0;border-color:var(--red);" hidden>
+      <div class="panel panel-wide" id="user-ad-no-apply-note" style="margin:16px 0 0 0;border-color:var(--red);" hidden>
         <div class="panel-body" style="font-size:12px;color:var(--red);">
           ⚠ Adding an Active Directory user here does not require applying configuration, and won't show a pending change — tac_plus-ng authenticates any real AD user through MAVIS whether or not they're listed on this page at all. This entry exists purely for your own tracking. What actually controls whether this person can log in is real Active Directory group membership, matched by a policy — see the Groups page.
         </div>
       </div>
 
-      <div id="user-ad-auth-fields" hidden>
+      <div class="form-section" id="user-ad-auth-fields" hidden>
+        <div class="form-section-title">Active Directory Lookup</div>
         <label class="field">
           <span class="field-label">Search AD users</span>
           <input type="text" id="user-ad-search-input" placeholder="Type at least 2 characters…" autocomplete="off">
@@ -68,75 +77,93 @@
         <div class="field-hint" style="margin-top:-10px;margin-bottom:8px;">Filled in automatically above, or type one directly if you already know it.</div>
         <button type="button" class="btn-secondary btn-small" id="user-check-ad-groups-btn" style="width:auto;margin-bottom:8px;">Check real AD group membership</button>
         <div class="field-hint" style="margin-top:-4px;margin-bottom:6px;">Shows exactly what group name(s) tac_plus-ng would see for this identity — useful when a login authenticates fine but is "denied by ACL": a policy's group condition must reference a name shown here, not a name only used inside this platform.</div>
-        <div id="user-ad-groups-result" style="margin-bottom:14px;"></div>
+        <div id="user-ad-groups-result"></div>
       </div>
 
-      <div class="field-row">
-        <label class="field">
-          <span class="field-label">Username</span>
-          <input type="text" id="user-username" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
-        </label>
-        <label class="field">
-          <span class="field-label">Enabled</span>
-          <div class="checkbox-field" style="padding-top:8px;">
-            <input type="checkbox" id="user-enabled" checked>
-            <span>Active in generated config</span>
-          </div>
-        </label>
-      </div>
-      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng user identifier. Filled in automatically when you select an AD user above; still editable if you want a different local identifier.</div>
-
-      <label class="field">
-        <span class="field-label">Full name</span>
-        <input type="text" id="user-fullname">
-      </label>
-
-      <label class="field">
-        <span class="field-label">Group</span>
-        <select id="user-group-select">
-          <option value="">— No group —</option>
-        </select>
-      </label>
-      <div class="field-hint" style="margin-top:-10px;margin-bottom:6px;" id="user-group-ad-hint" hidden>For an AD-authenticated user, this is a local, platform-only assignment — it does not drive tac_plus-ng's own authorization for them. A policy matching this user by group requires them to be a real member of a matching Active Directory group instead (see the Groups page for linking a local group to one).</div>
-      <button type="button" class="quickadd-toggle" id="user-group-quickadd-toggle">+ New group</button>
-      <div class="quickadd-panel" id="user-group-quickadd-panel" hidden>
+      <div class="form-section">
+        <div class="form-section-title">Identity</div>
         <div class="field-row">
           <label class="field">
-            <span class="field-label">New group name</span>
-            <input type="text" id="user-group-quickadd-name" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+            <span class="field-label">Username</span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('user', 14) }}</span>
+              <input type="text" id="user-username" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+            </div>
           </label>
           <label class="field">
-            <span class="field-label">Description</span>
-            <input type="text" id="user-group-quickadd-desc">
+            <span class="field-label">Enabled</span>
+            <div class="checkbox-field" style="padding-top:8px;">
+              <input type="checkbox" id="user-enabled" checked>
+              <span>Active in generated config</span>
+            </div>
           </label>
         </div>
-        <div id="user-group-quickadd-error" class="form-error" role="alert" hidden></div>
-        <div class="modal-actions" style="justify-content:flex-start;margin-top:0;">
-          <button type="button" class="btn-secondary btn-small" id="user-group-quickadd-create-btn" style="width:auto;">Create</button>
-          <button type="button" class="btn-ghost btn-small" id="user-group-quickadd-cancel-btn">Cancel</button>
+        <div class="field-hint" style="margin-top:-6px;">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng user identifier. Filled in automatically when you select an AD user above; still editable if you want a different local identifier.</div>
+
+        <label class="field">
+          <span class="field-label">Full name</span>
+          <input type="text" id="user-fullname">
+        </label>
+        <label class="field">
+          <span class="field-label">Description</span>
+          <input type="text" id="user-description">
+        </label>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Access</div>
+        <label class="field">
+          <span class="field-label">Group</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('users', 14) }}</span>
+            <select id="user-group-select">
+              <option value="">— No group —</option>
+            </select>
+          </div>
+        </label>
+        <div class="field-hint" style="margin-top:-6px;" id="user-group-ad-hint" hidden>For an AD-authenticated user, this is a local, platform-only assignment — it does not drive tac_plus-ng's own authorization for them. A policy matching this user by group requires them to be a real member of a matching Active Directory group instead (see the Groups page for linking a local group to one).</div>
+        <button type="button" class="quickadd-toggle" id="user-group-quickadd-toggle">+ New group</button>
+        <div class="quickadd-panel" id="user-group-quickadd-panel" hidden>
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">New group name</span>
+              <input type="text" id="user-group-quickadd-name" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+            </label>
+            <label class="field">
+              <span class="field-label">Description</span>
+              <input type="text" id="user-group-quickadd-desc">
+            </label>
+          </div>
+          <div id="user-group-quickadd-error" class="form-error" role="alert" hidden></div>
+          <div class="modal-actions" style="justify-content:flex-start;margin-top:0;">
+            <button type="button" class="btn-secondary btn-small" id="user-group-quickadd-create-btn" style="width:auto;">Create</button>
+            <button type="button" class="btn-ghost btn-small" id="user-group-quickadd-cancel-btn">Cancel</button>
+          </div>
         </div>
       </div>
 
-      <div id="user-local-auth-fields">
+      <div class="form-section" id="user-local-auth-fields">
+        <div class="form-section-title">Password</div>
         <label class="field">
           <span class="field-label">Password</span>
-          <input type="password" id="user-password" placeholder="" autocomplete="new-password">
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('lock', 14) }}</span>
+            <input type="password" id="user-password" placeholder="" autocomplete="new-password">
+          </div>
         </label>
-        <div class="field-hint" id="user-secret-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new users. Never displayed once saved — leave blank when editing to keep the current password.</div>
+        <div class="field-hint" id="user-secret-hint" style="margin-top:-6px;">Required for new users. Never displayed once saved — leave blank when editing to keep the current password.</div>
       </div>
 
-      <label class="field">
-        <span class="field-label">Description</span>
-        <input type="text" id="user-description">
-      </label>
-
-      <label class="field">
-        <span class="field-label">Trusted hosts (optional)</span>
-        <input type="text" id="user-allowed-source-ips" placeholder="e.g. 10.0.0.5, 192.168.1.0/24">
-      </label>
-      <div class="panel panel-wide" style="margin:-8px 0 18px 0;border-color:var(--red);">
-        <div class="panel-body" style="font-size:12px;color:var(--red);">
-          ⚠ NOT YET ENFORCED — this is saved for planning purposes only and does not currently restrict where this user can log in from. tac_plus-ng needs a confirmed, safe way to restrict one specific user (not their whole group) by source IP before this can be turned into a real login restriction; that hasn't been built yet. Leave blank unless you're preparing ahead of that.
+      <div class="form-section">
+        <div class="form-section-title">Restrictions</div>
+        <label class="field">
+          <span class="field-label">Trusted hosts (optional)</span>
+          <input type="text" id="user-allowed-source-ips" placeholder="e.g. 10.0.0.5, 192.168.1.0/24">
+        </label>
+        <div class="panel panel-wide" style="margin:10px 0 0 0;border-color:var(--red);">
+          <div class="panel-body" style="font-size:12px;color:var(--red);">
+            ⚠ NOT YET ENFORCED — this is saved for planning purposes only and does not currently restrict where this user can log in from. tac_plus-ng needs a confirmed, safe way to restrict one specific user (not their whole group) by source IP before this can be turned into a real login restriction; that hasn't been built yet. Leave blank unless you're preparing ahead of that.
+          </div>
         </div>
       </div>
 
@@ -144,7 +171,7 @@
 
       <div class="modal-actions">
         <button type="button" class="btn-ghost" id="user-cancel-btn">Cancel</button>
-        <button type="submit" class="btn-primary" style="width:auto;">Save user</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save user</button>
       </div>
     </form>
   </div>
@@ -175,7 +202,14 @@
     document.getElementById('user-count').textContent = tacacsUsers.length + (tacacsUsers.length === 1 ? ' user' : ' users');
 
     if (tacacsUsers.length === 0) {
-      wrap.innerHTML = '<div class="empty-state">No users yet. Add one to get started.</div>';
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-title">No TACACS+ users</div>
+          <p class="empty-state-desc">NetworkAAA doesn't have any TACACS+ users configured yet. Add one to start managing device login access for them.</p>
+          <button type="button" class="btn-primary btn-small" id="empty-state-add-user-btn">+ Add user</button>
+        </div>
+      `;
+      document.getElementById('empty-state-add-user-btn').addEventListener('click', () => openModal(null));
       return;
     }
 
@@ -383,6 +417,7 @@
 
   document.getElementById('add-user-btn').addEventListener('click', () => openModal(null));
   document.getElementById('user-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('user-modal-close-btn').addEventListener('click', closeModal);
   document.getElementById('user-modal-backdrop').addEventListener('click', (e) => {
     if (e.target.id === 'user-modal-backdrop') closeModal();
   });

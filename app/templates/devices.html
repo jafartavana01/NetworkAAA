@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Devices — AAA Management Platform{% endblock %}
 {% block breadcrumb %}TACACS+ / Devices{% endblock %}
 
@@ -29,8 +30,11 @@
     </div>
   </div>
 
-  <label class="checkbox-field field" style="margin-bottom:16px;">
-    <input type="checkbox" id="monitoring-enabled-toggle">
+  <label class="toggle-field field" style="margin-bottom:16px;">
+    <span class="toggle-switch">
+      <input type="checkbox" id="monitoring-enabled-toggle">
+      <span class="toggle-switch-slider"></span>
+    </span>
     <span>Enable monitoring mode</span>
   </label>
   <div class="field-hint" style="margin-bottom:16px;" id="monitoring-hint">Requires applying the configuration from the Config page to take effect.</div>
@@ -319,87 +323,109 @@
 
 <div class="modal-backdrop" id="device-modal-backdrop" hidden>
   <div class="modal">
+    <button type="button" class="modal-close-btn" id="device-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2 id="device-modal-title">Add device</h2>
     <form id="device-form">
       <input type="hidden" id="device-id">
-      <div class="field-row">
-        <label class="field">
-          <span class="field-label">Name</span>
-          <input type="text" id="device-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
-        </label>
-        <label class="field">
-          <span class="field-label">Enabled</span>
-          <div class="checkbox-field" style="padding-top:8px;">
-            <input type="checkbox" id="device-enabled" checked>
-            <span>Active in generated config</span>
-          </div>
-        </label>
-      </div>
-      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng host identifier.</div>
 
-      <div class="field-row">
-        <label class="field">
-          <span class="field-label">IPv4 address / CIDR</span>
-          <input type="text" id="device-ip" required placeholder="10.10.10.10 or 10.10.10.0/24">
-        </label>
-        <label class="field">
-          <span class="field-label">IPv6 address / CIDR (optional)</span>
-          <input type="text" id="device-ipv6" placeholder="2001:db8::1">
-        </label>
-      </div>
-
-      <div class="field-row">
-        <label class="field">
-          <span class="field-label">Vendor</span>
-          <input type="text" id="device-vendor" placeholder="Cisco">
-        </label>
-        <label class="field">
-          <span class="field-label">Platform</span>
-          <input type="text" id="device-platform" placeholder="IOS-XE">
-        </label>
-      </div>
-
-      <label class="field">
-        <span class="field-label">Device group</span>
-        <select id="device-group-select">
-          <option value="">— No group —</option>
-        </select>
-      </label>
-      <button type="button" class="quickadd-toggle" id="device-group-quickadd-toggle">+ New device group</button>
-      <div class="quickadd-panel" id="device-group-quickadd-panel" hidden>
+      <div class="form-section">
+        <div class="form-section-title">Device Identity</div>
         <div class="field-row">
           <label class="field">
-            <span class="field-label">New device group name</span>
-            <input type="text" id="device-group-quickadd-name" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+            <span class="field-label">Name</span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+              <input type="text" id="device-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+            </div>
           </label>
           <label class="field">
-            <span class="field-label">Description</span>
-            <input type="text" id="device-group-quickadd-desc">
+            <span class="field-label">Enabled</span>
+            <div class="checkbox-field" style="padding-top:8px;">
+              <input type="checkbox" id="device-enabled" checked>
+              <span>Active in generated config</span>
+            </div>
           </label>
         </div>
-        <div id="device-group-quickadd-error" class="form-error" role="alert" hidden></div>
-        <div class="modal-actions" style="justify-content:flex-start;margin-top:0;">
-          <button type="button" class="btn-secondary btn-small" id="device-group-quickadd-create-btn" style="width:auto;">Create</button>
-          <button type="button" class="btn-ghost btn-small" id="device-group-quickadd-cancel-btn">Cancel</button>
+        <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng host identifier.</div>
+        <label class="field">
+          <span class="field-label">Description</span>
+          <input type="text" id="device-description">
+        </label>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Network</div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">IPv4 address / CIDR</span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('network', 14) }}</span>
+              <input type="text" id="device-ip" required placeholder="10.10.10.10 or 10.10.10.0/24">
+            </div>
+          </label>
+          <label class="field">
+            <span class="field-label">IPv6 address / CIDR (optional)</span>
+            <input type="text" id="device-ipv6" placeholder="2001:db8::1">
+          </label>
         </div>
       </div>
 
-      <label class="field">
-        <span class="field-label">Shared secret <span class="badge badge-on cell-mono" id="secret-configured-badge" hidden style="margin-left:6px;"></span></span>
-        <input type="password" id="device-secret" placeholder="" autocomplete="new-password">
-      </label>
-      <div class="field-hint" id="secret-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new devices. Never displayed once saved — leave blank when editing to keep the current secret.</div>
+      <div class="form-section">
+        <div class="form-section-title">Platform</div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Vendor</span>
+            <input type="text" id="device-vendor" placeholder="Cisco">
+          </label>
+          <label class="field">
+            <span class="field-label">Platform</span>
+            <input type="text" id="device-platform" placeholder="IOS-XE">
+          </label>
+        </div>
 
-      <label class="field">
-        <span class="field-label">Description</span>
-        <input type="text" id="device-description">
-      </label>
+        <label class="field">
+          <span class="field-label">Device group</span>
+          <select id="device-group-select">
+            <option value="">— No group —</option>
+          </select>
+        </label>
+        <button type="button" class="quickadd-toggle" id="device-group-quickadd-toggle">+ New device group</button>
+        <div class="quickadd-panel" id="device-group-quickadd-panel" hidden>
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">New device group name</span>
+              <input type="text" id="device-group-quickadd-name" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+            </label>
+            <label class="field">
+              <span class="field-label">Description</span>
+              <input type="text" id="device-group-quickadd-desc">
+            </label>
+          </div>
+          <div id="device-group-quickadd-error" class="form-error" role="alert" hidden></div>
+          <div class="modal-actions" style="justify-content:flex-start;margin-top:0;">
+            <button type="button" class="btn-secondary btn-small" id="device-group-quickadd-create-btn" style="width:auto;">Create</button>
+            <button type="button" class="btn-ghost btn-small" id="device-group-quickadd-cancel-btn">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">AAA</div>
+        <label class="field">
+          <span class="field-label">Shared secret <span class="badge badge-on cell-mono" id="secret-configured-badge" hidden style="margin-left:6px;"></span></span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('lock', 14) }}</span>
+            <input type="password" id="device-secret" placeholder="" autocomplete="new-password">
+          </div>
+        </label>
+        <div class="field-hint" id="secret-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new devices. Never displayed once saved — leave blank when editing to keep the current secret.</div>
+      </div>
 
       <div id="device-form-error" class="form-error" role="alert" hidden></div>
 
       <div class="modal-actions">
         <button type="button" class="btn-ghost" id="device-cancel-btn">Cancel</button>
-        <button type="submit" class="btn-primary" style="width:auto;">Save device</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save device</button>
       </div>
     </form>
   </div>
@@ -408,6 +434,11 @@
 
 {% block view_scripts %}
 <script>
+  // Pre-rendered server-side via Jinja (see the top-of-file macro
+  // import) since this markup is built client-side, per table row.
+  const ICON_DEVICE_ROW = '{{ icons.icon("server", 15) }}';
+  const ICON_GRANTS_EMPTY = '{{ icons.icon("shield", 22) }}';
+
   let devices = [];
   let deviceGroups = [];
 
@@ -431,13 +462,20 @@
     document.getElementById('device-count').textContent = devices.length + (devices.length === 1 ? ' device' : ' devices');
 
     if (devices.length === 0) {
-      wrap.innerHTML = '<div class="empty-state">No devices yet. Add one to get started.</div>';
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-title">No network devices</div>
+          <p class="empty-state-desc">NetworkAAA doesn't have any devices configured yet. Add one to start managing TACACS+ access for it.</p>
+          <button type="button" class="btn-primary btn-small" id="empty-state-add-device-btn">+ Add device</button>
+        </div>
+      `;
+      document.getElementById('empty-state-add-device-btn').addEventListener('click', () => openModal(null));
       return;
     }
 
     const rows = devices.map(d => `
       <tr data-device-row="${d.id}">
-        <td>${escapeHtml(d.name)}</td>
+        <td style="display:flex;align-items:center;gap:8px;">${ICON_DEVICE_ROW}${escapeHtml(d.name)}</td>
         <td class="cell-mono">${escapeHtml(d.ip_address)}${d.ipv6_address ? '<br>' + escapeHtml(d.ipv6_address) : ''}</td>
         <td>${escapeHtml(d.vendor || '—')}</td>
         <td>${escapeHtml(d.device_group_name || '—')}</td>
@@ -530,6 +568,7 @@
 
   document.getElementById('add-device-btn').addEventListener('click', () => openModal(null));
   document.getElementById('device-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('device-modal-close-btn').addEventListener('click', closeModal);
   document.getElementById('device-modal-backdrop').addEventListener('click', (e) => {
     if (e.target.id === 'device-modal-backdrop') closeModal();
   });
@@ -600,7 +639,17 @@
     document.getElementById('grant-count').textContent = accessGrants.length + (accessGrants.length === 1 ? ' grant' : ' grants');
 
     if (accessGrants.length === 0) {
-      wrap.innerHTML = '<div class="empty-state">No access grants — Policies alone decide access.</div>';
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon-circle">${ICON_GRANTS_EMPTY}</div>
+          <div class="empty-state-title">No access grants</div>
+          <p class="empty-state-desc">Access is currently managed by policies only. Add an access grant to create an explicit user-group-to-device mapping alongside them.</p>
+          <button type="button" class="btn-primary btn-small" id="empty-state-add-grant-btn">+ Add access grant</button>
+        </div>
+      `;
+      document.getElementById('empty-state-add-grant-btn').addEventListener('click', () => {
+        document.getElementById('add-grant-btn').click();
+      });
       return;
     }
 

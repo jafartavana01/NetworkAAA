@@ -15,22 +15,27 @@ auditing are deliberately not combined into one call yet.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from .. import security
 from ..database import get_db
 from ..models.admin import AdminUser
 from ..models.audit_run import AuditComplianceResult, AuditDomainScore, AuditFinding, AuditRun
+from ..models.audit_schedule_settings import AuditScheduleSettings
 from ..models.device import NetworkDevice
 from ..schemas.security_audit import (
-    AuditCompareOut, AuditLiveRequest, AuditRunDetailOut, AuditRunSummaryOut,
-    AuditUploadRequest, DomainScoreOut, FindingOut, FleetFindingOut, SecurityDeviceOut, SecurityOverviewOut,
+    AuditCompareOut, AuditLiveRequest, AuditRunDetailOut, AuditRunSummaryOut, AuditScheduleOut,
+    AuditScheduleUpdateRequest, AuditUploadRequest, DomainScoreOut, FindingOut, FleetFindingOut,
+    SecurityDeviceOut, SecurityOverviewOut,
 )
 from ..security_center.engine.finding import Severity, Status
 from ..security_center.engine.orchestrator import run_device_audit
+from ..services.scheduled_audit import run_scheduled_audit
 from ..services.security_audit_persistence import hash_config_text, persist_audit_result
-from .deps import require_permission, verify_csrf
+from .deps import get_current_superadmin, require_permission, verify_csrf
 
 router = APIRouter(prefix="/api/security", tags=["security-center"])
 
@@ -432,4 +437,84 @@ def security_overview(
         low_findings=severity_counts[Severity.LOW.value],
         manual_review_findings=manual_count,
         recent_audits=[_run_to_summary(r) for r in recent],
+    )
+
+
+def _get_or_create_schedule_settings(db: Session) -> AuditScheduleSettings:
+    settings = db.query(AuditScheduleSettings).first()
+    if settings is None:
+        settings = AuditScheduleSettings()
+        db.add(settings)
+        db.commit()
+        db.refresh(settings)
+    return settings
+
+
+@router.get("/schedule", response_model=AuditScheduleOut)
+def get_schedule_settings(
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(get_current_superadmin),
+):
+    """
+    Superadmin-only, same as app.api.routes_ad_settings' own AD
+    service-account endpoints -- this stores a shared SSH credential
+    capable of reaching every device unattended, the same risk profile
+    as an AD bind account, so it gets the same gating.
+    """
+    s = _get_or_create_schedule_settings(db)
+    return AuditScheduleOut(
+        enabled=s.enabled, ssh_username=s.ssh_username, has_password=bool(s.ssh_password_encrypted),
+        daily_run_time=s.daily_run_time, management_ip_note=s.management_ip_note,
+        last_run_at=s.last_run_at, last_run_status=s.last_run_status, last_run_summary=s.last_run_summary,
+    )
+
+
+@router.put("/schedule", response_model=AuditScheduleOut, dependencies=[Depends(verify_csrf)])
+def update_schedule_settings(
+    payload: AuditScheduleUpdateRequest,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(get_current_superadmin),
+):
+    s = _get_or_create_schedule_settings(db)
+    s.enabled = payload.enabled
+    s.ssh_username = payload.ssh_username
+    if payload.ssh_password:
+        s.ssh_password_encrypted = security.encrypt_secret(payload.ssh_password)
+    s.daily_run_time = payload.daily_run_time
+    s.management_ip_note = payload.management_ip_note
+    db.commit()
+    db.refresh(s)
+    return AuditScheduleOut(
+        enabled=s.enabled, ssh_username=s.ssh_username, has_password=bool(s.ssh_password_encrypted),
+        daily_run_time=s.daily_run_time, management_ip_note=s.management_ip_note,
+        last_run_at=s.last_run_at, last_run_status=s.last_run_status, last_run_summary=s.last_run_summary,
+    )
+
+
+@router.post("/schedule/run-now", response_model=AuditScheduleOut, dependencies=[Depends(verify_csrf)])
+def run_schedule_now(
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(get_current_superadmin),
+):
+    """
+    Runs the exact same fleet-wide audit the daily scheduler itself
+    runs (app.services.scheduled_audit.run_scheduled_audit), on
+    demand -- primarily so a superadmin can verify the stored
+    credential actually works against the real fleet without waiting
+    for the next scheduled time.
+    """
+    s = _get_or_create_schedule_settings(db)
+    if not s.ssh_username or not s.ssh_password_encrypted:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Set a username and password first.")
+
+    result = run_scheduled_audit(db, ssh_username=s.ssh_username, ssh_password_encrypted=s.ssh_password_encrypted)
+    s.last_run_at = datetime.now(timezone.utc)
+    s.last_run_status = result.status
+    s.last_run_summary = result.summary
+    db.commit()
+    db.refresh(s)
+    return AuditScheduleOut(
+        enabled=s.enabled, ssh_username=s.ssh_username, has_password=bool(s.ssh_password_encrypted),
+        daily_run_time=s.daily_run_time, management_ip_note=s.management_ip_note,
+        last_run_at=s.last_run_at, last_run_status=s.last_run_status, last_run_summary=s.last_run_summary,
     )

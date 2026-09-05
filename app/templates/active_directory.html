@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Active Directory — AAA Management Platform{% endblock %}
 {% block breadcrumb %}Platform / Active Directory{% endblock %}
 
@@ -15,6 +16,16 @@
     </div>
   </div>
 
+  <div class="panel panel-wide" id="ad-status-summary" style="margin-bottom:20px;">
+    <div class="panel-head"><span class="rail rail-dim" id="ad-status-rail"></span>Connection Status</div>
+    <div class="panel-body mono" id="ad-status-body">
+      <div class="readout"><span class="readout-k">status</span><span class="readout-v" id="ad-status-text">Not configured</span></div>
+      <div class="readout"><span class="readout-k">directory</span><span class="readout-v" id="ad-status-domain">—</span></div>
+      <div class="readout"><span class="readout-k">protocol</span><span class="readout-v" id="ad-status-protocol">—</span></div>
+      <div class="readout"><span class="readout-k">server</span><span class="readout-v" id="ad-status-server">—</span></div>
+    </div>
+  </div>
+
   <form id="ad-form">
     <label class="checkbox-field field" style="margin-bottom:16px;">
       <input type="checkbox" id="ad-enabled">
@@ -23,19 +34,28 @@
 
     <label class="field">
       <span class="field-label">Domain name</span>
-      <input type="text" id="ad-domain" placeholder="corp.example.com">
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('network', 14) }}</span>
+        <input type="text" id="ad-domain" placeholder="corp.example.com">
+      </div>
     </label>
     <div class="field-hint" style="margin-bottom:14px;">Also used to fill in the server address and search base below — override either one in Advanced if your environment needs something different.</div>
 
     <label class="field">
       <span class="field-label">Username</span>
-      <input type="text" id="ad-username" placeholder="svc_tacacs">
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('user', 14) }}</span>
+        <input type="text" id="ad-username" placeholder="svc_tacacs">
+      </div>
     </label>
     <div class="field-hint" style="margin-bottom:14px;">A service account with permission to read users and groups — just the name is fine (e.g. "svc_tacacs"); the domain above is appended automatically. A full UPN (name@domain) also works if you type one directly.</div>
 
     <label class="field">
       <span class="field-label">Password</span>
-      <input type="password" id="ad-bind-password" placeholder="" autocomplete="new-password">
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('lock', 14) }}</span>
+        <input type="password" id="ad-bind-password" placeholder="" autocomplete="new-password">
+      </div>
     </label>
     <div class="field-hint" style="margin-bottom:18px;" id="ad-password-hint">Leave blank to keep the current password.</div>
 
@@ -94,7 +114,7 @@
 
     <div class="modal-actions" style="justify-content:flex-start;">
       <button type="button" class="btn-secondary" id="ad-test-btn" style="width:auto;">Test Connection</button>
-      <button type="submit" class="btn-primary" style="width:auto;">Save Settings</button>
+      <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save Settings</button>
     </div>
   </form>
 
@@ -190,6 +210,32 @@
     document.getElementById('ad-password-hint').textContent = s.has_password
       ? 'A password is already saved. Leave blank to keep it.'
       : 'No password saved yet.';
+
+    // Connection status summary at the top of the page -- built
+    // entirely from data this same endpoint already returns, no new
+    // backend call. "status" itself starts honest (Not configured /
+    // Configured, not yet tested) and is only upgraded to a live
+    // Connected/Failed reading if runHealthCheck() actually runs --
+    // see that function's own comment on why it's auto-triggered
+    // below only when enabled, never faked here.
+    document.getElementById('ad-status-domain').textContent = searchBaseToDomain(s.search_base) || '—';
+    document.getElementById('ad-status-protocol').textContent = s.use_starttls ? 'LDAP + StartTLS' : (s.use_tls ? 'LDAPS' : 'LDAP (unencrypted)');
+    document.getElementById('ad-status-server').textContent = s.host ? `${s.host}:${s.port || (s.use_tls ? 663 : 389)}` : '—';
+    if (!s.enabled) {
+      document.getElementById('ad-status-text').textContent = 'Not configured';
+      document.getElementById('ad-status-rail').className = 'rail rail-dim';
+    } else {
+      document.getElementById('ad-status-text').textContent = 'Configured — testing…';
+      document.getElementById('ad-status-rail').className = 'rail rail-amber';
+      // Auto-run the SAME health check the "Run health check" button
+      // below triggers manually -- only when AD is actually enabled,
+      // so a never-configured environment doesn't land on this page
+      // to an immediate, alarming "failed" reading for settings
+      // nobody has filled in yet. Fire-and-forget: runHealthCheck()
+      // itself updates both this summary and the panel further down
+      // once it resolves.
+      runHealthCheck();
+    }
 
     // Best-effort reconstruction of the simple fields from what's
     // actually stored, so returning to this page shows a coherent
@@ -289,12 +335,19 @@
     if (!res.ok) {
       body.innerHTML = '<span style="color:var(--red);">Could not run the health check.</span> <button type="button" class="btn-secondary btn-small" id="ad-health-retry-btn" style="width:auto;">Run health check</button>';
       document.getElementById('ad-health-retry-btn').addEventListener('click', runHealthCheck);
+      document.getElementById('ad-status-text').textContent = 'Health check failed';
+      document.getElementById('ad-status-rail').className = 'rail rail-red';
       return;
     }
     const result = await res.json();
     body.innerHTML = `<span style="color:${result.success ? 'var(--signal)' : 'var(--red)'};">${result.success ? '✓' : '✗'}</span> ${escapeHtml(result.message)}
       <div style="margin-top:10px;"><button type="button" class="btn-secondary btn-small" id="ad-health-retry-btn" style="width:auto;">Run again</button></div>`;
     document.getElementById('ad-health-retry-btn').addEventListener('click', runHealthCheck);
+    // Same result also drives the top-of-page summary -- one source
+    // of truth for "current known status," whether this ran from the
+    // manual button below or the automatic check on page load.
+    document.getElementById('ad-status-text').textContent = result.success ? 'Connected' : 'Connection failed';
+    document.getElementById('ad-status-rail').className = `rail ${result.success ? 'rail-signal' : 'rail-red'}`;
   }
   document.getElementById('ad-health-check-btn').addEventListener('click', runHealthCheck);
 

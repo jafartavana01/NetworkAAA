@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Audits — AAA Management Platform{% endblock %}
 {% block breadcrumb %}Network Operations / Audits{% endblock %}
 
@@ -28,12 +29,16 @@
 
 <div class="modal-backdrop" id="audit-modal-backdrop" hidden>
   <div class="modal" style="max-width: min(92vw, 560px);max-height:88vh;overflow-y:auto;">
+    <button type="button" class="modal-close-btn" id="audit-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2 id="audit-modal-title">New Audit</h2>
     <form id="audit-form">
       <input type="hidden" id="audit-id">
       <label class="field">
         <span class="field-label">Name</span>
-        <input type="text" id="audit-name" required maxlength="128">
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('list-checks', 14) }}</span>
+          <input type="text" id="audit-name" required maxlength="128">
+        </div>
       </label>
       <label class="field">
         <span class="field-label">Description</span>
@@ -46,7 +51,7 @@
 
       <div class="modal-actions">
         <button type="button" class="btn-ghost" id="audit-cancel-btn">Cancel</button>
-        <button type="submit" class="btn-primary" style="width:auto;">Save Audit</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save Audit</button>
       </div>
     </form>
   </div>
@@ -140,6 +145,7 @@
 
   document.getElementById('add-audit-btn').addEventListener('click', () => openModal(null));
   document.getElementById('audit-cancel-btn').addEventListener('click', () => { document.getElementById('audit-modal-backdrop').hidden = true; });
+  document.getElementById('audit-modal-close-btn').addEventListener('click', () => { document.getElementById('audit-modal-backdrop').hidden = true; });
   document.getElementById('audit-modal-backdrop').addEventListener('click', (e) => {
     if (e.target.id === 'audit-modal-backdrop') document.getElementById('audit-modal-backdrop').hidden = true;
   });

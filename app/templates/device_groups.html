@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Device Groups — AAA Management Platform{% endblock %}
 {% block breadcrumb %}TACACS+ / Device Groups{% endblock %}
 
@@ -21,12 +22,16 @@
 
 <div class="modal-backdrop" id="device-group-modal-backdrop" hidden>
   <div class="modal">
+    <button type="button" class="modal-close-btn" id="device-group-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2 id="device-group-modal-title">Add group</h2>
     <form id="device-group-form">
       <input type="hidden" id="device-group-id">
       <label class="field">
         <span class="field-label">Name</span>
-        <input type="text" id="device-group-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+          <input type="text" id="device-group-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        </div>
       </label>
       <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Letters, digits, hyphens, underscores only — kept consistent with other identifiers, though this name isn't emitted into the tac_plus-ng config.</div>
 
@@ -39,7 +44,7 @@
 
       <div class="modal-actions">
         <button type="button" class="btn-ghost" id="device-group-cancel-btn">Cancel</button>
-        <button type="submit" class="btn-primary" style="width:auto;">Save group</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save group</button>
       </div>
     </form>
   </div>
@@ -47,6 +52,7 @@
 
 <div class="modal-backdrop" id="device-members-modal-backdrop" hidden>
   <div class="modal" style="max-width: 560px;">
+    <button type="button" class="modal-close-btn" id="device-members-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2 id="device-members-modal-title">Members</h2>
     <p class="content-sub" style="margin-top:-8px;">Membership itself has no effect on the deployed configuration by itself — it only matters once a Policy condition or Device Access Grant actually references this group. Adding or removing a member here won't show up as a pending change to apply unless something does.</p>
 
@@ -149,6 +155,7 @@
 
   document.getElementById('add-device-group-btn').addEventListener('click', () => openModal(null));
   document.getElementById('device-group-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('device-group-modal-close-btn').addEventListener('click', closeModal);
   document.getElementById('device-group-modal-backdrop').addEventListener('click', (e) => {
     if (e.target.id === 'device-group-modal-backdrop') closeModal();
   });
@@ -284,6 +291,9 @@
 
   document.getElementById('device-members-add-btn').addEventListener('click', addDeviceMember);
   document.getElementById('device-members-close-btn').addEventListener('click', () => {
+    document.getElementById('device-members-modal-backdrop').hidden = true;
+  });
+  document.getElementById('device-members-modal-close-btn').addEventListener('click', () => {
     document.getElementById('device-members-modal-backdrop').hidden = true;
   });
   document.getElementById('device-members-modal-backdrop').addEventListener('click', (e) => {

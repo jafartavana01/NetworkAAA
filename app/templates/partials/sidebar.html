@@ -19,6 +19,7 @@
   behavior (opening one section closes every other), restoring which
   single section was last open from localStorage.
 #}
+{% import "partials/icons.html" as icons %}
 <aside class="sidebar">
   <div class="brand brand-compact">
     <span class="brand-mark" aria-hidden="true"></span>
@@ -26,7 +27,7 @@
   </div>
 
   <div class="nav-search-wrap">
-    <span class="nav-search-icon" aria-hidden="true">⌕</span>
+    <span class="nav-search-icon" aria-hidden="true">{{ icons.icon('search', 14) }}</span>
     <input type="text" class="nav-search-input" id="nav-search-input" placeholder="Search menu…" aria-label="Search navigation menu" autocomplete="off">
     <kbd class="nav-search-kbd">Ctrl K</kbd>
   </div>
@@ -34,7 +35,7 @@
   <nav class="nav" id="sidebar-nav">
     {% if dashboard_item %}
     <a class="nav-item {{ 'active' if request.url.path == dashboard_item.path else '' }}" href="{{ dashboard_item.path }}">
-      <span class="nav-dot"></span>{{ dashboard_item.label }}
+      {{ icons.icon(dashboard_item.icon or 'layout-dashboard', 16) }}{{ dashboard_item.label }}
     </a>
     {% endif %}
 
@@ -42,8 +43,8 @@
     {% set section_has_active = section.items | selectattr('path', 'equalto', request.url.path) | list | length > 0 %}
     <div class="nav-section {{ '' if section_has_active else 'is-collapsed' }} {{ 'has-active' if section_has_active else '' }}" data-section-key="{{ section.key }}">
       <button type="button" class="nav-section-toggle" aria-expanded="{{ 'true' if section_has_active else 'false' }}">
-        <span>{{ section.label }}</span>
-        <span class="nav-section-chevron" aria-hidden="true">▾</span>
+        <span class="nav-section-toggle-label">{{ icons.icon(section.icon, 15) }}<span>{{ section.label }}</span></span>
+        <span class="nav-section-chevron" aria-hidden="true">{{ icons.icon('chevron-down', 13) }}</span>
       </button>
       <div class="nav-section-items">
         {% for item in section.items %}
@@ -67,7 +68,7 @@
 <div class="cmdk-backdrop" id="cmdk-backdrop" hidden>
   <div class="cmdk-panel">
     <div class="cmdk-input-row">
-      <span class="nav-search-icon" aria-hidden="true">⌕</span>
+      <span class="nav-search-icon">{{ icons.icon('search', 15) }}</span>
       <input type="text" class="cmdk-input" id="cmdk-input" placeholder="Search pages…" aria-label="Search pages" autocomplete="off">
     </div>
     <div class="cmdk-results" id="cmdk-results"></div>

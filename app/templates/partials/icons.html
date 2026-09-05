@@ -1,0 +1,90 @@
+{#
+  partials/icons.html
+  =====================
+  Shared inline-SVG icon set, keyed by the same Lucide-style names
+  already assigned to every NavEntry.icon (layout-dashboard, shield,
+  server, terminal, settings, ...) -- that data was already threaded
+  through Module/NavEntry/SidebarItem before this file existed; this
+  is what finally renders it, no data-layer change needed.
+
+  Hand-authored SVG primitives (circle/rect/line/polyline/path with
+  simple commands) rather than copied library path data, since this
+  environment has no network access to fetch an actual icon library
+  and no build pipeline to pull one in as a dependency -- consistent
+  with this project's own "no unnecessary dependencies" constraint.
+  Follows Lucide's own visual conventions (24x24 viewBox, stroke-based,
+  round caps/joins, currentColor) closely enough to read as one
+  consistent set, without being a copy of its exact path data.
+
+  Usage: {% import "partials/icons.html" as icons %} then
+  {{ icons.icon('shield', 18) }} -- size defaults to 16.
+#}
+{% macro icon(name, size=16) %}<svg class="ui-icon" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{{ _icon_body(name) }}</svg>{% endmacro %}
+
+{% macro _icon_body(name) %}
+{%- if name == "layout-dashboard" -%}
+<rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect>
+{%- elif name == "shield" -%}
+<path d="M12 2 L20 5 V11 C20 16 16.5 20 12 22 C7.5 20 4 16 4 11 V5 Z"></path>
+{%- elif name == "shield-check" -%}
+<path d="M12 2 L20 5 V11 C20 16 16.5 20 12 22 C7.5 20 4 16 4 11 V5 Z"></path><polyline points="9,12 11,14 15,10"></polyline>
+{%- elif name == "server" -%}
+<rect x="3" y="4" width="18" height="7" rx="1"></rect><rect x="3" y="13" width="18" height="7" rx="1"></rect><line x1="7" y1="7.5" x2="7.01" y2="7.5"></line><line x1="7" y1="16.5" x2="7.01" y2="16.5"></line>
+{%- elif name == "terminal" -%}
+<rect x="3" y="4" width="18" height="16" rx="2"></rect><polyline points="7,9 11,12.5 7,16"></polyline><line x1="12" y1="16" x2="17" y2="16"></line>
+{%- elif name == "settings" -%}
+<circle cx="12" cy="12" r="3"></circle><path d="M19.4 13a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.9 2.9l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V19a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.9-2.9l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H4a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.9-2.9l.1.1a1.7 1.7 0 0 0 1.9.3H10a1.7 1.7 0 0 0 1-1.5V4a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.9 2.9l-.1.1a1.7 1.7 0 0 0-.3 1.9V10a1.7 1.7 0 0 0 1.5 1H20a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.6 1Z"></path>
+{%- elif name == "users" -%}
+<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.9"></path><path d="M16 3.1a4 4 0 0 1 0 7.8"></path>
+{%- elif name == "user" -%}
+<circle cx="12" cy="8" r="4"></circle><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"></path>
+{%- elif name == "database" -%}
+<ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"></path><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path>
+{%- elif name == "network" -%}
+<circle cx="12" cy="4" r="2"></circle><circle cx="5" cy="18" r="2"></circle><circle cx="19" cy="18" r="2"></circle><path d="M12 6v5"></path><path d="M12 11 L5 16"></path><path d="M12 11 L19 16"></path>
+{%- elif name == "key" -%}
+<circle cx="7.5" cy="15.5" r="4.5"></circle><path d="M10.8 12.2 L20 3"></path><path d="M16 7 L19 10"></path><path d="M13.5 9.5 L16 12"></path>
+{%- elif name == "search" -%}
+<circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line>
+{%- elif name == "plus" -%}
+<line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
+{%- elif name == "pencil" -%}
+<path d="M17 3a2.8 2.8 0 0 1 4 4L7 21l-4 1 1-4Z"></path>
+{%- elif name == "trash" -%}
+<polyline points="3,6 5,6 21,6"></polyline><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+{%- elif name == "chevron-down" -%}
+<polyline points="6,9 12,15 18,9"></polyline>
+{%- elif name == "check" -%}
+<polyline points="20,6 9,17 4,12"></polyline>
+{%- elif name == "x" -%}
+<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>
+{%- elif name == "alert-triangle" -%}
+<path d="M12 3 L22 20 H2 Z"></path><line x1="12" y1="10" x2="12" y2="14"></line><line x1="12" y1="17" x2="12.01" y2="17"></line>
+{%- elif name == "info" -%}
+<circle cx="12" cy="12" r="9"></circle><line x1="12" y1="11" x2="12" y2="16"></line><line x1="12" y1="7.5" x2="12.01" y2="7.5"></line>
+{%- elif name == "eye" -%}
+<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"></path><circle cx="12" cy="12" r="3"></circle>
+{%- elif name == "eye-off" -%}
+<path d="M3 3l18 18"></path><path d="M10.6 5.1A9.9 9.9 0 0 1 12 5c6.5 0 10 7 10 7a17.3 17.3 0 0 1-3.2 4.2M6.6 6.6C4 8.3 2 12 2 12s3.5 7 10 7a9.9 9.9 0 0 0 4.4-1"></path><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"></path>
+{%- elif name == "lock" -%}
+<rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path>
+{%- elif name == "activity" -%}
+<polyline points="2,12 7,12 9,18 15,6 17,12 22,12"></polyline>
+{%- elif name == "folder" -%}
+<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"></path>
+{%- elif name == "clipboard-list" -%}
+<rect x="6" y="3" width="12" height="18" rx="2"></rect><rect x="9" y="1" width="6" height="4" rx="1"></rect><line x1="9" y1="10" x2="15" y2="10"></line><line x1="9" y1="14" x2="15" y2="14"></line><line x1="9" y1="18" x2="12" y2="18"></line>
+{%- elif name == "toggle-right" -%}
+<rect x="1" y="6" width="22" height="12" rx="6"></rect><circle cx="16" cy="12" r="4"></circle>
+{%- elif name == "building" -%}
+<rect x="4" y="2" width="16" height="20" rx="1"></rect><line x1="8" y1="6" x2="8.01" y2="6"></line><line x1="16" y1="6" x2="16.01" y2="6"></line><line x1="8" y1="10" x2="8.01" y2="10"></line><line x1="16" y1="10" x2="16.01" y2="10"></line><line x1="8" y1="14" x2="8.01" y2="14"></line><line x1="16" y1="14" x2="16.01" y2="14"></line><line x1="10" y1="22" x2="10" y2="18"></line><line x1="14" y1="22" x2="14" y2="18"></line>
+{%- elif name == "gauge" -%}
+<circle cx="12" cy="12" r="9"></circle><path d="M12 12 L16 8"></path><path d="M8 15h.01"></path><path d="M16 15h.01"></path>
+{%- elif name == "list-checks" -%}
+<polyline points="3,6 4.5,7.5 7,5"></polyline><line x1="10" y1="6" x2="21" y2="6"></line><polyline points="3,13 4.5,14.5 7,12"></polyline><line x1="10" y1="13" x2="21" y2="13"></line><polyline points="3,20 4.5,21.5 7,19"></polyline><line x1="10" y1="20" x2="21" y2="20"></line>
+{%- elif name == "history" -%}
+<path d="M3 12a9 9 0 1 0 3-6.7"></path><polyline points="3,4 3,9 8,9"></polyline><polyline points="12,7 12,12 16,14"></polyline>
+{%- else -%}
+<circle cx="12" cy="12" r="9"></circle>
+{%- endif -%}
+{% endmacro %}

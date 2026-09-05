@@ -333,7 +333,7 @@
       // a given admin, but reading fresh costs nothing measurable and
       // avoids ever showing a stale list.
       return sections.flatMap((section) => {
-        const sectionLabel = section.querySelector('.nav-section-toggle span')?.textContent || '';
+        const sectionLabel = section.querySelector('.nav-section-toggle-label span')?.textContent || '';
         return Array.from(section.querySelectorAll('.nav-item')).map((el) => ({
           label: el.textContent.trim(),
           path: el.getAttribute('href'),

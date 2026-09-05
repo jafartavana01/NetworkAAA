@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Admin Roles — AAA Management Platform{% endblock %}
 {% block breadcrumb %}Platform / Admin Roles{% endblock %}
 
@@ -21,12 +22,16 @@
 
 <div class="modal-backdrop" id="role-modal-backdrop" hidden>
   <div class="modal" style="max-width: 640px; max-height: 88vh; overflow-y: auto;">
+    <button type="button" class="modal-close-btn" id="role-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2 id="role-modal-title">Add role</h2>
     <form id="role-form">
       <input type="hidden" id="role-id">
       <label class="field">
         <span class="field-label">Name</span>
-        <input type="text" id="role-name" required maxlength="64">
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('key', 14) }}</span>
+          <input type="text" id="role-name" required maxlength="64">
+        </div>
       </label>
       <label class="field">
         <span class="field-label">Description</span>
@@ -40,7 +45,7 @@
 
       <div class="modal-actions">
         <button type="button" class="btn-ghost" id="role-cancel-btn">Cancel</button>
-        <button type="submit" class="btn-primary" style="width:auto;">Save role</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save role</button>
       </div>
     </form>
   </div>
@@ -168,6 +173,7 @@
 
   document.getElementById('add-role-btn').addEventListener('click', () => openModal(null));
   document.getElementById('role-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('role-modal-close-btn').addEventListener('click', closeModal);
   document.getElementById('role-modal-backdrop').addEventListener('click', (e) => {
     if (e.target.id === 'role-modal-backdrop') closeModal();
   });

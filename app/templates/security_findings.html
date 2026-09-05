@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Security Center — Findings — AAA Management Platform{% endblock %}
 {% block breadcrumb %}Security Center / Findings{% endblock %}
 
@@ -12,30 +13,39 @@
   <div class="toolbar" style="gap:12px;margin-bottom:16px;flex-wrap:wrap;">
     <label class="field" style="min-width:160px;">
       <span class="field-label">Severity</span>
-      <select id="filter-severity">
-        <option value="">All</option>
-        <option value="critical">Critical</option>
-        <option value="high">High</option>
-        <option value="medium">Medium</option>
-        <option value="low">Low</option>
-        <option value="info">Info</option>
-      </select>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('alert-triangle', 14) }}</span>
+        <select id="filter-severity">
+          <option value="">All</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+          <option value="info">Info</option>
+        </select>
+      </div>
     </label>
     <label class="field" style="min-width:160px;">
       <span class="field-label">Status</span>
-      <select id="filter-status">
-        <option value="">All</option>
-        <option value="fail">Fail</option>
-        <option value="pass">Pass</option>
-        <option value="manual_review">Manual Review</option>
-        <option value="na">Not Applicable</option>
-      </select>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('check', 14) }}</span>
+        <select id="filter-status">
+          <option value="">All</option>
+          <option value="fail">Fail</option>
+          <option value="pass">Pass</option>
+          <option value="manual_review">Manual Review</option>
+          <option value="na">Not Applicable</option>
+        </select>
+      </div>
     </label>
     <label class="field" style="min-width:220px;">
       <span class="field-label">Device</span>
-      <select id="filter-device">
-        <option value="">All devices</option>
-      </select>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+        <select id="filter-device">
+          <option value="">All devices</option>
+        </select>
+      </div>
     </label>
   </div>
 

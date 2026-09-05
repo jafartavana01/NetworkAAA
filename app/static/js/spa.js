@@ -119,6 +119,20 @@
     void viewRoot.offsetWidth;
     viewRoot.style.animation = '';
 
+    // history.pushState() runs BEFORE re-executing the new page's own
+    // inline scripts, deliberately -- any page that reads
+    // window.location.pathname during its own initialization (e.g. to
+    // extract a dynamic URL segment like a device or job ID) needs the
+    // URL to already reflect where it's actually navigating TO, not
+    // wherever the user was navigating FROM. Doing this after script
+    // execution (the order this was originally written in) meant
+    // every such page's own script would read the OLD path on every
+    // SPA transition, extracting the wrong ID from it every time and
+    // failing to find its own data -- correct only on a hard refresh
+    // or direct URL visit, since only those cases involve a real page
+    // load where the URL was already correct from the start.
+    if (push) history.pushState({ spa: true }, '', url);
+
     // Re-execute the fetched page's own inline scripts -- scoped
     // specifically to #view-scripts-container (see app_shell.html's
     // comment on that element for why: a broader `script:not([src])`
@@ -152,8 +166,6 @@
     // has no concept of "sections"; see app_shell.html's own listener
     // for this event.
     document.dispatchEvent(new CustomEvent('spa:navigated', { detail: { url } }));
-
-    if (push) history.pushState({ spa: true }, '', url);
 
     if (navProgress) {
       navProgress.classList.remove('is-active');

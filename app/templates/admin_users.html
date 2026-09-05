@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Admin Users — AAA Management Platform{% endblock %}
 {% block breadcrumb %}Platform / Admin Users{% endblock %}
 
@@ -27,12 +28,16 @@
 
 <div class="modal-backdrop" id="admin-modal-backdrop" hidden>
   <div class="modal">
+    <button type="button" class="modal-close-btn" id="admin-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2 id="admin-modal-title">Add admin</h2>
     <form id="admin-form">
       <input type="hidden" id="admin-id">
       <label class="field">
         <span class="field-label">Username</span>
-        <input type="text" id="admin-username" required>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('user', 14) }}</span>
+          <input type="text" id="admin-username" required>
+        </div>
       </label>
 
       <label class="field">
@@ -68,7 +73,7 @@
 
       <div class="modal-actions">
         <button type="button" class="btn-ghost" id="admin-cancel-btn">Cancel</button>
-        <button type="submit" class="btn-primary" style="width:auto;">Save admin</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save admin</button>
       </div>
     </form>
   </div>
@@ -177,6 +182,7 @@
 
   document.getElementById('add-admin-btn').addEventListener('click', () => openModal(null));
   document.getElementById('admin-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('admin-modal-close-btn').addEventListener('click', closeModal);
   document.getElementById('admin-modal-backdrop').addEventListener('click', (e) => {
     if (e.target.id === 'admin-modal-backdrop') closeModal();
   });

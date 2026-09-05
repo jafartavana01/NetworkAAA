@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Groups — AAA Management Platform{% endblock %}
 {% block breadcrumb %}TACACS+ / Groups{% endblock %}
 
@@ -27,16 +28,20 @@
 
 <div class="modal-backdrop" id="group-modal-backdrop" hidden>
   <div class="modal">
+    <button type="button" class="modal-close-btn" id="group-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
     <h2 id="group-modal-title">Add group</h2>
     <form id="group-form">
       <input type="hidden" id="group-id">
 
       <label class="field">
         <span class="field-label">Type</span>
-        <select id="group-type">
-          <option value="local">Local — you add members directly</option>
-          <option value="ad">Active Directory — matches a real AD group's own membership</option>
-        </select>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('shield', 14) }}</span>
+          <select id="group-type">
+            <option value="local">Local — you add members directly</option>
+            <option value="ad">Active Directory — matches a real AD group's own membership</option>
+          </select>
+        </div>
       </label>
       <div class="panel panel-wide" style="margin:-4px 0 16px 0;" id="group-type-hint-panel">
         <div class="panel-body" style="font-size:12px;" id="group-type-hint"></div>
@@ -53,7 +58,10 @@
 
       <label class="field">
         <span class="field-label">Name</span>
-        <input type="text" id="group-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('users', 14) }}</span>
+          <input type="text" id="group-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        </div>
       </label>
       <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;" id="group-name-hint">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng group identifier.</div>
 
@@ -74,7 +82,7 @@
 
       <div class="modal-actions">
         <button type="button" class="btn-ghost" id="group-cancel-btn">Cancel</button>
-        <button type="submit" class="btn-primary" style="width:auto;">Save group</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save group</button>
       </div>
     </form>
   </div>
@@ -123,7 +131,14 @@
     document.getElementById('group-count').textContent = tacacsGroups.length + (tacacsGroups.length === 1 ? ' group' : ' groups');
 
     if (tacacsGroups.length === 0) {
-      wrap.innerHTML = '<div class="empty-state">No groups yet. Add one to get started.</div>';
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-title">No TACACS+ groups</div>
+          <p class="empty-state-desc">NetworkAAA doesn't have any groups configured yet. Groups are what Policies match against to decide access — add one to get started.</p>
+          <button type="button" class="btn-primary btn-small" id="empty-state-add-group-btn">+ Add group</button>
+        </div>
+      `;
+      document.getElementById('empty-state-add-group-btn').addEventListener('click', () => openModal(null));
       return;
     }
 
@@ -232,6 +247,7 @@
 
   document.getElementById('add-group-btn').addEventListener('click', () => openModal(null));
   document.getElementById('group-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('group-modal-close-btn').addEventListener('click', closeModal);
   document.getElementById('group-modal-backdrop').addEventListener('click', (e) => {
     if (e.target.id === 'group-modal-backdrop') closeModal();
   });
