@@ -133,6 +133,18 @@ class FleetFindingOut(BaseModel):
     recommendation: str
     fix_command: str
     correlation_id: str | None
+    # Added for the Finding Detail Drawer -- the drawer shows evidence,
+    # "why this matters" and compliance mappings, and fetching those in
+    # a second per-row request would be an N+1 against a table the user
+    # is clicking through quickly. They come from the same already-
+    # loaded AuditFinding row, so this costs one wider response instead
+    # of one request per opened finding.
+    detail: str
+    why: str
+    risk: str
+    evidence: list
+    evidence_label: str
+    compliance_refs: dict
 
 
 class AuditScheduleOut(BaseModel):
@@ -211,3 +223,91 @@ class AuditBatchSummaryListItemOut(BaseModel):
     status: str
     started_at: datetime
     total_devices: int
+
+
+class DashboardDomainScoreOut(BaseModel):
+    """Fleet-wide average score for one security domain, across every
+    device's own most recent completed audit."""
+    domain: str
+    score: float
+    fail_count: int
+    manual_count: int
+
+
+class DashboardSeverityCountOut(BaseModel):
+    severity: str
+    count: int
+
+
+class DashboardTrendPointOut(BaseModel):
+    """One real historical data point -- never synthesized. Points come
+    only from audit runs that actually exist and completed."""
+    label: str
+    score: float
+    audit_run_id: str
+
+
+class DashboardComplianceOut(BaseModel):
+    framework: str
+    passed: int
+    failed: int
+    manual_review: int
+    percentage: float
+
+
+class DashboardRiskyDeviceOut(BaseModel):
+    device_id: str | None
+    device_name: str
+    score: float | None
+    risk_level: str | None
+    critical: int
+    high: int
+    medium: int
+
+
+class DashboardTopRiskOut(BaseModel):
+    check_id: str
+    title: str
+    severity: str
+    domain: str
+    device_name: str
+    device_id: str | None
+    risk: str | None
+    audit_run_id: str
+
+
+class DashboardHeatmapCellOut(BaseModel):
+    device_name: str
+    device_id: str | None
+    domain: str
+    score: float
+    fail_count: int
+    manual_count: int
+
+
+class SecurityDashboardOut(BaseModel):
+    """
+    Everything the redesigned Security Center Overview needs, in ONE
+    request -- per this feature's own performance requirement that the
+    Overview must not fire a dozen independent queries. Every field
+    here is derived from real stored audit rows; sections with no data
+    come back empty so the GUI can show a real empty state rather than
+    a fabricated chart.
+    """
+    devices_audited: int
+    average_score: float | None
+    previous_average_score: float | None
+    compliance_score: float | None
+
+    severity_counts: list[DashboardSeverityCountOut]
+    total_findings: int
+    manual_review_findings: int
+    failed_checks: int
+
+    domain_scores: list[DashboardDomainScoreOut]
+    score_trend: list[DashboardTrendPointOut]
+    compliance: list[DashboardComplianceOut]
+    risky_devices: list[DashboardRiskyDeviceOut]
+    top_risks: list[DashboardTopRiskOut]
+    heatmap: list[DashboardHeatmapCellOut]
+    heatmap_domains: list[str]

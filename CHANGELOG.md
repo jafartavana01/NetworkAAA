@@ -12,6 +12,178 @@ it was built alongside.
 
 ## 2026-09-03
 
+### Redesigned — Findings page as an investigation workspace, plus the Finding Detail Drawer (Phase 4-5)
+
+Continuing the Security Center redesign in its own specified phase
+order. Phases 4 and 5 are now done; Phases 6-10 remain untouched and
+are listed honestly at the end.
+
+**Closed the seam flagged last pass.** The Overview's donut segments,
+severity legend, KPI cards and domain bars all emit real deep links
+(`?severity=`, `?status=`, `?domain=`, `?device_id=`). The Findings
+page now actually READS those query parameters on load and applies
+them to its own filter controls, so those links filter instead of
+landing on an unfiltered list. That was the one visible seam left
+open by the previous pass, and closing it was the first thing done
+here rather than a later cleanup.
+
+**`FleetFindingOut` extended** with `detail`, `why`, `risk`,
+`evidence`, `evidence_label` and `compliance_refs`. These come from
+the same already-loaded `AuditFinding` row the endpoint reads anyway,
+so the drawer opens instantly from data already in the browser --
+deliberately one wider response instead of one extra request per
+finding the user clicks, which is exactly the N+1 pattern this
+redesign exists to avoid.
+
+**Findings page rebuilt** as a filtering workspace: a summary card
+row (total / critical / high / medium / manual review), five filter
+controls (severity, status, device, domain, free-text search), and
+client-side pagination with 25/50/100 per page. The device and domain
+dropdowns are populated from the findings actually returned, not a
+hardcoded list, so they always reflect real data. Long text is out of
+the table entirely, per the redesign's own rule against giant text
+blocks in cells -- rows now carry only severity, status, device,
+domain, title and check ID.
+
+**Finding Detail Drawer** -- a right-side panel (not a centred modal:
+the user is scanning a table and opening findings one after another,
+so keeping the list visible alongside matters more here than the
+focus a modal enforces). Shows why-this-matters, risk, detail,
+evidence under its own real label, recommendation, proposed fix, and
+compliance mappings -- each section rendered only when that finding
+actually has that content, so no empty headers. Reuses the existing
+`.modal-close-btn`, `.readout` and `.diff-view` conventions rather
+than defining parallel ones. Closable by its X, backdrop click, or
+Escape.
+
+**Accessibility**: finding rows are real keyboard targets --
+`tabindex`/`role="button"`, activated by Enter or Space, with a
+visible `:focus-visible` outline. Severity is carried by a labelled
+badge, never colour alone.
+
+**A real bug caught by a project-wide sweep, not shipped:** the
+Findings pager uses `class="toolbar"` with the `hidden` attribute,
+but `.toolbar` sets `display: flex`, which beats the browser's own
+`[hidden] { display: none }`. The pager would have stayed visible on
+an empty result set, showing "Showing 1-0 of 0". This is the exact
+`[hidden]` override bug class this project hit before (already
+handled for `.cmdk-backdrop`, `.panel-grid`, `.field`, `.field-row`
+and `.badge`), and `.toolbar` had simply never been used with
+`hidden` until now. Fixed at the CSS level, then swept every template
+in the project for any other element carrying `hidden` whose class
+sets a display value without a matching override -- zero remaining
+instances.
+
+**Verified**: filter matching tested with 9 real cases (each filter
+individually, case-insensitive search, search by check ID, combined
+filters, and a deliberately contradictory combination expecting zero
+results); pagination tested with 7 cases including empty data, exact
+page boundaries, and a page-overflow case confirming it clamps to the
+last page rather than producing a negative slice. Plus the usual:
+template parses with correct block structure, zero ID mismatches
+(including the dynamically-referenced IDs checked separately), icon
+constants confirmed to render real SVG, every CSS class confirmed to
+exist, scripts pass Node syntax checks, `FleetFindingOut`'s
+construction cross-checked against its schema via AST (no missing or
+unknown fields), and project-wide compile/template/`view_scripts`
+checks all clean.
+
+**Still not started (Phases 6-10)**, deliberately not stubbed: Device
+Security page redesign, graphical switch/interface view, expanded
+Compliance page, audit activity timeline, and the final
+responsive/performance polish pass. Export from the Findings page is
+also not implemented.
+
+---
+
+### Redesigned — Security Center Overview as a visual security posture dashboard (Phase 1-3)
+
+Detailed spec with a 10-phase implementation order. Followed that
+order rather than touching everything at once: Phases 1-3 (Overview
+redesign, gauge/KPIs/donut/domain chart/trend, plus device risk, top
+risks and heatmap) are done; Phases 4-10 are not started and are
+listed honestly below rather than half-built.
+
+**One aggregated endpoint, `GET /api/security/dashboard`** -- score,
+severity breakdown, domain scores, trend, compliance, risky devices,
+top risks and the device x domain heatmap in a single call. Built as
+one endpoint deliberately, per the spec's own performance
+requirement: the Overview firing one request per widget is exactly
+the N+1 pattern the redesign exists to avoid. Reuses the existing
+`_latest_completed_runs_by_device` helper so "current posture" can't
+drift between this and the older endpoints, and calls the engine's
+own `risk_level()` rather than reimplementing any scoring in the API
+or the browser.
+
+**Data integrity, per the spec's strongest requirement**: every
+section derives from real stored rows, and sections with no data come
+back EMPTY rather than zero-filled, so the GUI renders a truthful
+empty state instead of a chart implying data that doesn't exist. The
+trend specifically returns one point per real completed audit run,
+never interpolated -- and with fewer than two points the GUI shows
+"Not enough historical audit data" instead of drawing a line.
+
+**The Overview itself** is now a dashboard: an SVG radial score gauge
+(arc math verified against the circle's own radius, not eyeballed)
+with a real "since previous audit" delta computed from each device's
+own second-most-recent completed run; seven clickable KPI cards; a
+severity donut whose segments and text legend both deep-link into
+filtered Findings; horizontal domain-score bars; the score trend; a
+compliance posture panel; highest-risk devices with inline score
+bars; top security risks as compact cards; and the device x domain
+heatmap. The sidebar, shell, icon system and existing panel/status-
+card/rail conventions are untouched -- this reads as the same
+application, as the spec explicitly required.
+
+**Run Audit moved into a modal.** The permanent textarea no longer
+dominates the page; the submit logic itself is preserved verbatim
+(same endpoint, payload, validation and error handling), just
+relocated behind a "Run Security Audit" button.
+
+**Three real bugs caught during verification, none shipped:**
+
+1. `Status.MANUAL_REVIEW` does not exist -- the enum member is
+   `Status.MANUAL`. This would have crashed the whole dashboard
+   endpoint with an AttributeError on the first request. Found by
+   reading the enum's real members rather than assuming the name
+   matched its string value ("manual_review").
+2. `--orange` was referenced for High severity but is not defined
+   anywhere in the stylesheet, so High would have silently fallen
+   back to grey -- collapsing the Critical/High/Medium distinction
+   the spec explicitly requires. Added as a real variable sitting
+   between amber and red.
+3. The heatmap and domain chart were written assuming domains might
+   be short keys (`mgmt`, `l2`). Traced the value through the check
+   functions to `F()` and confirmed they are already full labels
+   ("Management Plane / AAA"), so no translation layer was needed --
+   verified rather than guessed in either direction.
+
+**Accessibility**: severity and score are never carried by colour
+alone -- the donut has a text legend with labels and counts, heatmap
+cells show their numeric score as text with a descriptive hover
+title, and every bar shows its value.
+
+**Verified**: every changed Python file compiles; every enum member,
+model field and schema-construction call in the new endpoint
+cross-checked against real definitions via AST (all complete, no
+unknown or missing fields); template parses with correct block
+structure; zero ID mismatches including the dynamically-referenced
+ones checked separately; all five icon constants confirmed to render
+real SVG; every new CSS class and variable confirmed to exist;
+extracted scripts pass Node syntax checks; project-wide
+`view_scripts` sweep still clean.
+
+**Not started (Phases 4-10)**, deliberately not stubbed as dead UI:
+Findings page redesign with advanced filtering, the Finding Detail
+Drawer, Device Security page redesign, graphical switch/interface
+view, expanded Compliance page, and the audit activity timeline. The
+Findings deep-links this Overview emits (`?severity=`, `?domain=`,
+`?status=`) are real URLs but the Findings page does not yet read
+those query parameters -- that is Phase 4's job and is the one place
+where this pass leaves a visible seam.
+
+---
+
 ### Added — fleet-wide Audit Report dashboard (Security Audit → Device View redesign)
 
 Detailed spec plus a reference screenshot. Per its own instruction,

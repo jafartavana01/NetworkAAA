@@ -31,7 +31,9 @@ from ..schemas.security_audit import (
     AuditBatchSummaryListItemOut, AuditBatchSummaryOut, AuditCompareOut, AuditLiveRequest, AuditRunDetailOut,
     AuditRunSummaryOut, AuditScheduleOut,
     AuditScheduleUpdateRequest, AuditUploadRequest, BatchCategoryCountOut, BatchDeviceRowOut, BatchTopFindingOut,
-    DomainScoreOut, FindingOut, FleetFindingOut, SecurityDeviceOut, SecurityOverviewOut,
+    DashboardComplianceOut, DashboardDomainScoreOut, DashboardHeatmapCellOut, DashboardRiskyDeviceOut,
+    DashboardSeverityCountOut, DashboardTopRiskOut, DashboardTrendPointOut,
+    DomainScoreOut, FindingOut, FleetFindingOut, SecurityDashboardOut, SecurityDeviceOut, SecurityOverviewOut,
 )
 from ..security_center.engine.finding import Severity, Status
 from ..security_center.engine.orchestrator import run_device_audit
@@ -365,6 +367,9 @@ def list_fleet_findings(
             status=f.status, severity=f.severity, interface_name=f.interface_name,
             recommendation=f.recommendation, fix_command=f.fix_command,
             correlation_id=f.correlation_id,
+            detail=f.detail, why=f.why, risk=f.risk,
+            evidence=f.evidence or [], evidence_label=f.evidence_label,
+            compliance_refs=f.compliance_refs or {},
         ))
     return out
 
@@ -647,4 +652,192 @@ def get_audit_batch_summary(
         medium_count=severity_totals["medium"], low_count=severity_totals["low"],
         average_score=round(sum(scores) / len(scores), 1) if scores else None,
         category_breakdown=category_breakdown, top_findings=top_findings, devices=device_rows,
+    )
+
+
+@router.get("/dashboard", response_model=SecurityDashboardOut)
+def get_security_dashboard(
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("security:view")),
+):
+    """
+    One aggregated call backing the whole redesigned Security Center
+    Overview -- score, severity breakdown, domain scores, trend,
+    compliance, risky devices, top risks and the device x domain
+    heatmap. Built as a single endpoint deliberately: the Overview
+    firing one request per widget is exactly the N+1 pattern this
+    redesign is meant to avoid.
+
+    Every section is derived from real stored rows. Where nothing has
+    been audited yet, the corresponding list comes back EMPTY rather
+    than zero-filled or synthesized, so the GUI can render a truthful
+    empty state instead of a chart implying data that doesn't exist.
+    """
+    from ..security_center.engine.scoring import risk_level
+
+    latest_by_device = _latest_completed_runs_by_device(db)
+    runs = list(latest_by_device.values())
+
+    if not runs:
+        return SecurityDashboardOut(
+            devices_audited=0, average_score=None, previous_average_score=None, compliance_score=None,
+            severity_counts=[], total_findings=0, manual_review_findings=0, failed_checks=0,
+            domain_scores=[], score_trend=[], compliance=[], risky_devices=[], top_risks=[],
+            heatmap=[], heatmap_domains=[],
+        )
+
+    run_ids = [r.id for r in runs]
+    findings = db.query(AuditFinding).filter(AuditFinding.audit_run_id.in_(run_ids)).all()
+    domain_rows = db.query(AuditDomainScore).filter(AuditDomainScore.audit_run_id.in_(run_ids)).all()
+    compliance_rows = db.query(AuditComplianceResult).filter(AuditComplianceResult.audit_run_id.in_(run_ids)).all()
+
+    scores = [r.overall_score for r in runs if r.overall_score is not None]
+    average_score = round(sum(scores) / len(scores), 1) if scores else None
+
+    compliance_scores = [r.compliance_score for r in runs if r.compliance_score is not None]
+    compliance_score = round(sum(compliance_scores) / len(compliance_scores), 1) if compliance_scores else None
+
+    # "Previous" posture = each device's own second-most-recent
+    # completed run, averaged the same way. Only computed when such
+    # runs actually exist -- a device with a single audit contributes
+    # nothing here rather than being compared against itself.
+    all_completed = (
+        db.query(AuditRun)
+        .filter(AuditRun.status == "completed", AuditRun.device_id.isnot(None))
+        .order_by(AuditRun.started_at.desc())
+        .all()
+    )
+    seen: dict = {}
+    previous_scores = []
+    for run in all_completed:
+        seen.setdefault(run.device_id, []).append(run)
+    for device_runs in seen.values():
+        if len(device_runs) > 1 and device_runs[1].overall_score is not None:
+            previous_scores.append(device_runs[1].overall_score)
+    previous_average_score = round(sum(previous_scores) / len(previous_scores), 1) if previous_scores else None
+
+    severity_totals: dict = {}
+    manual_review_findings = 0
+    failed_checks = 0
+    for f in findings:
+        if f.status == Status.MANUAL.value:
+            manual_review_findings += 1
+        if f.status != Status.FAIL.value:
+            continue
+        failed_checks += 1
+        severity_totals[f.severity] = severity_totals.get(f.severity, 0) + 1
+
+    severity_counts = [
+        DashboardSeverityCountOut(severity=sev, count=severity_totals.get(sev, 0))
+        for sev in ("critical", "high", "medium", "low", "info")
+        if severity_totals.get(sev, 0) > 0
+    ]
+
+    # Fleet-wide domain score = the mean of each device's own score for
+    # that domain, using the engine's already-computed per-run values
+    # rather than recomputing any scoring in this layer.
+    domain_acc: dict = {}
+    for d in domain_rows:
+        acc = domain_acc.setdefault(d.domain, {"scores": [], "fail": 0, "manual": 0})
+        acc["scores"].append(d.score)
+        acc["fail"] += d.fail_count
+        acc["manual"] += d.manual_count
+    domain_scores = sorted(
+        (
+            DashboardDomainScoreOut(
+                domain=domain, score=round(sum(a["scores"]) / len(a["scores"]), 1),
+                fail_count=a["fail"], manual_count=a["manual"],
+            )
+            for domain, a in domain_acc.items() if a["scores"]
+        ),
+        key=lambda d: d.score,
+    )
+
+    framework_acc: dict = {}
+    for c in compliance_rows:
+        acc = framework_acc.setdefault(c.framework, {"pass": 0, "fail": 0, "manual": 0})
+        if c.status == "pass":
+            acc["pass"] += 1
+        elif c.status == "fail":
+            acc["fail"] += 1
+        elif c.status == "manual_review":
+            acc["manual"] += 1
+    compliance = []
+    for framework, a in sorted(framework_acc.items()):
+        scored = a["pass"] + a["fail"]
+        compliance.append(DashboardComplianceOut(
+            framework=framework, passed=a["pass"], failed=a["fail"], manual_review=a["manual"],
+            percentage=round((a["pass"] / scored) * 100, 1) if scored else 0.0,
+        ))
+
+    per_run_severity: dict = {}
+    for f in findings:
+        if f.status != Status.FAIL.value:
+            continue
+        counts = per_run_severity.setdefault(f.audit_run_id, {"critical": 0, "high": 0, "medium": 0})
+        if f.severity in counts:
+            counts[f.severity] += 1
+
+    risky_devices = sorted(
+        (
+            DashboardRiskyDeviceOut(
+                device_id=str(r.device_id) if r.device_id else None, device_name=r.device_name,
+                score=r.overall_score,
+                risk_level=risk_level(r.overall_score) if r.overall_score is not None else None,
+                critical=per_run_severity.get(r.id, {}).get("critical", 0),
+                high=per_run_severity.get(r.id, {}).get("high", 0),
+                medium=per_run_severity.get(r.id, {}).get("medium", 0),
+            )
+            for r in runs
+        ),
+        key=lambda d: (d.score if d.score is not None else 999),
+    )[:10]
+
+    run_by_id = {r.id: r for r in runs}
+    top_risks = sorted(
+        (
+            DashboardTopRiskOut(
+                check_id=f.check_id, title=f.title, severity=f.severity, domain=f.domain,
+                device_name=run_by_id[f.audit_run_id].device_name,
+                device_id=str(f.device_id) if f.device_id else None,
+                risk=f.risk or None, audit_run_id=str(f.audit_run_id),
+            )
+            for f in findings
+            if f.status == Status.FAIL.value and f.audit_run_id in run_by_id
+        ),
+        key=lambda f: _SEVERITY_RANK.get(f.severity, 99),
+    )[:8]
+
+    domain_row_by_run: dict = {}
+    for d in domain_rows:
+        domain_row_by_run.setdefault(d.audit_run_id, []).append(d)
+    heatmap_domains = sorted({d.domain for d in domain_rows})
+    heatmap = []
+    for r in runs:
+        for d in domain_row_by_run.get(r.id, []):
+            heatmap.append(DashboardHeatmapCellOut(
+                device_name=r.device_name, device_id=str(r.device_id) if r.device_id else None,
+                domain=d.domain, score=d.score, fail_count=d.fail_count, manual_count=d.manual_count,
+            ))
+
+    # Trend points come only from audit runs that really exist and
+    # completed with a score -- one point per run, chronological. No
+    # interpolation, no synthesized history: with a single audit the
+    # chart gets exactly one point and the GUI says so.
+    trend_runs = [r for r in reversed(all_completed) if r.overall_score is not None][-12:]
+    score_trend = [
+        DashboardTrendPointOut(
+            label=r.started_at.strftime("%b %d %H:%M"), score=r.overall_score, audit_run_id=str(r.id),
+        )
+        for r in trend_runs
+    ]
+
+    return SecurityDashboardOut(
+        devices_audited=len(runs), average_score=average_score,
+        previous_average_score=previous_average_score, compliance_score=compliance_score,
+        severity_counts=severity_counts, total_findings=len(findings),
+        manual_review_findings=manual_review_findings, failed_checks=failed_checks,
+        domain_scores=domain_scores, score_trend=score_trend, compliance=compliance,
+        risky_devices=risky_devices, top_risks=top_risks,
+        heatmap=heatmap, heatmap_domains=heatmap_domains,
     )

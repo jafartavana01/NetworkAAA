@@ -1,187 +1,488 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}Security Center — AAA Management Platform{% endblock %}
 {% block breadcrumb %}Security Center / Overview{% endblock %}
 
 {% block view_content %}
 <main class="content">
-  <div class="content-head">
-    <h1>Security Center</h1>
-    <p class="content-sub">Cisco IOS/IOS-XE device security auditing — 9 domains, correlation, and compliance mapping against NIST 800-53, ISO 27002, CIS, and DISA STIG.</p>
+  <div class="content-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+    <div>
+      <h1>Security Center</h1>
+      <p class="content-sub">Cisco IOS/IOS-XE device security posture — 9 domains, correlation, and compliance mapping against NIST 800-53, ISO 27002, CIS, and DISA STIG.</p>
+    </div>
+    <button type="button" class="btn-primary btn-with-icon" id="open-audit-modal-btn" style="width:auto;">{{ icons.icon('plus', 16) }}Run Security Audit</button>
   </div>
 
-  <section class="panel-grid" id="overview-grid" aria-live="polite">
-    <div class="panel" data-skeleton>
-      <div class="panel-head"><span class="rail rail-dim" id="overview-score-rail"></span>Average Security Score</div>
-      <div class="panel-body panel-loading" id="overview-score">Loading…</div>
+  <section class="sec-grid sec-grid-posture">
+    <div class="panel panel-wide sec-gauge-panel">
+      <div class="panel-head"><span class="rail rail-dim"></span>Security Posture</div>
+      <div class="panel-body" style="display:flex;flex-direction:column;align-items:center;justify-content:center;">
+        <svg viewBox="0 0 120 120" class="sec-gauge" role="img" aria-labelledby="gauge-a11y">
+          <title id="gauge-a11y">Overall security score</title>
+          <circle cx="60" cy="60" r="52" fill="none" stroke="var(--bg-panel-raised)" stroke-width="10"></circle>
+          <circle cx="60" cy="60" r="52" fill="none" stroke="var(--text-faint)" stroke-width="10"
+                  stroke-linecap="round" transform="rotate(-90 60 60)"
+                  id="gauge-arc" stroke-dasharray="0 326.73"></circle>
+        </svg>
+        <div class="sec-gauge-value" id="gauge-score">—</div>
+        <div class="sec-gauge-label" id="gauge-status">No audit data</div>
+        <div class="content-sub" style="text-align:center;margin-top:8px;font-size:11.5px;">Based on latest available audit results</div>
+        <div id="gauge-delta" class="sec-delta" hidden></div>
+      </div>
     </div>
-    <div class="panel" data-skeleton>
-      <div class="panel-head"><span class="rail rail-dim"></span>Devices Audited</div>
-      <div class="panel-body panel-loading" id="overview-devices">Loading…</div>
+
+    <div class="status-card-grid sec-kpi-grid" id="kpi-grid"></div>
+  </section>
+
+  <section class="sec-grid sec-grid-charts">
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Findings by Severity</div>
+      <div class="panel-body" style="height:230px;position:relative;">
+        <canvas id="severity-chart"></canvas>
+        <div id="severity-center" style="position:absolute;top:42%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;">
+          <div class="sec-donut-total" id="severity-total">—</div>
+          <div class="sec-donut-sub">Total Findings</div>
+        </div>
+      </div>
+      <div class="panel-body" id="severity-legend" style="padding-top:0;"></div>
     </div>
-    <div class="panel" data-skeleton>
-      <div class="panel-head"><span class="rail rail-red"></span>Critical Findings</div>
-      <div class="panel-body panel-loading" id="overview-critical">Loading…</div>
-    </div>
-    <div class="panel" data-skeleton>
-      <div class="panel-head"><span class="rail rail-amber"></span>High Findings</div>
-      <div class="panel-body panel-loading" id="overview-high">Loading…</div>
-    </div>
-    <div class="panel" data-skeleton>
-      <div class="panel-head"><span class="rail rail-dim"></span>Medium Findings</div>
-      <div class="panel-body panel-loading" id="overview-medium">Loading…</div>
-    </div>
-    <div class="panel" data-skeleton>
-      <div class="panel-head"><span class="rail rail-dim"></span>Manual Review</div>
-      <div class="panel-body panel-loading" id="overview-manual">Loading…</div>
+
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Security Score by Domain</div>
+      <div class="panel-body" id="domain-scores-body"><div class="empty-state">Loading…</div></div>
     </div>
   </section>
 
-  <div class="content-head" style="margin-top:32px;">
-    <h2>Run an Audit</h2>
-    <p class="content-sub">Paste a device's full <span class="cell-mono">show running-config</span> output. Live SSH auditing of an existing device is available from that device's own page.</p>
-  </div>
-  <div class="panel" style="padding:16px;">
-    <label class="field">
-      <span class="field-label">Device name (optional — detected from the config's own hostname if left blank)</span>
-      <input type="text" id="audit-device-name" placeholder="e.g. CORE-SW01" maxlength="64">
-    </label>
-    <label class="field" style="margin-top:12px;">
-      <span class="field-label">Configuration text</span>
-      <textarea id="audit-config-text" rows="10" style="width:100%;font-family:var(--font-mono);font-size:12px;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;color:var(--text-primary);" placeholder="hostname CORE-SW01&#10;!&#10;..."></textarea>
-    </label>
-    <div id="audit-error" class="form-error" role="alert" hidden></div>
-    <div style="margin-top:12px;">
-      <button type="button" class="btn-primary btn-small" id="run-audit-btn" style="width:auto;">Run Audit</button>
+  <section class="sec-grid sec-grid-trend">
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Security Score Trend</div>
+      <div class="panel-body" style="height:220px;position:relative;" id="trend-body">
+        <canvas id="trend-chart"></canvas>
+      </div>
     </div>
-  </div>
 
-  <div id="audit-result-panel" hidden style="margin-top:24px;">
-    <div class="content-head">
-      <h2>Audit Result</h2>
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Compliance Posture</div>
+      <div class="panel-body" id="compliance-body"><div class="empty-state">Loading…</div></div>
     </div>
-    <div class="panel" style="padding:16px;">
-      <div id="audit-result-summary" style="margin-bottom:16px;"></div>
-      <div id="audit-result-findings"></div>
-    </div>
-  </div>
+  </section>
 
-  <div class="content-head" style="margin-top:32px;">
-    <h2>Recent Audits</h2>
+  <section class="sec-grid sec-grid-risk">
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-red"></span>Highest Risk Devices</div>
+      <div class="panel-body" id="risky-devices-body"><div class="empty-state">Loading…</div></div>
+    </div>
+
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-red"></span>Top Security Risks</div>
+      <div class="panel-body" id="top-risks-body"><div class="empty-state">Loading…</div></div>
+    </div>
+  </section>
+
+  <div class="content-head">
+    <h2>Security Domain Heatmap</h2>
+    <p class="content-sub">Each device's own score per security domain. Hover a cell for its finding counts.</p>
   </div>
-  <div id="recent-audits-table-wrap">
-    <div class="empty-state">Loading…</div>
+  <div class="panel panel-wide" style="overflow-x:auto;">
+    <div class="panel-body" id="heatmap-body"><div class="empty-state">Loading…</div></div>
   </div>
 </main>
+
+<div class="modal-backdrop" id="audit-modal-backdrop" hidden>
+  <div class="modal" style="max-width:min(94vw,760px);max-height:90vh;overflow-y:auto;">
+    <button type="button" class="modal-close-btn" id="audit-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2>Run Security Audit</h2>
+
+    <div class="panel panel-wide" style="margin-bottom:16px;">
+      <div class="panel-body" style="font-size:12px;color:var(--text-dim);">
+        Paste a device's full <span class="cell-mono">show running-config</span> output. Live SSH auditing of an existing device is available from that device's own page, and fleet-wide scheduled auditing from Scheduled Audits.
+      </div>
+    </div>
+
+    <label class="field">
+      <span class="field-label">Device name (optional — detected from the config's own hostname if left blank)</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+        <input type="text" id="audit-device-name" placeholder="e.g. CORE-SW01">
+      </div>
+    </label>
+
+    <label class="field">
+      <span class="field-label">Configuration text</span>
+      <textarea id="audit-config-text" rows="14" class="mono" placeholder="hostname CORE-SW01"></textarea>
+    </label>
+
+    <div id="audit-error" class="form-error" role="alert" hidden></div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="audit-cancel-btn">Cancel</button>
+      <button type="button" class="btn-primary btn-with-icon" id="run-audit-btn" style="width:auto;">{{ icons.icon('check', 16) }}Run Audit</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block view_scripts %}
 <script>
 (() => {
+  // Pre-rendered server-side via Jinja (see the top-of-file macro
+  // import) since this markup is built client-side.
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const ICON_LIST = '{{ icons.icon("list-checks", 16) }}';
+  const ICON_EYE = '{{ icons.icon("eye", 16) }}';
+  const ICON_SHIELD = '{{ icons.icon("shield-check", 16) }}';
+
+  // 2 * pi * r for the gauge's own r=52 -- verified against that
+  // circle's radius rather than eyeballed.
+  const GAUGE_CIRCUMFERENCE = 326.73;
+
   function escapeHtml(s) {
     const div = document.createElement('div');
     div.textContent = s == null ? '' : String(s);
     return div.innerHTML;
   }
 
-  function severityRail(sev) {
-    if (sev === 'critical' || sev === 'high') return 'rail-red';
-    if (sev === 'medium') return 'rail-amber';
-    return 'rail-dim';
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
 
-  function scoreRail(score) {
-    if (score == null) return 'rail-dim';
-    if (score >= 85) return 'rail-signal';
-    if (score >= 60) return 'rail-amber';
-    return 'rail-red';
+  function ensureChartJsLoaded() {
+    // Same on-demand technique dashboard.html already uses -- NOT a
+    // plain <script src> tag, since spa.js only re-executes inline
+    // scripts on SPA navigation, so an external tag here would work
+    // on a hard refresh but silently never fire when navigated to.
+    return new Promise((resolve, reject) => {
+      if (window.Chart) { resolve(); return; }
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js';
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error('Could not load the charting library.'));
+      document.head.appendChild(script);
+    });
   }
 
-  async function loadOverview() {
+  // The exact severity values the engine's own Severity enum emits --
+  // not a parallel vocabulary invented here.
+  const SEVERITY_META = {
+    critical: { label: 'Critical', varName: '--red' },
+    high:     { label: 'High',     varName: '--orange' },
+    medium:   { label: 'Medium',   varName: '--amber' },
+    low:      { label: 'Low',      varName: '--text-dim' },
+    info:     { label: 'Info',     varName: '--text-faint' },
+  };
+
+  function severityColor(sev) {
+    const meta = SEVERITY_META[sev];
+    return (meta && cssVar(meta.varName)) || cssVar('--text-faint') || '#57616c';
+  }
+
+  function scoreClass(score) {
+    if (score == null) return '';
+    if (score >= 85) return 'is-signal';
+    if (score >= 60) return 'is-amber';
+    return 'is-red';
+  }
+
+  function scoreColorVar(score) {
+    if (score == null) return cssVar('--text-faint') || '#57616c';
+    if (score >= 85) return cssVar('--signal') || '#4fd1a5';
+    if (score >= 60) return cssVar('--amber') || '#e0a83e';
+    return cssVar('--red') || '#e0615a';
+  }
+
+  function scoreStatusLabel(score) {
+    if (score == null) return 'No audit data';
+    if (score >= 90) return 'Excellent';
+    if (score >= 75) return 'Good';
+    if (score >= 60) return 'Fair';
+    return 'Poor';
+  }
+
+  function renderGauge(score, previous) {
+    const arc = document.getElementById('gauge-arc');
+    const pct = score == null ? 0 : Math.max(0, Math.min(100, score)) / 100;
+    arc.setAttribute('stroke-dasharray', (GAUGE_CIRCUMFERENCE * pct).toFixed(2) + ' ' + (GAUGE_CIRCUMFERENCE * (1 - pct)).toFixed(2));
+    arc.setAttribute('stroke', scoreColorVar(score));
+    document.getElementById('gauge-score').textContent = score != null ? String(score) : '—';
+    document.getElementById('gauge-status').textContent = scoreStatusLabel(score);
+
+    const deltaEl = document.getElementById('gauge-delta');
+    if (score != null && previous != null) {
+      const diff = Math.round((score - previous) * 10) / 10;
+      deltaEl.hidden = false;
+      if (diff > 0) {
+        deltaEl.className = 'sec-delta is-signal';
+        deltaEl.textContent = '▲ +' + diff + ' since previous audit';
+      } else if (diff < 0) {
+        deltaEl.className = 'sec-delta is-red';
+        deltaEl.textContent = '▼ ' + diff + ' since previous audit';
+      } else {
+        deltaEl.className = 'sec-delta';
+        deltaEl.textContent = 'No change since previous audit';
+      }
+    } else {
+      deltaEl.hidden = true;
+    }
+  }
+
+  function kpiCard(icon, label, value, stateClass, href) {
+    const inner = '<div class="status-card-icon">' + icon + '</div>' +
+      '<div class="status-card-body">' +
+      '<div class="status-card-title">' + escapeHtml(label) + '</div>' +
+      '<div class="status-card-value">' + escapeHtml(String(value)) + '</div>' +
+      '</div>';
+    return href
+      ? '<a href="' + href + '" class="status-card ' + stateClass + '" style="text-decoration:none;">' + inner + '</a>'
+      : '<div class="status-card ' + stateClass + '">' + inner + '</div>';
+  }
+
+  function countFor(data, sev) {
+    const row = data.severity_counts.find((s) => s.severity === sev);
+    return row ? row.count : 0;
+  }
+
+  function renderKpis(data) {
+    document.getElementById('kpi-grid').innerHTML = [
+      kpiCard(ICON_SERVER, 'Devices Audited', data.devices_audited, '', '/security/devices'),
+      kpiCard(ICON_ALERT, 'Critical', countFor(data, 'critical'), 'is-red', '/security/findings?severity=critical'),
+      kpiCard(ICON_ALERT, 'High', countFor(data, 'high'), 'is-red', '/security/findings?severity=high'),
+      kpiCard(ICON_ALERT, 'Medium', countFor(data, 'medium'), 'is-amber', '/security/findings?severity=medium'),
+      kpiCard(ICON_EYE, 'Manual Review', data.manual_review_findings, '', '/security/findings?status=manual_review'),
+      kpiCard(ICON_LIST, 'Failed Checks', data.failed_checks, 'is-red', '/security/findings?status=fail'),
+      kpiCard(ICON_SHIELD, 'Compliance', data.compliance_score != null ? data.compliance_score + '%' : '—', scoreClass(data.compliance_score)),
+    ].join('');
+  }
+
+  async function renderSeverityChart(data) {
+    await ensureChartJsLoaded();
+    const rows = data.severity_counts;
+    const total = rows.reduce((sum, r) => sum + r.count, 0);
+    document.getElementById('severity-total').textContent = total > 0 ? total : '—';
+
+    const canvas = document.getElementById('severity-chart');
+    const existing = window.Chart.getChart(canvas);
+    if (existing) existing.destroy();
+
+    const hasData = rows.length > 0;
+    new window.Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        labels: hasData ? rows.map((r) => (SEVERITY_META[r.severity] || {}).label || r.severity) : ['No findings'],
+        datasets: [{
+          data: hasData ? rows.map((r) => r.count) : [1],
+          backgroundColor: hasData ? rows.map((r) => severityColor(r.severity)) : [cssVar('--text-faint') || '#57616c'],
+          borderColor: 'transparent',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '68%',
+        plugins: { legend: { display: false }, tooltip: { enabled: hasData } },
+        onClick: (evt, elements) => {
+          if (!hasData || !elements.length) return;
+          window.location.href = '/security/findings?severity=' + encodeURIComponent(rows[elements[0].index].severity);
+        },
+      },
+    });
+
+    // Text legend beside the chart -- severity is never communicated by
+    // colour alone (accessibility), so each entry carries its label and
+    // count as text too.
+    document.getElementById('severity-legend').innerHTML = hasData
+      ? rows.map((r) =>
+          '<a href="/security/findings?severity=' + encodeURIComponent(r.severity) + '" class="sec-legend-row">' +
+          '<span class="sec-legend-dot" style="background:' + severityColor(r.severity) + ';"></span>' +
+          '<span class="sec-legend-label">' + escapeHtml((SEVERITY_META[r.severity] || {}).label || r.severity) + '</span>' +
+          '<span class="sec-legend-count cell-mono">' + r.count + '</span></a>'
+        ).join('')
+      : '<div class="content-sub">No failing findings recorded.</div>';
+  }
+
+  function renderDomainScores(data) {
+    const body = document.getElementById('domain-scores-body');
+    if (!data.domain_scores.length) {
+      body.innerHTML = '<div class="empty-state">No domain scores yet — run an audit to populate this.</div>';
+      return;
+    }
+    body.innerHTML = data.domain_scores.map((d) =>
+      '<a href="/security/findings?domain=' + encodeURIComponent(d.domain) + '" class="sec-bar-row">' +
+      '<span class="sec-bar-label" title="' + escapeHtml(d.domain) + '">' + escapeHtml(d.domain) + '</span>' +
+      '<span class="sec-bar-track"><span class="sec-bar-fill" style="width:' + Math.max(2, d.score) + '%;background:' + scoreColorVar(d.score) + ';"></span></span>' +
+      '<span class="sec-bar-value cell-mono">' + d.score + '</span></a>'
+    ).join('');
+  }
+
+  async function renderTrend(data) {
+    const body = document.getElementById('trend-body');
+    if (data.score_trend.length < 2) {
+      // One point (or none) is not a trend -- say so rather than draw a
+      // line implying history that doesn't exist.
+      body.innerHTML =
+        '<div class="empty-state"><div class="empty-state-title">Not enough historical audit data</div>' +
+        '<p class="empty-state-desc">' +
+        (data.score_trend.length === 1
+          ? 'Only one completed audit so far. Run additional audits to see security trends.'
+          : 'Run additional audits to see security trends.') +
+        '</p></div>';
+      return;
+    }
+    await ensureChartJsLoaded();
+    const canvas = document.getElementById('trend-chart');
+    const existing = window.Chart.getChart(canvas);
+    if (existing) existing.destroy();
+    new window.Chart(canvas, {
+      type: 'line',
+      data: {
+        labels: data.score_trend.map((p) => p.label),
+        datasets: [{
+          label: 'Security Score', data: data.score_trend.map((p) => p.score),
+          borderColor: cssVar('--signal') || '#4fd1a5', backgroundColor: 'transparent', tension: 0.3, pointRadius: 3,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          y: { min: 0, max: 100, ticks: { color: cssVar('--text-dim') }, grid: { color: cssVar('--line-soft') } },
+          x: { ticks: { color: cssVar('--text-dim'), maxRotation: 0, autoSkip: true }, grid: { display: false } },
+        },
+        plugins: { legend: { display: false } },
+      },
+    });
+  }
+
+  function renderCompliance(data) {
+    const body = document.getElementById('compliance-body');
+    if (!data.compliance.length) {
+      body.innerHTML = '<div class="empty-state">No compliance results yet.</div>';
+      return;
+    }
+    body.innerHTML = data.compliance.map((c) =>
+      '<div class="sec-bar-row" style="cursor:default;">' +
+      '<span class="sec-bar-label" title="' + escapeHtml(c.framework) + '">' + escapeHtml(c.framework) + '</span>' +
+      '<span class="sec-bar-track"><span class="sec-bar-fill" style="width:' + Math.max(2, c.percentage) + '%;background:' + scoreColorVar(c.percentage) + ';"></span></span>' +
+      '<span class="sec-bar-value cell-mono">' + c.percentage + '%</span></div>' +
+      '<div class="content-sub" style="margin:-6px 0 10px 0;font-size:11px;">' +
+      c.passed + ' passed · ' + c.failed + ' failed' + (c.manual_review ? ' · ' + c.manual_review + ' manual review' : '') +
+      '</div>'
+    ).join('');
+  }
+
+  function renderRiskyDevices(data) {
+    const body = document.getElementById('risky-devices-body');
+    if (!data.risky_devices.length) {
+      body.innerHTML = '<div class="empty-state">No audited devices yet.</div>';
+      return;
+    }
+    body.innerHTML =
+      '<table class="data-table"><thead><tr><th>Device</th><th>Score</th><th>Critical</th><th>High</th><th>Medium</th><th>Status</th></tr></thead><tbody>' +
+      data.risky_devices.map((d) =>
+        '<tr><td>' +
+        (d.device_id ? '<a href="/security/devices/' + d.device_id + '">' + escapeHtml(d.device_name) + '</a>' : escapeHtml(d.device_name)) +
+        '</td><td><span class="sec-inline-bar"><span class="sec-inline-bar-fill" style="width:' +
+        (d.score != null ? Math.max(2, d.score) : 0) + '%;background:' + scoreColorVar(d.score) + ';"></span></span>' +
+        '<span class="cell-mono" style="margin-left:6px;">' + (d.score != null ? d.score : '—') + '</span></td>' +
+        '<td class="cell-mono">' + d.critical + '</td><td class="cell-mono">' + d.high + '</td><td class="cell-mono">' + d.medium + '</td>' +
+        '<td>' + escapeHtml(d.risk_level || '—') + '</td></tr>'
+      ).join('') +
+      '</tbody></table>';
+  }
+
+  function renderTopRisks(data) {
+    const body = document.getElementById('top-risks-body');
+    if (!data.top_risks.length) {
+      body.innerHTML = '<div class="empty-state">No failing findings — nothing to flag.</div>';
+      return;
+    }
+    body.innerHTML = data.top_risks.map((r) =>
+      '<div class="sec-risk-card"><div class="sec-risk-head">' +
+      '<span class="badge sec-sev-badge" style="border-color:' + severityColor(r.severity) + ';color:' + severityColor(r.severity) + ';">' +
+      escapeHtml((SEVERITY_META[r.severity] || {}).label || r.severity) + '</span>' +
+      '<span class="content-sub">' + escapeHtml(r.device_name) + '</span></div>' +
+      '<div class="sec-risk-title">' + escapeHtml(r.title) + '</div>' +
+      '<div class="content-sub" style="font-size:11.5px;">' + escapeHtml(r.domain) + '</div></div>'
+    ).join('');
+  }
+
+  function heatCellClass(score) {
+    if (score >= 85) return 'is-signal';
+    if (score >= 60) return 'is-amber';
+    return 'is-red';
+  }
+
+  function renderHeatmap(data) {
+    const body = document.getElementById('heatmap-body');
+    if (!data.heatmap.length) {
+      body.innerHTML = '<div class="empty-state">No domain scores yet — run an audit to populate the heatmap.</div>';
+      return;
+    }
+    const byDevice = new Map();
+    data.heatmap.forEach((cell) => {
+      if (!byDevice.has(cell.device_name)) byDevice.set(cell.device_name, { device_id: cell.device_id, cells: new Map() });
+      byDevice.get(cell.device_name).cells.set(cell.domain, cell);
+    });
+    const domains = data.heatmap_domains;
+    const head = '<tr><th>Device</th>' + domains.map((d) => '<th title="' + escapeHtml(d) + '">' + escapeHtml(d) + '</th>').join('') + '</tr>';
+    const rows = [...byDevice.entries()].map(([name, info]) => {
+      const cells = domains.map((domain) => {
+        const cell = info.cells.get(domain);
+        if (!cell) return '<td class="sec-heat-cell is-na" title="Not applicable">—</td>';
+        const title = name + ' · ' + domain + ' · score ' + cell.score + ' · ' + cell.fail_count + ' failing · ' + cell.manual_count + ' manual review';
+        return '<td class="sec-heat-cell ' + heatCellClass(cell.score) + '" title="' + escapeHtml(title) + '"><span class="cell-mono">' + Math.round(cell.score) + '</span></td>';
+      }).join('');
+      const label = info.device_id ? '<a href="/security/devices/' + info.device_id + '">' + escapeHtml(name) + '</a>' : escapeHtml(name);
+      return '<tr><td>' + label + '</td>' + cells + '</tr>';
+    }).join('');
+    body.innerHTML = '<table class="data-table sec-heatmap"><thead>' + head + '</thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  async function loadDashboard() {
     let res;
     try {
-      res = await AAAPlatform.authedFetch('/api/security/overview');
+      res = await AAAPlatform.authedFetch('/api/security/dashboard');
     } catch (err) {
-      // A genuine network-level failure (fetch() itself rejects, e.g.
-      // the connection dropped) -- distinct from a resolved
-      // non-2xx response, which the branch below handles.
+      // A genuine network-level failure (fetch() itself rejects) --
+      // distinct from a resolved non-2xx, handled just below.
       res = null;
     }
     if (!res || !res.ok) {
-      let message = 'Could not load the security overview.';
-      if (res && res.status === 403) message = "Your role doesn't have permission to view Security Center.";
-      document.querySelectorAll('#overview-grid .panel-body').forEach((el) => { el.textContent = '—'; el.className = 'panel-body'; });
-      document.getElementById('recent-audits-table-wrap').innerHTML = `<div class="empty-state">${message}</div>`;
+      const message = res && res.status === 403
+        ? "Your role doesn't have permission to view Security Center."
+        : 'Could not load the security dashboard.';
+      ['domain-scores-body', 'compliance-body', 'risky-devices-body', 'top-risks-body', 'heatmap-body', 'trend-body'].forEach((id) => {
+        document.getElementById(id).innerHTML = '<div class="empty-state">' + message + '</div>';
+      });
       return;
     }
     const data = await res.json();
 
-    document.getElementById('overview-score').textContent = data.average_score != null ? `${data.average_score} / 100` : '—';
-    document.getElementById('overview-score-rail').className = `rail ${scoreRail(data.average_score)}`;
-    document.getElementById('overview-devices').textContent = data.devices_audited;
-    document.getElementById('overview-critical').textContent = data.critical_findings;
-    document.getElementById('overview-high').textContent = data.high_findings;
-    document.getElementById('overview-medium').textContent = data.medium_findings;
-    document.getElementById('overview-manual').textContent = data.manual_review_findings;
-
-    const wrap = document.getElementById('recent-audits-table-wrap');
-    if (!data.recent_audits.length) {
-      wrap.innerHTML = '<div class="empty-state">No audits run yet — use the form above to run your first one.</div>';
-      return;
-    }
-    wrap.innerHTML = `
-      <table class="data-table">
-        <thead><tr><th>Device</th><th>Source</th><th>Status</th><th>Score</th><th>Started</th></tr></thead>
-        <tbody>
-          ${data.recent_audits.map(a => `
-            <tr>
-              <td>${escapeHtml(a.device_name)}</td>
-              <td>${escapeHtml(a.source)}</td>
-              <td>${escapeHtml(a.status)}</td>
-              <td>${a.overall_score != null ? a.overall_score : '—'}</td>
-              <td>${new Date(a.started_at).toLocaleString()}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
+    renderGauge(data.average_score, data.previous_average_score);
+    renderKpis(data);
+    renderDomainScores(data);
+    renderCompliance(data);
+    renderRiskyDevices(data);
+    renderTopRisks(data);
+    renderHeatmap(data);
+    await renderSeverityChart(data);
+    await renderTrend(data);
   }
 
-  function renderAuditResult(result) {
-    const panel = document.getElementById('audit-result-panel');
-    panel.hidden = false;
-
-    const summary = document.getElementById('audit-result-summary');
-    summary.innerHTML = `
-      <div style="display:flex;gap:24px;align-items:baseline;flex-wrap:wrap;">
-        <div><strong style="font-size:22px;">${result.overall_score != null ? result.overall_score : '—'}</strong> / 100</div>
-        <div class="content-sub">${escapeHtml(result.risk_level || '')} risk</div>
-        <div class="content-sub">${escapeHtml(result.device_name)}</div>
-      </div>
-    `;
-
-    const allFindings = [...result.correlation_findings, ...result.findings.filter(f => f.status === 'fail')];
-    const findingsBox = document.getElementById('audit-result-findings');
-    if (!allFindings.length) {
-      findingsBox.innerHTML = '<div class="empty-state">No failing or correlated findings.</div>';
-      return;
-    }
-    findingsBox.innerHTML = `
-      <table class="data-table">
-        <thead><tr><th>Severity</th><th>Domain</th><th>Finding</th><th>Recommendation</th></tr></thead>
-        <tbody>
-          ${allFindings.map(f => `
-            <tr>
-              <td><span class="rail ${severityRail(f.severity)}" style="display:inline-block;width:10px;height:10px;border-radius:50%;"></span> ${escapeHtml(f.severity)}</td>
-              <td>${escapeHtml(f.domain)}</td>
-              <td>${escapeHtml(f.title)}</td>
-              <td class="content-sub">${escapeHtml(f.recommendation || f.why || '')}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
+  function openAuditModal() {
+    document.getElementById('audit-error').hidden = true;
+    document.getElementById('audit-modal-backdrop').hidden = false;
   }
+  function closeAuditModal() {
+    document.getElementById('audit-modal-backdrop').hidden = true;
+  }
+  document.getElementById('open-audit-modal-btn').addEventListener('click', openAuditModal);
+  document.getElementById('audit-cancel-btn').addEventListener('click', closeAuditModal);
+  document.getElementById('audit-modal-close-btn').addEventListener('click', closeAuditModal);
+  document.getElementById('audit-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'audit-modal-backdrop') closeAuditModal();
+  });
 
+  // Submit logic preserved verbatim from the previous Overview -- the
+  // same endpoint, payload and error handling, just relocated into the
+  // modal so the dashboard isn't dominated by a permanent textarea.
   document.getElementById('run-audit-btn').addEventListener('click', async () => {
     const errorBox = document.getElementById('audit-error');
     errorBox.hidden = true;
@@ -195,7 +496,6 @@
 
     const btn = document.getElementById('run-audit-btn');
     btn.disabled = true;
-    btn.textContent = 'Running audit…';
 
     const res = await AAAPlatform.authedFetch('/api/security/audit/upload', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -203,7 +503,6 @@
     });
 
     btn.disabled = false;
-    btn.textContent = 'Run Audit';
 
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
@@ -213,12 +512,14 @@
     }
 
     const result = await res.json();
-    renderAuditResult(result);
-    AAAPlatform.toast(`Audit complete — score ${result.overall_score != null ? result.overall_score : '—'}/100.`);
-    loadOverview();
+    closeAuditModal();
+    document.getElementById('audit-config-text').value = '';
+    document.getElementById('audit-device-name').value = '';
+    AAAPlatform.toast('Audit complete — score ' + (result.overall_score != null ? result.overall_score : '—') + '/100.');
+    loadDashboard();
   });
 
-  loadOverview();
+  loadDashboard();
 })();
 </script>
 {% endblock %}

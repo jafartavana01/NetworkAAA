@@ -10,8 +10,10 @@
     <p class="content-sub">Every finding from each device's own most recent audit — fleet-wide, filterable.</p>
   </div>
 
+  <div class="status-card-grid" id="findings-summary" style="margin-bottom:16px;"></div>
+
   <div class="toolbar" style="gap:12px;margin-bottom:16px;flex-wrap:wrap;">
-    <label class="field" style="min-width:160px;">
+    <label class="field" style="min-width:170px;">
       <span class="field-label">Severity</span>
       <div class="field-icon-wrap">
         <span class="field-icon">{{ icons.icon('alert-triangle', 14) }}</span>
@@ -25,7 +27,7 @@
         </select>
       </div>
     </label>
-    <label class="field" style="min-width:160px;">
+    <label class="field" style="min-width:170px;">
       <span class="field-label">Status</span>
       <div class="field-icon-wrap">
         <span class="field-icon">{{ icons.icon('check', 14) }}</span>
@@ -38,7 +40,7 @@
         </select>
       </div>
     </label>
-    <label class="field" style="min-width:220px;">
+    <label class="field" style="min-width:200px;">
       <span class="field-label">Device</span>
       <div class="field-icon-wrap">
         <span class="field-icon">{{ icons.icon('server', 14) }}</span>
@@ -47,103 +49,326 @@
         </select>
       </div>
     </label>
+    <label class="field" style="min-width:200px;">
+      <span class="field-label">Domain</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('folder', 14) }}</span>
+        <select id="filter-domain">
+          <option value="">All domains</option>
+        </select>
+      </div>
+    </label>
+    <label class="field" style="min-width:200px;flex:1;">
+      <span class="field-label">Search</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+        <input type="text" id="filter-search" placeholder="Search findings…">
+      </div>
+    </label>
   </div>
 
   <div id="findings-table-wrap">
     <div class="empty-state">Loading…</div>
   </div>
+
+  <div class="toolbar" id="findings-pager" style="margin-top:12px;justify-content:space-between;" hidden>
+    <span class="content-sub" id="pager-summary"></span>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <button type="button" class="btn-secondary btn-small" id="pager-prev">Previous</button>
+      <span class="content-sub cell-mono" id="pager-position"></span>
+      <button type="button" class="btn-secondary btn-small" id="pager-next">Next</button>
+      <select id="pager-size" style="width:auto;">
+        <option value="25">25 / page</option>
+        <option value="50">50 / page</option>
+        <option value="100">100 / page</option>
+      </select>
+    </div>
+  </div>
 </main>
+
+<div class="drawer-backdrop" id="finding-drawer-backdrop" hidden>
+  <aside class="drawer" id="finding-drawer" role="dialog" aria-labelledby="drawer-title">
+    <button type="button" class="modal-close-btn" id="drawer-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <div id="drawer-body"></div>
+  </aside>
+</div>
 {% endblock %}
 
 {% block view_scripts %}
 <script>
 (() => {
+  // Pre-rendered server-side via Jinja (see the top-of-file macro
+  // import) since this markup is built client-side.
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const ICON_EYE = '{{ icons.icon("eye", 16) }}';
+  const ICON_LIST = '{{ icons.icon("list-checks", 16) }}';
+
   function escapeHtml(s) {
     const div = document.createElement('div');
     div.textContent = s == null ? '' : String(s);
     return div.innerHTML;
   }
-  function severityRail(sev) {
-    if (sev === 'critical' || sev === 'high') return 'rail-red';
-    if (sev === 'medium') return 'rail-amber';
-    return 'rail-dim';
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
 
-  async function loadDeviceOptions() {
-    let res;
-    try {
-      res = await AAAPlatform.authedFetch('/api/security/devices');
-    } catch (err) {
+  // The exact values the engine's own Severity/Status enums emit.
+  const SEVERITY_META = {
+    critical: { label: 'Critical', varName: '--red' },
+    high:     { label: 'High',     varName: '--orange' },
+    medium:   { label: 'Medium',   varName: '--amber' },
+    low:      { label: 'Low',      varName: '--text-dim' },
+    info:     { label: 'Info',     varName: '--text-faint' },
+  };
+  const STATUS_LABEL = {
+    fail: 'Fail', pass: 'Pass', manual_review: 'Manual Review', na: 'Not Applicable', warn: 'Partial',
+  };
+
+  function severityColor(sev) {
+    const meta = SEVERITY_META[sev];
+    return (meta && cssVar(meta.varName)) || cssVar('--text-faint') || '#57616c';
+  }
+  function severityLabel(sev) {
+    return (SEVERITY_META[sev] || {}).label || sev;
+  }
+
+  let allFindings = [];
+  let filtered = [];
+  let page = 1;
+  let pageSize = 25;
+
+  // --- Deep links from the Overview -------------------------------
+  // The Overview's donut, legend, KPI cards and domain bars all link
+  // here with query parameters (?severity=, ?status=, ?domain=,
+  // ?device_id=). Reading them here is what makes those links
+  // actually filter instead of just landing on an unfiltered list.
+  function applyQueryParams() {
+    const params = new URLSearchParams(window.location.search);
+    const severity = params.get('severity');
+    const status = params.get('status');
+    const domain = params.get('domain');
+    const deviceId = params.get('device_id');
+    if (severity) document.getElementById('filter-severity').value = severity;
+    if (status) document.getElementById('filter-status').value = status;
+    return { domain, deviceId };
+  }
+
+  function populateSelect(selectId, values, selectedValue) {
+    const select = document.getElementById(selectId);
+    const existing = select.querySelector('option[value=""]').outerHTML;
+    select.innerHTML = existing + values.map((v) =>
+      '<option value="' + escapeHtml(v.value) + '">' + escapeHtml(v.label) + '</option>'
+    ).join('');
+    if (selectedValue && values.some((v) => v.value === selectedValue)) select.value = selectedValue;
+  }
+
+  function renderSummary() {
+    const counts = { critical: 0, high: 0, medium: 0, manual_review: 0 };
+    allFindings.forEach((f) => {
+      if (f.status === 'manual_review') counts.manual_review += 1;
+      if (f.status !== 'fail') return;
+      if (counts[f.severity] !== undefined) counts[f.severity] += 1;
+    });
+    const card = (icon, label, value, cls) =>
+      '<div class="status-card ' + cls + '"><div class="status-card-icon">' + icon + '</div>' +
+      '<div class="status-card-body"><div class="status-card-title">' + label + '</div>' +
+      '<div class="status-card-value">' + value + '</div></div></div>';
+    document.getElementById('findings-summary').innerHTML = [
+      card(ICON_LIST, 'Total Findings', allFindings.length, ''),
+      card(ICON_ALERT, 'Critical', counts.critical, 'is-red'),
+      card(ICON_ALERT, 'High', counts.high, 'is-red'),
+      card(ICON_ALERT, 'Medium', counts.medium, 'is-amber'),
+      card(ICON_EYE, 'Manual Review', counts.manual_review, ''),
+    ].join('');
+  }
+
+  function applyFilters() {
+    const severity = document.getElementById('filter-severity').value;
+    const status = document.getElementById('filter-status').value;
+    const deviceId = document.getElementById('filter-device').value;
+    const domain = document.getElementById('filter-domain').value;
+    const search = document.getElementById('filter-search').value.trim().toLowerCase();
+
+    filtered = allFindings.filter((f) => {
+      if (severity && f.severity !== severity) return false;
+      if (status && f.status !== status) return false;
+      if (deviceId && f.device_id !== deviceId) return false;
+      if (domain && f.domain !== domain) return false;
+      if (search) {
+        const haystack = (f.title + ' ' + f.check_id + ' ' + f.domain + ' ' + f.device_name).toLowerCase();
+        if (!haystack.includes(search)) return false;
+      }
+      return true;
+    });
+    page = 1;
+    renderTable();
+  }
+
+  function renderTable() {
+    const wrap = document.getElementById('findings-table-wrap');
+    const pager = document.getElementById('findings-pager');
+
+    if (!filtered.length) {
+      pager.hidden = true;
+      wrap.innerHTML = allFindings.length
+        ? '<div class="empty-state">No findings match these filters.</div>'
+        : '<div class="empty-state"><div class="empty-state-title">No security findings</div>' +
+          '<p class="empty-state-desc">No audits have been run yet, or the latest audits identified no issues.</p></div>';
       return;
     }
-    if (!res.ok) return;
-    const devices = await res.json();
-    const select = document.getElementById('filter-device');
-    devices.forEach((d) => {
-      const opt = document.createElement('option');
-      opt.value = d.id;
-      opt.textContent = d.name;
-      select.appendChild(opt);
-    });
+
+    const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+    if (page > totalPages) page = totalPages;
+    const start = (page - 1) * pageSize;
+    const rows = filtered.slice(start, start + pageSize);
+
+    // Only the row's identifying columns live in the table -- the long
+    // recommendation/evidence text goes in the drawer instead, per the
+    // redesign's own rule against giant text blocks in table cells.
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr>' +
+      '<th>Severity</th><th>Status</th><th>Device</th><th>Domain</th><th>Finding</th><th>Check</th><th></th>' +
+      '</tr></thead><tbody>' +
+      rows.map((f) => {
+        const idx = allFindings.indexOf(f);
+        return '<tr class="sec-finding-row" data-finding-index="' + idx + '" tabindex="0" role="button">' +
+          '<td><span class="badge sec-sev-badge" style="border-color:' + severityColor(f.severity) + ';color:' + severityColor(f.severity) + ';">' +
+          escapeHtml(severityLabel(f.severity)) + '</span></td>' +
+          '<td>' + escapeHtml(STATUS_LABEL[f.status] || f.status) + '</td>' +
+          '<td>' + escapeHtml(f.device_name) + '</td>' +
+          '<td class="content-sub">' + escapeHtml(f.domain) + '</td>' +
+          '<td>' + escapeHtml(f.title) + '</td>' +
+          '<td class="cell-mono">' + escapeHtml(f.check_id) + '</td>' +
+          '<td class="cell-actions"><span class="content-sub">Details</span></td>' +
+          '</tr>';
+      }).join('') +
+      '</tbody></table>';
+
+    pager.hidden = false;
+    document.getElementById('pager-summary').textContent =
+      'Showing ' + (start + 1) + '–' + Math.min(start + pageSize, filtered.length) + ' of ' + filtered.length + ' findings';
+    document.getElementById('pager-position').textContent = page + ' / ' + totalPages;
+    document.getElementById('pager-prev').disabled = page <= 1;
+    document.getElementById('pager-next').disabled = page >= totalPages;
   }
 
+  // --- Finding detail drawer ---------------------------------------
+  function section(title, html) {
+    if (!html) return '';
+    return '<div class="drawer-section"><div class="drawer-section-title">' + title + '</div>' + html + '</div>';
+  }
+
+  function openDrawer(finding) {
+    const complianceEntries = Object.entries(finding.compliance_refs || {});
+    const evidenceHtml = (finding.evidence && finding.evidence.length)
+      ? '<div class="diff-view">' + finding.evidence.map((e) => escapeHtml(String(e))).join('\n') + '</div>'
+      : '';
+
+    document.getElementById('drawer-body').innerHTML =
+      '<div class="drawer-head">' +
+      '<span class="badge sec-sev-badge" style="border-color:' + severityColor(finding.severity) + ';color:' + severityColor(finding.severity) + ';">' +
+      escapeHtml(severityLabel(finding.severity)) + '</span>' +
+      '<h2 id="drawer-title" style="margin:8px 0 0;font-size:17px;">' + escapeHtml(finding.title) + '</h2>' +
+      '</div>' +
+      '<div class="drawer-meta">' +
+      '<div class="readout"><span class="readout-k">device</span><span class="readout-v">' + escapeHtml(finding.device_name) + '</span></div>' +
+      '<div class="readout"><span class="readout-k">domain</span><span class="readout-v">' + escapeHtml(finding.domain) + '</span></div>' +
+      '<div class="readout"><span class="readout-k">status</span><span class="readout-v">' + escapeHtml(STATUS_LABEL[finding.status] || finding.status) + '</span></div>' +
+      '<div class="readout"><span class="readout-k">check</span><span class="readout-v cell-mono">' + escapeHtml(finding.check_id) + '</span></div>' +
+      (finding.interface_name ? '<div class="readout"><span class="readout-k">interface</span><span class="readout-v cell-mono">' + escapeHtml(finding.interface_name) + '</span></div>' : '') +
+      '<div class="readout"><span class="readout-k">audited</span><span class="readout-v">' + new Date(finding.audited_at).toLocaleString() + '</span></div>' +
+      '</div>' +
+      section('Why this matters', finding.why ? '<p class="drawer-text">' + escapeHtml(finding.why) + '</p>' : '') +
+      section('Risk', finding.risk ? '<p class="drawer-text">' + escapeHtml(finding.risk) + '</p>' : '') +
+      section('Detail', finding.detail ? '<p class="drawer-text">' + escapeHtml(finding.detail) + '</p>' : '') +
+      section(escapeHtml(finding.evidence_label || 'Evidence'), evidenceHtml) +
+      section('Recommendation', finding.recommendation ? '<p class="drawer-text">' + escapeHtml(finding.recommendation) + '</p>' : '') +
+      section('Proposed fix', finding.fix_command ? '<div class="diff-view">' + escapeHtml(finding.fix_command) + '</div>' : '') +
+      section('Compliance', complianceEntries.length
+        ? '<div>' + complianceEntries.map(([framework, controls]) =>
+            '<div class="readout"><span class="readout-k">' + escapeHtml(framework) + '</span>' +
+            '<span class="readout-v cell-mono">' + escapeHtml(Array.isArray(controls) ? controls.join(', ') : String(controls)) + '</span></div>'
+          ).join('') + '</div>'
+        : '') +
+      '<div style="margin-top:18px;display:flex;gap:8px;flex-wrap:wrap;">' +
+      (finding.device_id ? '<a href="/security/devices/' + finding.device_id + '" class="btn-secondary btn-small">View Device</a>' : '') +
+      '</div>';
+
+    document.getElementById('finding-drawer-backdrop').hidden = false;
+  }
+
+  function closeDrawer() {
+    document.getElementById('finding-drawer-backdrop').hidden = true;
+  }
+
+  document.getElementById('drawer-close-btn').addEventListener('click', closeDrawer);
+  document.getElementById('finding-drawer-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'finding-drawer-backdrop') closeDrawer();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.getElementById('finding-drawer-backdrop').hidden) closeDrawer();
+  });
+
+  // Delegated so it survives every re-render of the table body without
+  // needing to re-bind a listener per row.
+  document.getElementById('findings-table-wrap').addEventListener('click', (e) => {
+    const row = e.target.closest('.sec-finding-row');
+    if (!row) return;
+    const finding = allFindings[Number(row.dataset.findingIndex)];
+    if (finding) openDrawer(finding);
+  });
+  document.getElementById('findings-table-wrap').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const row = e.target.closest('.sec-finding-row');
+    if (!row) return;
+    e.preventDefault();
+    const finding = allFindings[Number(row.dataset.findingIndex)];
+    if (finding) openDrawer(finding);
+  });
+
+  ['filter-severity', 'filter-status', 'filter-device', 'filter-domain'].forEach((id) => {
+    document.getElementById(id).addEventListener('change', applyFilters);
+  });
+  document.getElementById('filter-search').addEventListener('input', applyFilters);
+  document.getElementById('pager-prev').addEventListener('click', () => { if (page > 1) { page -= 1; renderTable(); } });
+  document.getElementById('pager-next').addEventListener('click', () => { page += 1; renderTable(); });
+  document.getElementById('pager-size').addEventListener('change', (e) => {
+    pageSize = Number(e.target.value);
+    page = 1;
+    renderTable();
+  });
+
   async function loadFindings() {
-    const wrap = document.getElementById('findings-table-wrap');
-    wrap.innerHTML = '<div class="empty-state">Loading…</div>';
-
-    const params = new URLSearchParams();
-    const severity = document.getElementById('filter-severity').value;
-    const statusFilter = document.getElementById('filter-status').value;
-    const deviceId = document.getElementById('filter-device').value;
-    if (severity) params.set('severity', severity);
-    if (statusFilter) params.set('status_filter', statusFilter);
-    if (deviceId) params.set('device_id', deviceId);
-
+    const deepLink = applyQueryParams();
     let res;
     try {
-      res = await AAAPlatform.authedFetch(`/api/security/findings?${params.toString()}`);
+      res = await AAAPlatform.authedFetch('/api/security/findings');
     } catch (err) {
       res = null;
     }
     if (!res || !res.ok) {
-      const message = res && res.status === 403
-        ? "Your role doesn't have permission to view Security Center."
-        : 'Could not load findings.';
-      wrap.innerHTML = `<div class="empty-state">${message}</div>`;
+      document.getElementById('findings-table-wrap').innerHTML =
+        '<div class="empty-state">' + (res && res.status === 403
+          ? "Your role doesn't have permission to view Security Center."
+          : 'Could not load findings.') + '</div>';
       return;
     }
+    allFindings = await res.json();
 
-    const findings = await res.json();
-    if (!findings.length) {
-      wrap.innerHTML = '<div class="empty-state">No findings match these filters.</div>';
-      return;
-    }
+    const devices = [...new Map(allFindings.filter((f) => f.device_id)
+      .map((f) => [f.device_id, { value: f.device_id, label: f.device_name }])).values()]
+      .sort((a, b) => a.label.localeCompare(b.label));
+    const domains = [...new Set(allFindings.map((f) => f.domain))].sort()
+      .map((d) => ({ value: d, label: d }));
 
-    wrap.innerHTML = `
-      <table class="data-table">
-        <thead><tr><th>Severity</th><th>Status</th><th>Device</th><th>Domain</th><th>Finding</th><th>Recommendation</th><th>Audited</th></tr></thead>
-        <tbody>
-          ${findings.map(f => `
-            <tr>
-              <td><span class="rail ${severityRail(f.severity)}" style="display:inline-block;width:10px;height:10px;border-radius:50%;"></span> ${escapeHtml(f.severity)}</td>
-              <td>${escapeHtml(f.status)}</td>
-              <td><a href="/security/devices/${f.device_id}">${escapeHtml(f.device_name)}</a></td>
-              <td>${escapeHtml(f.domain)}${f.interface_name ? ' — ' + escapeHtml(f.interface_name) : ''}</td>
-              <td>${escapeHtml(f.title)}</td>
-              <td class="content-sub">${escapeHtml(f.recommendation || '')}</td>
-              <td class="content-sub">${new Date(f.audited_at).toLocaleDateString()}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
+    populateSelect('filter-device', devices, deepLink.deviceId);
+    populateSelect('filter-domain', domains, deepLink.domain);
+
+    renderSummary();
+    applyFilters();
   }
 
-  document.getElementById('filter-severity').addEventListener('change', loadFindings);
-  document.getElementById('filter-status').addEventListener('change', loadFindings);
-  document.getElementById('filter-device').addEventListener('change', loadFindings);
-
-  loadDeviceOptions();
   loadFindings();
 })();
 </script>
