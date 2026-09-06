@@ -66,6 +66,8 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full technical histor
 ---
 
 ## Why NetOpsGuard Exists
+<img width="1431" height="845" alt="image" src="https://github.com/user-attachments/assets/2456877c-9a51-4c07-9fdc-993dd6681396" />
+
 
 `tac_plus-ng` (from [Marc Huber's event-driven-servers](https://github.com/MarcJHuber/event-driven-servers)) is a capable, actively maintained TACACS+ daemon. However, it's traditionally configured by hand-editing a text file that uses its own domain-specific scripting language.
 
