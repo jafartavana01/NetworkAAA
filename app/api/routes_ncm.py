@@ -29,11 +29,12 @@ from ..models.device import NetworkDevice
 from ..models.device_group import DeviceGroup
 from ..models.ncm import NcmBackupJob, NcmBackupJobTarget, NcmBackupSchedule, NcmConfiguration
 from ..schemas.ncm import (
+    CompareCategoryOut, CompareCellOut, CompareDeviceOut, CompareRequest, CompareResultOut,
     NcmBackupRequest, NcmBackupResultOut, NcmConfigurationDetailOut, NcmConfigurationSummaryOut,
     NcmDeviceStatusOut, NcmDiffLineOut, NcmDiffOut, NcmDiffRequest, NcmJobDetailOut, NcmJobSummaryOut,
     NcmJobTargetOut, NcmOverviewOut, NcmRecentChangeOut, NcmScheduleOut, NcmScheduleRequest,
 )
-from ..services import ncm_archive, ncm_backup
+from ..services import ncm_archive, ncm_backup, ncm_compare
 from .deps import require_permission, verify_csrf
 
 router = APIRouter(prefix="/api/ncm", tags=["ncm"])
@@ -524,3 +525,85 @@ def delete_schedule(
     db.delete(s)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/compare", response_model=CompareResultOut, dependencies=[Depends(verify_csrf)])
+def compare_configurations(
+    payload: CompareRequest,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("ncm:diff")),
+):
+    """
+    Compares the LATEST stored snapshot of each selected device.
+
+    Gated on `ncm:diff` -- the same permission the two-version diff
+    uses, since this is the same capability applied across devices.
+
+    Devices with no snapshot are returned in `devices_without_snapshot`
+    rather than dropped: "we have never backed this device up" is a
+    finding an operator needs to see, not an absence to hide. Nothing
+    is retrieved from a device here -- this compares what is already
+    archived, so an unreachable device simply has no newer snapshot
+    rather than failing the comparison.
+    """
+    device_uuids = _parse_uuids(payload.device_ids, "device ids")
+
+    devices = db.query(NetworkDevice).filter(NetworkDevice.id.in_(device_uuids)).all()
+    if not devices:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="None of those devices were found.")
+
+    # Latest snapshot per device, of the requested type, in one query
+    # rather than one per device.
+    rows = (
+        db.query(NcmConfiguration)
+        .filter(
+            NcmConfiguration.device_id.in_(device_uuids),
+            NcmConfiguration.configuration_type == payload.configuration_type,
+        )
+        .order_by(NcmConfiguration.created_at.desc())
+        .all()
+    )
+    latest: dict = {}
+    for c in rows:
+        latest.setdefault(c.device_id, c)
+
+    by_id = {d.id: d for d in devices}
+    inputs = []
+    for device_uuid in device_uuids:
+        d = by_id.get(device_uuid)
+        if not d:
+            continue
+        c = latest.get(device_uuid)
+        inputs.append(ncm_compare.DeviceConfigInput(
+            device_id=str(d.id), device_name=d.name, ip_address=d.ip_address,
+            configuration_id=str(c.id) if c else None,
+            version_number=c.version_number if c else None,
+            created_at=c.created_at if c else None,
+            content=c.configuration_content if c else None,
+        ))
+
+    result = ncm_compare.compare_devices(inputs)
+
+    return CompareResultOut(
+        devices=[CompareDeviceOut(**d) for d in result.devices],
+        categories=[
+            CompareCategoryOut(
+                category=r.category,
+                cells=[CompareCellOut(
+                    device_id=c.device_id, present=c.present,
+                    matches_majority=c.matches_majority, line_count=c.line_count,
+                ) for c in r.cells],
+                matching_devices=r.matching_devices, total_devices=r.total_devices,
+                match_percent=r.match_percent,
+            )
+            for r in result.categories
+        ],
+        comparable_devices=result.comparable_devices,
+        devices_without_snapshot=result.devices_without_snapshot,
+        identical_devices=result.identical_devices,
+        differing_devices=result.differing_devices,
+        consistency_percent=result.consistency_percent,
+        outlier_device_id=result.outlier_device_id,
+        outlier_difference_count=result.outlier_difference_count,
+        baseline_device_id=result.baseline_device_id,
+    )

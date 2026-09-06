@@ -1726,3 +1726,204 @@ project's own `Context`-based rules) yet. No per-device Security
 Score, no Audit grouping of multiple checks into a named suite (that's
 Phase 4), no scheduling, no historical trend view.
 
+
+---
+
+# Network Configuration Management (NCM)
+
+NCM manages the configuration lifecycle of network devices. Phases 1-3
+(Configuration Archive, Configuration Diff, Scheduled Backups) are
+implemented; later phases are designed for but deliberately not built.
+
+## Relationship to the rest of the platform
+
+NCM is a separate domain from AAA, and the separation is structural,
+not just conventional:
+
+```
+Network Operations                 NCM
+      |                             |
+  Command Jobs                 Backup Jobs
+  Command Templates            Config Archive
+  Raw Command Output           Config Diff
+  Assurance Checks             Config Lifecycle
+      |                             |
+      +-------------+---------------+
+                    |
+          Shared SSH execution
+        (network_ops_execution)
+                    |
+                  Device
+```
+
+Command Sets answer *"which commands may this TACACS user run?"*. NCM
+answers *"how is this device's configuration backed up, versioned and
+compared?"*. No NCM table feeds tac_plus-ng configuration compilation,
+authorization policy, or Command Sets.
+
+## Infrastructure reused (not duplicated)
+
+| Capability | Reused from |
+|---|---|
+| SSH connect, shell, paging, prompt, timeouts | `services/network_ops_execution.run_commands_on_device` |
+| Bounded concurrency | `ThreadPoolExecutor`, same pattern as `network_ops_execution.run_job` |
+| Device records and group membership | `models/device.NetworkDevice.device_group_id` |
+| Encrypted credentials | `models/audit_schedule_settings` + `app.security` Fernet helpers |
+| Background scheduling | asyncio loop pattern from `services/scheduled_audit` |
+| RBAC | `services/permissions` catalog |
+| GUI shell, nav, modals, drawers, tables, toasts | existing `app_shell.html` + `app.js` / `app.css` |
+
+NCM contains **no** second SSH implementation, credential vault,
+device table, or grouping mechanism.
+
+## Data model
+
+* **`NcmConfiguration`** — one immutable snapshot. Never updated or
+  overwritten. Carries `version_number` (per device **and** per
+  `configuration_type`), `sha256`, `size_bytes`, `source`,
+  `created_by`, `job_id`.
+* **`NcmBackupJob`** — one execution (manual or scheduled) with a
+  short `display_number`.
+* **`NcmBackupJobTarget`** — per-device, per-type outcome. Written on
+  **every** attempt, including when nothing changed.
+* **`NcmBackupSchedule`** — a recurring backup, persisted in
+  PostgreSQL so it survives restarts.
+
+`configuration_type` is a free string, not an enum, so `candidate`,
+`committed`, `rollback` and `operational` can be added later without a
+migration.
+
+## Backup lifecycle
+
+```
+resolve targets (devices + groups, de-duplicated)
+        |
+   driver.get_configuration()  -> shared SSH layer
+        |
+   sha256(content) vs device's latest snapshot of same type
+        |
+   +--- differs ----> new NcmConfiguration row  (changed = true)
+   |
+   +--- identical --> no new row                (changed = false)
+        |
+   NcmBackupJobTarget written either way
+        |
+   job status rolled up: completed | partial_success | failed
+```
+
+### Deduplication
+
+A snapshot is stored only when its SHA-256 differs from that device's
+**most recent** snapshot of the same configuration type. Comparison is
+against the latest only, not all history: a configuration that changes
+and then reverts is a real event that must not be silently swallowed.
+
+Backup history and configuration history are deliberately separate. A
+job target row is always written, so "we checked and it was unchanged"
+is never lost just because no new version was created.
+
+### Failure isolation
+
+Each device is retrieved in its own worker thread with its own
+try/except. One unreachable device produces one failed target, not a
+failed fleet job. Connection failure and retrieval failure are
+recorded separately (`connection_ok`, `retrieval_ok`), because
+"couldn't reach it" and "connected but got nothing back" need
+different fixes.
+
+A device is counted as failed if **any** requested configuration type
+failed for it — reporting it as successful when its startup-config
+could not be retrieved would overstate coverage.
+
+## Driver abstraction
+
+`services/ncm_drivers.NetworkDeviceDriver` owns only the
+vendor-specific part: which command retrieves which configuration, and
+output cleanup. Connection handling stays in the shared SSH service.
+
+Only `CiscoIOSDriver` is implemented. Empty subclasses for vendors
+that cannot be exercised here would be fake structure, not
+architecture. A driver simply omits a configuration type it does not
+support, which is how "not every device has both running and startup"
+is represented without a capability flag.
+
+Unknown vendors fall back to the Cisco IOS driver — the honest default
+for a platform whose device model and audit engine are IOS/IOS-XE
+oriented. A genuinely incompatible device then fails with a real error
+from the device itself rather than a guess made in code.
+
+## Configuration diff
+
+Reliable **text** diff (`difflib.unified_diff`). No semantic network
+meaning is claimed, because this implementation cannot prove it; a
+future vendor-aware differ can replace the function without any caller
+changing.
+
+"Changed" is deliberately **not** reported as a third count: in a
+line-based diff a modification genuinely is a removal plus an
+addition, and pairing them up would be a heuristic presented as fact.
+The UI shows added, removed, and the diff itself.
+
+## Scheduling
+
+A plain asyncio background task started from `app.main`'s startup
+event, polling every 5 minutes — the same approach already used for
+scheduled security audits. No Celery, Redis, RabbitMQ or container
+runtime is introduced; the platform targets a native Ubuntu install
+and stays operationally simple.
+
+Schedules and their `last_run_at` live in PostgreSQL, so they survive
+application restarts and a restart mid-day does not re-run a schedule
+that already completed. The backup itself always runs via
+`asyncio.to_thread`, so a slow fleet backup cannot stall the web
+server.
+
+If schedules are due but no service account is configured, the loop
+logs a warning rather than silently doing nothing.
+
+## Security
+
+* Credentials are never stored in, returned by, logged by, or
+  interpolated into any NCM table, response, job record or error
+  message. NCM reads the existing encrypted service account and passes
+  it as a parameter only.
+* Every endpoint carries a `require_permission` dependency; every
+  mutating endpoint carries `verify_csrf`.
+* Download filenames are built by stripping the admin-supplied device
+  name to alphanumerics, hyphens and underscores, so a device name
+  cannot inject header content or path separators.
+* List responses never include `configuration_content`.
+* NCM executes only predefined driver commands. There is no path for
+  arbitrary shell or device commands through NCM.
+
+## RBAC
+
+`ncm:view`, `ncm:backup`, `ncm:download`, `ncm:diff`, `ncm:schedule`,
+`ncm:delete`. Split finely because reading an archive, taking a
+configuration off the platform, opening an SSH session and deleting
+history are different levels of trust. **Not** auto-granted to
+existing roles — a new subsystem must not silently widen anyone's
+access.
+
+Reserved for later phases: `ncm:deploy`, `ncm:approve`,
+`ncm:restore`, `ncm:templates`, `ncm:settings`.
+
+## Current limitations
+
+* Cisco IOS/IOS-XE only; other vendors fall back to that driver.
+* Retention is stored per schedule but **enforcement is not yet
+  implemented** — no configuration is currently deleted automatically.
+* There is no generic platform-wide audit-event log in this project.
+  NCM's audit trail therefore lives in its own job and target records
+  (who, device, type, when, result, changed, sanitised error). A
+  platform-wide event log is real work that deserves its own change.
+* Diff is text-based only.
+* A single daily run time per schedule, not a full cron expression.
+
+## Future phases
+
+Drift detection, golden configuration, candidate configuration,
+deployment, approval workflow, rollback, compliance, multi-vendor
+drivers and configuration templates all attach to `NcmConfiguration`
+by foreign key without altering it — an immutable, hashed snapshot is
+exactly what those phases need to point at.

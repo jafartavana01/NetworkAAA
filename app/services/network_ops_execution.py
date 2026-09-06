@@ -210,17 +210,82 @@ class DeviceExecutionResult:
     command_results: list[CommandResult] = field(default_factory=list)
 
 
-def _read_until_idle(shell, *, timeout_seconds: int, max_bytes: int = 8192) -> str:
+#: Matches a Cisco-style device prompt at the very end of the buffer:
+#: hostname, optional "(config...)" mode suffix, then > or #, then
+#: optional trailing whitespace. Anchored to the END because a prompt
+#: string can legitimately appear INSIDE configuration text (e.g. in a
+#: banner or a description), and only a prompt at the tail means "the
+#: device has finished and is waiting for input".
+_PROMPT_RE = re.compile(r"[\r\n][\w.\-@/]+(?:\([\w\-]+\))?[>#]\s*$")
+
+#: A "--More--" pager prompt. Should not appear once `terminal length 0`
+#: has been sent, but a device that rejects or ignores that command
+#: would otherwise hang until timeout; detecting it lets the caller see
+#: real output instead of silence.
+_PAGER_RE = re.compile(r"--\s*More\s*--|<--- More --->")
+
+
+#: Commands whose output is a full configuration dump -- these get the
+#: longer idle fallback. Matched loosely because operators legitimately
+#: abbreviate IOS commands (`sh run`, `show run`, `show running-conf`).
+_CONFIG_COMMAND_RE = re.compile(r"^\s*sh(?:o|ow)?\s+(?:run|start)", re.IGNORECASE)
+
+
+def _is_config_retrieval(command: str) -> bool:
+    return bool(_CONFIG_COMMAND_RE.match(command or ""))
+
+
+def _read_until_prompt(
+    shell, *, timeout_seconds: int, max_bytes: int = 65536, idle_grace_seconds: float = 1.5,
+) -> str:
+    """
+    Reads command output until the device's own prompt reappears at the
+    end of the stream, or the overall timeout expires.
+
+    Why prompt detection rather than "stop after N seconds of silence":
+    a Cisco device answers `show running-config` by printing
+    "Building configuration..." IMMEDIATELY and then going quiet for
+    several seconds while it renders the configuration. A pure
+    idle-timeout reader returns during that pause and captures only the
+    banner -- which is exactly the bug this replaces. The prompt is the
+    device telling us it is genuinely done; silence is not.
+
+    The idle grace is kept only as a FALLBACK for devices whose prompt
+    this regex does not match: rather than block for the full timeout,
+    the reader gives up after a longer quiet period (default 1.5s,
+    raised to 8s by callers retrieving configuration) once it has seen
+    some output. That keeps ordinary interactive commands responsive
+    while never truncating a slow configuration dump.
+    """
     buffer = ""
     deadline = time.time() + timeout_seconds
+    last_data_at = time.time()
+
     while time.time() < deadline:
         if shell.recv_ready():
-            chunk = shell.recv(max_bytes).decode(errors="replace")
-            buffer += chunk
-            deadline = time.time() + 1.5
+            buffer += shell.recv(max_bytes).decode(errors="replace")
+            last_data_at = time.time()
+
+            # Strip the pager if one slipped through, and keep going.
+            if _PAGER_RE.search(buffer):
+                shell.send(" ")
+                buffer = _PAGER_RE.sub("", buffer)
+                continue
+
+            if _PROMPT_RE.search(buffer):
+                return buffer
         else:
+            if buffer and (time.time() - last_data_at) >= idle_grace_seconds:
+                return buffer
             time.sleep(0.1)
+
     return buffer
+
+
+def _read_until_idle(shell, *, timeout_seconds: int, max_bytes: int = 8192) -> str:
+    """Backwards-compatible alias. Kept so any existing caller keeps
+    working; new code should call _read_until_prompt directly."""
+    return _read_until_prompt(shell, timeout_seconds=timeout_seconds, max_bytes=max_bytes)
 
 
 def run_commands_on_device(
@@ -256,12 +321,22 @@ def run_commands_on_device(
         )
         shell = client.invoke_shell()
         shell.settimeout(command_timeout_seconds)
-        _read_until_idle(shell, timeout_seconds=command_timeout_seconds)  # drain initial banner/prompt
+        # Drain login banner/prompt. Short grace: nothing is being
+        # rendered yet, so a long wait here only slows every connection.
+        _read_until_prompt(shell, timeout_seconds=command_timeout_seconds, idle_grace_seconds=1.0)
 
         for cmd in commands:
             start = time.time()
             shell.send(cmd + "\n")
-            output = _read_until_idle(shell, timeout_seconds=command_timeout_seconds)
+            # `show running-config` and friends print a banner, then go
+            # quiet for seconds while the device renders. Prompt
+            # detection is what actually ends the read; this grace is
+            # only the fallback for a prompt this code cannot match, so
+            # it is generous enough not to truncate a config dump.
+            grace = 8.0 if _is_config_retrieval(cmd) else 1.5
+            output = _read_until_prompt(
+                shell, timeout_seconds=command_timeout_seconds, idle_grace_seconds=grace,
+            )
             duration_ms = int((time.time() - start) * 1000)
             results.append(CommandResult(command=cmd, success=True, output=output.strip(), duration_ms=duration_ms))
 

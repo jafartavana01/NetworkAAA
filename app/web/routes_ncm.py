@@ -74,6 +74,14 @@ def ncm_jobs_page(
     return _render(request, session_token, "ncm_jobs.html")
 
 
+@router.get("/ncm/compare", response_class=HTMLResponse)
+def ncm_compare_page(
+    request: Request,
+    session_token: str | None = Cookie(default=None, alias=security.SESSION_COOKIE_NAME),
+):
+    return _render(request, session_token, "ncm_compare.html")
+
+
 @router.get("/ncm/diff", response_class=HTMLResponse)
 def ncm_diff_page(
     request: Request,

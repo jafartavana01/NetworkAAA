@@ -1,461 +1,422 @@
 {% extends "app_shell.html" %}
 {% import "partials/icons.html" as icons %}
-{% block title %}Dashboard — AAA Management Platform{% endblock %}
+{% block title %}Dashboard — NetworkAAA{% endblock %}
 {% block breadcrumb %}Dashboard{% endblock %}
 
 {% block view_content %}
 <main class="content">
-  <div class="content-head">
-    <h1>System Status</h1>
-    <p class="content-sub">Live read from the management API — nothing on this page is cached.</p>
+  <div class="dash-hero">
+    <div class="dash-hero-title">
+      <span class="dash-hero-icon">{{ icons.icon('shield-check', 26) }}</span>
+      <div>
+        <h1>Network Overview</h1>
+        <p class="content-sub">Real-time health, AAA activity, configuration and security posture.</p>
+      </div>
+    </div>
+    <div class="dash-hero-meta">
+      <div class="content-sub" id="dash-updated">—</div>
+      <button type="button" class="btn-secondary btn-small btn-with-icon" id="dash-refresh-btn" style="width:auto;">{{ icons.icon('activity', 14) }}Refresh</button>
+    </div>
   </div>
 
-  <section class="status-card-grid" id="status-grid" aria-live="polite">
-    <div class="status-card" data-skeleton>
-      <div class="status-card-icon">{{ icons.icon('activity', 20) }}</div>
-      <div class="status-card-body">
-        <div class="status-card-title">Management API</div>
-        <div class="status-card-value panel-loading">Loading…</div>
-      </div>
-    </div>
-    <div class="status-card" data-skeleton>
-      <div class="status-card-icon">{{ icons.icon('shield', 20) }}</div>
-      <div class="status-card-body">
-        <div class="status-card-title">tac_plus-ng</div>
-        <div class="status-card-value panel-loading">Loading…</div>
-      </div>
-    </div>
-    <div class="status-card" data-skeleton>
-      <div class="status-card-icon">{{ icons.icon('database', 20) }}</div>
-      <div class="status-card-body">
-        <div class="status-card-title">Database</div>
-        <div class="status-card-value panel-loading">Loading…</div>
-      </div>
-    </div>
-  </section>
+  <!-- Hero KPI row -->
+  <div class="dash-kpi-row" id="dash-kpis"></div>
 
-  <div class="content-head">
-    <h2>AAA Activity</h2>
-    <p class="content-sub">Computed from the same parsed accounting log the Accounting and AAA Health pages read — nothing here is a separately-tracked metric. See <a href="/tacacs/aaa-health">AAA Health</a> for the full failure-analysis breakdown.</p>
-  </div>
-
-  <section class="panel-grid" style="grid-template-columns: 1fr 2fr;">
-    <div class="panel panel-wide" style="display:flex;flex-direction:column;justify-content:center;align-items:center;padding:28px 20px;">
-      <div id="active-sessions-count" style="font-size:56px;font-weight:700;font-family:var(--font-mono);color:var(--signal);line-height:1;">—</div>
-      <div class="content-sub" style="margin-top:10px;text-transform:uppercase;letter-spacing:0.05em;">Active Sessions</div>
-    </div>
+  <!-- Activity + authorization -->
+  <section class="sec-grid sec-grid-trend">
     <div class="panel panel-wide">
-      <div class="panel-head"><span class="rail rail-dim"></span>Active in the last <span id="recent-activity-minutes">5</span> minutes</div>
-      <div id="recent-activity-table">
-        <div class="panel-loading">Loading…</div>
-      </div>
-    </div>
-  </section>
-
-  <section class="panel-grid" id="activity-summary-grid">
-    <div class="panel"><div class="panel-loading">Loading…</div></div>
-  </section>
-
-  <section class="panel-grid" style="grid-template-columns: 2fr 1fr;">
-    <div class="panel panel-wide">
-      <div class="panel-head"><span class="rail rail-dim"></span>Hourly Activity (last 24h)</div>
-      <div class="panel-body" style="height:220px;">
+      <div class="panel-head"><span class="rail rail-dim"></span>AAA Activity — last 24 hours</div>
+      <div class="panel-body" style="height:230px;position:relative;" id="activity-chart-wrap">
         <canvas id="activity-chart"></canvas>
       </div>
     </div>
     <div class="panel panel-wide">
       <div class="panel-head"><span class="rail rail-dim"></span>Authorization Results</div>
-      <div class="panel-body" style="height:220px;position:relative;">
+      <div class="panel-body" style="height:200px;position:relative;">
         <canvas id="results-chart"></canvas>
-        <div id="results-chart-center-label" style="position:absolute;top:50%;left:50%;transform:translate(-50%,calc(-50% - 14px));text-align:center;pointer-events:none;">
-          <div style="font-size:24px;font-weight:700;font-family:var(--font-mono);color:var(--text-primary);" id="results-chart-center-pct">—</div>
-          <div style="font-size:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.05em;" id="results-chart-center-label">Success</div>
+        <div class="dash-donut-center">
+          <div class="dash-donut-value" id="results-total">—</div>
+          <div class="dash-donut-label">Total Requests</div>
         </div>
       </div>
+      <div class="panel-body" id="results-legend" style="padding-top:0;"></div>
     </div>
   </section>
 
-  <section class="content-head">
+  <!-- Live sessions + service health -->
+  <section class="sec-grid sec-grid-risk">
+    <div class="panel panel-wide">
+      <div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;">
+        <span><span class="rail rail-signal"></span>Active in the Last 5 Minutes</span>
+        <a href="/tacacs/sessions" class="content-sub" style="text-decoration:none;">View all sessions →</a>
+      </div>
+      <div class="panel-body" id="recent-activity-body"><div class="empty-state">Loading…</div></div>
+    </div>
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Service Health</div>
+      <div class="panel-body" id="service-health-body"><div class="empty-state">Loading…</div></div>
+    </div>
+  </section>
+
+  <!-- Configuration posture (NCM) + quick actions -->
+  <section class="sec-grid sec-grid-risk">
+    <div class="panel panel-wide">
+      <div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;">
+        <span><span class="rail rail-dim"></span>Configuration Posture</span>
+        <a href="/ncm/overview" class="content-sub" style="text-decoration:none;">Open NCM →</a>
+      </div>
+      <div class="panel-body" id="ncm-posture-body"><div class="empty-state">Loading…</div></div>
+    </div>
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Quick Actions</div>
+      <div class="panel-body dash-actions" id="quick-actions"></div>
+    </div>
+  </section>
+
+  <div class="content-head" style="margin-top:24px;">
     <h2>System — Core Information</h2>
-    <p class="content-sub">Exact upstream commit, build profile, and enabled features recorded at install time (spec §11).</p>
-  </section>
-
-  <section class="panel panel-wide" id="build-info-panel">
-    <div class="panel-loading">Loading build information…</div>
-  </section>
-</main>
-
-<div class="modal-backdrop" id="device-activity-modal-backdrop" hidden>
-  <div class="modal" style="max-width: min(90vw, 720px); max-height: 82vh; overflow-y: auto;">
-    <h2 id="device-activity-modal-title">Device Activity</h2>
-    <div id="device-activity-list">
-      <div class="panel-loading">Loading…</div>
-    </div>
-    <div class="modal-actions">
-      <button type="button" class="btn-ghost" id="device-activity-close-btn">Close</button>
-    </div>
+    <p class="content-sub">Exact upstream commit, build profile, and enabled features recorded at install time.</p>
   </div>
-</div>
+  <div class="panel panel-wide">
+    <div class="panel-body mono" id="build-info-body"><div class="empty-state">Loading…</div></div>
+  </div>
+</main>
 {% endblock %}
 
 {% block view_scripts %}
 <script>
+(() => {
+  const ICON_SERVER = '{{ icons.icon("server", 18) }}';
+  const ICON_ACTIVITY = '{{ icons.icon("activity", 18) }}';
+  const ICON_USERS = '{{ icons.icon("users", 18) }}';
+  const ICON_SHIELD = '{{ icons.icon("shield-check", 18) }}';
+  const ICON_DB = '{{ icons.icon("database", 18) }}';
+  const ICON_PLUS = '{{ icons.icon("plus", 16) }}';
+  const ICON_SEARCH = '{{ icons.icon("search", 16) }}';
+  const ICON_TERMINAL = '{{ icons.icon("terminal", 16) }}';
+  const ICON_CLIPBOARD = '{{ icons.icon("clipboard-list", 16) }}';
+
+  const esc = AAAPlatform.escapeHtml;
+  const cssVar = AAAPlatform.cssVar;
+
   function ensureChartJsLoaded() {
-    // Loaded on-demand (not as a shell-level script) since only this
-    // page needs it -- and dynamically, not as a plain <script src>
-    // tag inside this block, because spa.js's re-execution on SPA
-    // navigation only re-runs INLINE scripts (see spa.js's own
-    // comment on #view-scripts-container for why: shell-level scripts
-    // must NOT re-run on every nav, and a blanket "re-run everything"
-    // selector can't tell an external library tag apart from that).
-    // A plain <script src> living in this inline block would render
-    // correctly on a full page load but silently never re-fire on an
-    // in-app SPA navigation TO this page, leaving `Chart` undefined.
-    // Checking `window.Chart` first also means repeat visits during
-    // the same session don't re-fetch anything.
+    // On-demand load, NOT a <script src> tag: spa.js only re-executes
+    // inline scripts on navigation, so an external tag would work on a
+    // hard refresh and silently never fire when navigated to.
     return new Promise((resolve, reject) => {
       if (window.Chart) { resolve(); return; }
-      const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js';
-      script.onload = () => resolve();
-      script.onerror = () => reject(new Error('Could not load the charting library.'));
-      document.head.appendChild(script);
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js';
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('chart library unavailable'));
+      document.head.appendChild(s);
     });
   }
 
-  function cssVar(name) {
-    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  function heroCard({ icon, label, value, sub, state, href }) {
+    const inner =
+      '<div class="dash-kpi-head"><span class="dash-kpi-icon">' + icon + '</span>' +
+      '<span class="dash-kpi-label">' + esc(label) + '</span></div>' +
+      '<div class="dash-kpi-value">' + esc(value) + '</div>' +
+      '<div class="dash-kpi-sub">' + esc(sub || '') + '</div>';
+    return href
+      ? '<a href="' + href + '" class="dash-kpi ' + (state || '') + '">' + inner + '</a>'
+      : '<div class="dash-kpi ' + (state || '') + '">' + inner + '</div>';
   }
 
-  function renderReadout(label, value) {
-    return `<div class="readout"><span class="readout-k">${label}</span><span class="readout-v">${value}</span></div>`;
+  // ---------------------------------------------------------------- health
+  async function loadHealth() {
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/tacacs-accounting/health?hours=24'); } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      document.getElementById('dash-kpis').innerHTML =
+        '<div class="empty-state">Could not load AAA activity.</div>';
+      return null;
+    }
+    return res.json();
   }
 
-  let activityChart = null;
-  let resultsChart = null;
-
-  async function loadActivity() {
-    const summaryGrid = document.getElementById('activity-summary-grid');
+  async function loadActiveCount() {
     try {
-      await ensureChartJsLoaded();
-    } catch (err) {
-      summaryGrid.innerHTML = '<div class="panel"><div class="panel-body">Could not load the charting library — check your connection to cdnjs.cloudflare.com.</div></div>';
+      const res = await AAAPlatform.authedFetch('/api/tacacs-accounting/sessions?active_only=true&limit=2000');
+      if (!res.ok) return null;
+      const data = await res.json();
+      return Array.isArray(data.sessions) ? data.sessions.length : null;
+    } catch (e) { return null; }
+  }
+
+  async function loadNcm() {
+    // NCM may be unreachable for an admin without ncm:view -- that is a
+    // permission outcome, not an error, so the panel says so rather
+    // than showing a failure.
+    try {
+      const res = await AAAPlatform.authedFetch('/api/ncm/overview');
+      if (res.status === 403) return { forbidden: true };
+      if (!res.ok) return null;
+      return res.json();
+    } catch (e) { return null; }
+  }
+
+  function renderKpis(health, activeSessions, ncm) {
+    const authTotal = health ? health.permit_count + health.non_permit_count : 0;
+    const successRate = authTotal > 0 ? Math.round((health.permit_count / authTotal) * 1000) / 10 : null;
+    const cards = [
+      heroCard({ icon: ICON_SERVER, label: 'Devices Seen', value: health ? health.distinct_devices : '—',
+                 sub: 'in the current log tail', href: '/tacacs/devices' }),
+      heroCard({ icon: ICON_USERS, label: 'Users Seen', value: health ? health.distinct_users : '—',
+                 sub: 'in the current log tail', href: '/tacacs/users' }),
+      heroCard({ icon: ICON_ACTIVITY, label: 'Active Sessions', value: activeSessions != null ? activeSessions : '—',
+                 sub: 'right now', state: activeSessions ? 'is-signal' : '', href: '/tacacs/sessions' }),
+      heroCard({ icon: ICON_SHIELD, label: 'Authorization Success',
+                 value: successRate != null ? successRate + '%' : '—',
+                 sub: authTotal > 0 ? authTotal.toLocaleString() + ' requests' : 'no authorization records',
+                 state: successRate == null ? '' : (successRate >= 85 ? 'is-signal' : (successRate >= 60 ? 'is-amber' : 'is-red')),
+                 href: '/tacacs/aaa-health' }),
+    ];
+    if (ncm && !ncm.forbidden) {
+      cards.push(heroCard({
+        icon: ICON_DB, label: 'Config Backups', value: ncm.devices_with_recent_backup + ' / ' + ncm.total_devices,
+        sub: ncm.devices_never_backed_up + ' never backed up',
+        state: ncm.devices_with_failed_backup ? 'is-red'
+             : (ncm.devices_never_backed_up ? 'is-amber' : 'is-signal'),
+        href: '/ncm/overview',
+      }));
+    }
+    document.getElementById('dash-kpis').innerHTML = cards.join('');
+  }
+
+  async function renderActivityChart(health) {
+    const wrap = document.getElementById('activity-chart-wrap');
+    const points = (health && health.hourly_activity) || [];
+    if (!points.length) {
+      wrap.innerHTML = '<div class="empty-state">No accounting activity recorded in the last 24 hours.</div>';
       return;
     }
-
-    const res = await AAAPlatform.authedFetch('/api/tacacs-accounting/health?hours=24');
-    if (res.status === 401) { window.location.href = '/login'; return; }
-    if (!res.ok) {
-      summaryGrid.innerHTML = '<div class="panel"><div class="panel-body">Could not load accounting activity.</div></div>';
+    try { await ensureChartJsLoaded(); } catch (e) {
+      wrap.innerHTML = '<div class="empty-state">Could not load the charting library.</div>';
       return;
     }
-    const data = await res.json();
-
-    summaryGrid.innerHTML = `
-      <div class="panel">
-        <div class="panel-head"><span class="rail rail-dim"></span>Volume</div>
-        <div class="panel-body mono">
-          ${renderReadout('last hour', data.events_last_hour)}
-          ${renderReadout('in log tail', data.total_records_in_tail)}
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-head"><span class="rail rail-dim"></span>Reach</div>
-        <div class="panel-body mono">
-          ${renderReadout('devices', data.distinct_devices)}
-          ${renderReadout('users', data.distinct_users)}
-        </div>
-      </div>
-      <div class="panel">
-        <div class="panel-head"><span class="rail rail-signal"></span>Authorization</div>
-        <div class="panel-body mono">
-          ${renderReadout('permit', data.permit_count)}
-          ${renderReadout('non-permit', data.non_permit_count)}
-        </div>
-      </div>
-    `;
-
-    const signalColor = cssVar('--signal') || '#4fd1a5';
-    const redColor = cssVar('--red') || '#e05252';
-    const lineColor = cssVar('--line') || '#2a3330';
-    const textDim = cssVar('--text-dim') || '#8fa39d';
-    const textFaintColor = cssVar('--text-faint') || '#57616c';
-
-    const activityCanvas = document.getElementById('activity-chart');
-    const existingActivity = window.Chart.getChart(activityCanvas);
-    if (existingActivity) existingActivity.destroy();
-
-    activityChart = new window.Chart(activityCanvas, {
+    const canvas = document.getElementById('activity-chart');
+    if (!canvas) return;
+    const existing = window.Chart.getChart(canvas);
+    if (existing) existing.destroy();
+    const signal = cssVar('--signal') || '#4fd1a5';
+    new window.Chart(canvas, {
       type: 'line',
       data: {
-        labels: data.hourly_activity.map(h => new Date(h.hour).toLocaleTimeString([], { hour: '2-digit' })),
+        // The API returns {hour: <ISO timestamp>, count: n} -- verified
+        // against compute_hourly_activity, not assumed. Formatted to a
+        // local hour here so the axis is readable.
+        labels: points.map((p) => {
+          const d = new Date(p.hour);
+          return isNaN(d) ? String(p.hour) : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }),
         datasets: [{
-          label: 'Accounting events',
-          data: data.hourly_activity.map(h => h.count),
-          borderColor: signalColor,
-          backgroundColor: signalColor + '33',
-          fill: true,
-          tension: 0.3,
-          pointRadius: 0,
-          borderWidth: 2,
+          label: 'Events', data: points.map((p) => p.count || 0),
+          borderColor: signal, backgroundColor: 'rgba(79,209,165,0.14)',
+          fill: true, tension: 0.35, pointRadius: 0, borderWidth: 2,
         }],
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        responsive: true, maintainAspectRatio: false,
         scales: {
-          x: { grid: { color: lineColor }, ticks: { color: textDim, maxTicksLimit: 8 } },
-          y: { grid: { color: lineColor }, ticks: { color: textDim, precision: 0 }, beginAtZero: true },
+          y: { beginAtZero: true, ticks: { color: cssVar('--text-dim') }, grid: { color: cssVar('--line-soft') } },
+          x: { ticks: { color: cssVar('--text-dim'), maxRotation: 0, autoSkip: true }, grid: { display: false } },
         },
+        plugins: { legend: { display: false } },
       },
     });
+  }
 
-    const resultsCanvas = document.getElementById('results-chart');
-    const existingResults = window.Chart.getChart(resultsCanvas);
-    if (existingResults) existingResults.destroy();
+  async function renderResultsChart(health) {
+    const permit = health ? health.permit_count : 0;
+    const nonPermit = health ? health.non_permit_count : 0;
+    const total = permit + nonPermit;
+    document.getElementById('results-total').textContent = total > 0 ? total.toLocaleString() : '—';
 
-    const hasData = data.permit_count + data.non_permit_count > 0;
-    resultsChart = new window.Chart(resultsCanvas, {
+    const legend = document.getElementById('results-legend');
+    legend.innerHTML = total > 0
+      ? '<a href="/tacacs/accounting" class="sec-legend-row"><span class="sec-legend-dot" style="background:' +
+        (cssVar('--signal') || '#4fd1a5') + ';"></span><span class="sec-legend-label">Permit</span>' +
+        '<span class="sec-legend-count cell-mono">' + permit.toLocaleString() + '</span></a>' +
+        '<a href="/tacacs/accounting" class="sec-legend-row"><span class="sec-legend-dot" style="background:' +
+        (cssVar('--red') || '#e0615a') + ';"></span><span class="sec-legend-label">Non-permit</span>' +
+        '<span class="sec-legend-count cell-mono">' + nonPermit.toLocaleString() + '</span></a>'
+      // No authorization records is a real, explainable state, not a
+      // failure: TACACS+ accounting only records a permit/deny result
+      // on authorization events. A log holding only session start/stop
+      // records legitimately produces zero here, and saying so is more
+      // useful than an unexplained blank panel.
+      : '<div class="content-sub">No authorization results in the current log tail — ' +
+        (health && health.total_records_in_tail
+          ? health.total_records_in_tail.toLocaleString() +
+            ' accounting records were read, but none carried an authorization result ' +
+            '(session start/stop records don\\u2019t). '
+          : 'no accounting records were read. ') +
+        '<a href="/tacacs/aaa-health">See AAA Health</a> for the full breakdown.</div>';
+
+    try { await ensureChartJsLoaded(); } catch (e) { return; }
+    const canvas = document.getElementById('results-chart');
+    if (!canvas) return;
+    const existing = window.Chart.getChart(canvas);
+    if (existing) existing.destroy();
+    new window.Chart(canvas, {
       type: 'doughnut',
       data: {
-        // Genuinely no data yet -> a single neutral-gray "empty ring"
-        // segment, labeled as such. The chart previously fell back to
-        // [1, 0] with the SAME green/red colors real data uses, which
-        // rendered a full green ring -- visually indistinguishable
-        // from "100% permit", when the true state was "no requests
-        // recorded at all." Misleading in exactly the way a real
-        // status indicator must not be.
-        labels: hasData ? ['Permit', 'Non-permit'] : ['No data yet'],
+        // With no data this renders ONE neutral-grey segment labelled as
+        // such -- never a full green ring, which would read as "100%
+        // permit" when the truth is "nothing recorded".
+        labels: total > 0 ? ['Permit', 'Non-permit'] : ['No data yet'],
         datasets: [{
-          data: hasData ? [data.permit_count, data.non_permit_count] : [1],
-          backgroundColor: hasData ? [signalColor, redColor] : [textFaintColor],
+          data: total > 0 ? [permit, nonPermit] : [1],
+          backgroundColor: total > 0
+            ? [cssVar('--signal') || '#4fd1a5', cssVar('--red') || '#e0615a']
+            : [cssVar('--text-faint') || '#57616c'],
           borderColor: 'transparent',
         }],
       },
       options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { position: 'bottom', labels: { color: textDim, boxWidth: 12, font: { size: 11 } } },
-          tooltip: { enabled: hasData },
-        },
+        responsive: true, maintainAspectRatio: false, cutout: '70%',
+        plugins: { legend: { display: false }, tooltip: { enabled: total > 0 } },
       },
     });
-
-    const centerPctEl = document.getElementById('results-chart-center-pct');
-    const centerLabelEl = document.getElementById('results-chart-center-label');
-    if (centerPctEl) {
-      const total = data.permit_count + data.non_permit_count;
-      centerPctEl.textContent = total > 0 ? `${Math.round((data.permit_count / total) * 100)}%` : '—';
-      if (centerLabelEl) centerLabelEl.textContent = total > 0 ? 'Success' : 'No Data';
-    }
-  }
-
-  function escapeHtml(s) {
-    const div = document.createElement('div');
-    div.textContent = s ?? '';
-    return div.innerHTML;
-  }
-
-  function formatRelativeTime(isoString) {
-    const then = new Date(isoString);
-    const seconds = Math.floor((Date.now() - then.getTime()) / 1000);
-    if (seconds < 5) return 'just now';
-    if (seconds < 60) return `${seconds}s ago`;
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    return `${hours}h ago`;
-  }
-
-  async function loadActiveSessions() {
-    const res = await AAAPlatform.authedFetch('/api/tacacs-accounting/sessions?active_only=true&limit=2000');
-    if (res.status === 401) { window.location.href = '/login'; return; }
-    if (!res.ok) return;
-    const data = await res.json();
-    document.getElementById('active-sessions-count').textContent = data.active_count;
   }
 
   async function loadRecentActivity() {
-    const wrap = document.getElementById('recent-activity-table');
-    const res = await AAAPlatform.authedFetch('/api/tacacs-accounting/recent-activity?minutes=5');
-    if (res.status === 401) { window.location.href = '/login'; return; }
-    if (!res.ok) {
-      wrap.innerHTML = '<div class="panel-body">Could not load recent activity.</div>';
-      return;
-    }
+    const body = document.getElementById('recent-activity-body');
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/tacacs-accounting/recent-activity?minutes=5'); } catch (e) { res = null; }
+    if (!res || !res.ok) { body.innerHTML = '<div class="empty-state">Could not load recent activity.</div>'; return; }
     const data = await res.json();
-    document.getElementById('recent-activity-minutes').textContent = data.minutes;
-
-    if (data.rows.length === 0) {
-      wrap.innerHTML = `<div class="panel-body content-sub">No activity in the last ${data.minutes} minutes.</div>`;
+    const rows = data.rows || [];
+    if (!rows.length) {
+      body.innerHTML = '<div class="empty-state">No AAA requests in the last ' + (data.minutes || 5) + ' minutes.</div>';
       return;
     }
-
-    wrap.innerHTML = `
-      <table class="data-table">
-        <thead><tr><th>Device</th><th>User</th><th>Last Seen</th><th>Events</th></tr></thead>
-        <tbody>${data.rows.map(r => `
-          <tr data-device="${escapeHtml(r.device)}" style="cursor:pointer;">
-            <td>${escapeHtml(r.device)}</td>
-            <td>${escapeHtml(r.user)}</td>
-            <td class="cell-mono content-sub" title="${escapeHtml(new Date(r.last_seen).toLocaleString())}">${formatRelativeTime(r.last_seen)}</td>
-            <td class="cell-mono">${r.event_count}</td>
-          </tr>
-        `).join('')}</tbody>
-      </table>
-    `;
-    wrap.querySelectorAll('[data-device]').forEach(row => {
-      row.addEventListener('click', () => openDeviceActivityModal(row.dataset.device));
-    });
+    body.innerHTML =
+      '<table class="data-table"><thead><tr><th>Device</th><th>User</th><th>Last Seen</th><th>Events</th></tr></thead><tbody>' +
+      rows.map((r) => {
+        // Field names verified against the recent-activity endpoint:
+        // device / user / last_seen (ISO) / event_count.
+        const seen = r.last_seen ? new Date(r.last_seen) : null;
+        const seenText = seen && !isNaN(seen) ? seen.toLocaleTimeString() : '—';
+        return '<tr><td class="cell-mono">' + esc(r.device) + '</td>' +
+          '<td>' + esc(r.user) + '</td>' +
+          '<td class="content-sub">' + seenText + '</td>' +
+          '<td class="cell-mono">' + (r.event_count != null ? r.event_count : '—') + '</td></tr>';
+      }).join('') +
+      '</tbody></table>';
   }
 
-  async function openDeviceActivityModal(deviceName) {
-    document.getElementById('device-activity-modal-title').textContent = `Activity — ${deviceName}`;
-    const list = document.getElementById('device-activity-list');
-    list.innerHTML = '<div class="panel-loading">Loading…</div>';
-    document.getElementById('device-activity-modal-backdrop').hidden = false;
-
-    const res = await AAAPlatform.authedFetch(`/api/tacacs-accounting?device=${encodeURIComponent(deviceName)}&limit=200`);
-    if (!res.ok) {
-      list.innerHTML = '<div class="panel-body">Could not load activity for this device.</div>';
-      return;
-    }
+  async function loadServiceHealth() {
+    const body = document.getElementById('service-health-body');
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/system/status'); } catch (e) { res = null; }
+    if (!res || !res.ok) { body.innerHTML = '<div class="empty-state">Could not reach the management API.</div>'; return; }
     const data = await res.json();
-    if (data.records.length === 0) {
-      list.innerHTML = '<div class="empty-state">No recorded activity for this device.</div>';
+    const services = data.services || {};
+    const entries = Object.entries(services);
+    // Verified against /api/system/status: `database` is a plain string
+    // ("connected" or "error: ..."), and each service carries
+    // `active_state` (systemd's own value), not a boolean.
+    const dbOk = data.database === 'connected';
+
+    body.innerHTML =
+      '<div class="dash-health">' +
+      entries.map(([name, info]) => {
+        const active = info && info.active_state === 'active';
+        const stateText = info && info.error ? 'unavailable' : ((info && info.active_state) || 'unknown');
+        return '<div class="dash-health-row">' +
+          '<span class="dash-health-dot ' + (active ? 'is-signal' : 'is-red') + '"></span>' +
+          '<span class="dash-health-name">' + esc(name) + '</span>' +
+          '<span class="dash-health-state ' + (active ? 'is-signal' : 'is-red') + '">' +
+          esc(stateText) + '</span></div>';
+      }).join('') +
+      '<div class="dash-health-row">' +
+      '<span class="dash-health-dot ' + (dbOk ? 'is-signal' : 'is-red') + '"></span>' +
+      '<span class="dash-health-name">database</span>' +
+      '<span class="dash-health-state ' + (dbOk ? 'is-signal' : 'is-red') + '">' +
+      (dbOk ? 'connected' : 'unavailable') + '</span></div>' +
+      '</div>';
+
+    renderBuildInfo(data.build_info, data.os);
+  }
+
+  function renderBuildInfo(buildInfo, os) {
+    const body = document.getElementById('build-info-body');
+    const info = buildInfo || {};
+    const rows = Object.entries(info);
+    if (os) rows.push(['operating system', os]);
+    if (!rows.length) {
+      body.innerHTML = '<div class="empty-state">No build information recorded.</div>';
       return;
     }
-    // read_records() (the underlying source) returns newest-first
-    // already -- the same time-sorted order every other accounting
-    // view in this project relies on, not re-sorted here.
-    list.innerHTML = `
-      <table class="data-table">
-        <thead><tr><th>Time</th><th>User</th><th>Type</th><th>Service</th><th>Command</th><th>Result</th></tr></thead>
-        <tbody>${data.records.map(r => `
-          <tr>
-            <td class="cell-mono content-sub">${r.timestamp ? escapeHtml(new Date(r.timestamp).toLocaleString()) : (r.raw_prefix ? escapeHtml(r.raw_prefix) + ' (unparsed)' : '—')}</td>
-            <td>${escapeHtml(r.user || '—')}</td>
-            <td>${escapeHtml(r.accttype || '—')}</td>
-            <td>${escapeHtml(r.service || '—')}</td>
-            <td class="cell-mono">${escapeHtml(r.cmd || '—')}</td>
-            <td>${escapeHtml(r.result || '—')}</td>
-          </tr>
-        `).join('')}</tbody>
-      </table>
-    `;
+    body.innerHTML = rows.map(([k, v]) =>
+      '<div class="readout"><span class="readout-k">' + esc(k.replace(/_/g, ' ')) + '</span>' +
+      '<span class="readout-v">' + esc(v == null || v === '' ? '—' : v) + '</span></div>').join('');
   }
 
-  document.getElementById('device-activity-close-btn').addEventListener('click', () => {
-    document.getElementById('device-activity-modal-backdrop').hidden = true;
-  });
-  document.getElementById('device-activity-modal-backdrop').addEventListener('click', (e) => {
-    if (e.target.id === 'device-activity-modal-backdrop') document.getElementById('device-activity-modal-backdrop').hidden = true;
-  });
-
-  loadActivity();
-  const dashboardActivityInterval = setInterval(loadActivity, 30000);
-  loadActiveSessions();
-  loadRecentActivity();
-  const dashboardLiveInterval = setInterval(() => { loadActiveSessions(); loadRecentActivity(); }, 15000);
-  if (window.AAAPlatform && AAAPlatform.onViewLeave) {
-    AAAPlatform.onViewLeave(() => {
-      clearInterval(dashboardActivityInterval);
-      clearInterval(dashboardLiveInterval);
-      if (activityChart) activityChart.destroy();
-      if (resultsChart) resultsChart.destroy();
-    });
-  }
-</script>
-
-<script>
-  // Pre-rendered server-side via Jinja (see the top-of-file macro
-  // import) and stored as constants rather than re-invoking the icon
-  // macro from inside this JS -- Jinja renders once, server-side,
-  // before this script ever runs; these are just the resulting SVG
-  // strings.
-  const ICON_ACTIVITY = '{{ icons.icon("activity", 20) }}';
-  const ICON_SHIELD = '{{ icons.icon("shield", 20) }}';
-  const ICON_DATABASE = '{{ icons.icon("database", 20) }}';
-
-  const statusColor = (state) => {
-    if (state === 'active' || state === 'connected') return 'signal';
-    if (state === 'activating' || state === 'reloading') return 'amber';
-    return 'red';
-  };
-
-  function renderReadout(label, value) {
-    return `<div class="readout"><span class="readout-k">${label}</span><span class="readout-v">${value}</span></div>`;
-  }
-
-  async function loadStatus() {
-    const grid = document.getElementById('status-grid');
-    const buildPanel = document.getElementById('build-info-panel');
-
-    try {
-      const res = await AAAPlatform.authedFetch('/api/system/status');
-      if (res.status === 401) { window.location.href = '/login'; return; }
-      const data = await res.json();
-
-      const mgmt = data.services['aaa-platform.service'] || {};
-      const tac = data.services['tac-plus-ng.service'] || {};
-
-      grid.innerHTML = `
-        <div class="status-card is-${statusColor(mgmt.active_state)}">
-          <div class="status-card-icon">${ICON_ACTIVITY}</div>
-          <div class="status-card-body">
-            <div class="status-card-title">Management API</div>
-            <div class="status-card-value">${mgmt.active_state || 'unknown'}</div>
-            <div class="status-card-sub">enabled: ${mgmt.enabled ?? 'unknown'}</div>
-          </div>
-        </div>
-        <div class="status-card is-${statusColor(tac.active_state)}">
-          <div class="status-card-icon">${ICON_SHIELD}</div>
-          <div class="status-card-body">
-            <div class="status-card-title">tac_plus-ng</div>
-            <div class="status-card-value">${tac.active_state || 'unknown'}</div>
-            <div class="status-card-sub">enabled: ${tac.enabled ?? 'unknown'}</div>
-          </div>
-        </div>
-        <div class="status-card is-${statusColor(data.database)}">
-          <div class="status-card-icon">${ICON_DATABASE}</div>
-          <div class="status-card-body">
-            <div class="status-card-title">Database</div>
-            <div class="status-card-value">${data.database}</div>
-            <div class="status-card-sub">${data.os || ''}</div>
-          </div>
-        </div>
-      `;
-
-      const b = data.build_info || {};
-      if (b.status === 'recorded') {
-        buildPanel.innerHTML = `
-          <div class="panel-body mono build-grid">
-            ${renderReadout('tac_plus-ng version', b.tac_plus_ng_version_string || 'unknown')}
-            ${renderReadout('commit', (b.commit || '').slice(0, 12) || 'unknown')}
-            ${renderReadout('build date (UTC)', b.build_date_utc || 'unknown')}
-            ${renderReadout('build profile', b.build_profile || 'unknown')}
-            ${renderReadout('ubuntu', b.ubuntu_version || 'unknown')}
-            ${renderReadout('architecture', b.architecture || 'unknown')}
-            ${renderReadout('compiler', b.compiler || 'unknown')}
-            ${renderReadout('configure args', (b.configure_arguments || []).join(' ') || '(none)')}
-            ${renderReadout('features enabled', (b.features_detected_enabled || []).join(', ') || '(none detected)')}
-            ${renderReadout('features disabled', (b.features_detected_disabled || []).join(', ') || '(none detected)')}
-          </div>`;
-      } else {
-        buildPanel.innerHTML = `<div class="panel-body">${b.message || 'Build information unavailable.'}</div>`;
-      }
-    } catch (err) {
-      grid.innerHTML = `<div class="panel"><div class="panel-body">Could not reach the management API.</div></div>`;
-      buildPanel.innerHTML = `<div class="panel-body">Could not reach the management API.</div>`;
+  function renderNcmPosture(ncm) {
+    const body = document.getElementById('ncm-posture-body');
+    if (!ncm) { body.innerHTML = '<div class="empty-state">Could not load configuration posture.</div>'; return; }
+    if (ncm.forbidden) {
+      body.innerHTML = '<div class="empty-state">Your role doesn\\u2019t have permission to view Configuration Management.</div>';
+      return;
     }
+    if (!ncm.total_devices) {
+      body.innerHTML = '<div class="empty-state">No devices are being managed yet.</div>';
+      return;
+    }
+    const pct = (n) => Math.round((n / ncm.total_devices) * 100);
+    body.innerHTML =
+      AAAPlatform.barRow('Backed up recently', pct(ncm.devices_with_recent_backup),
+        ncm.devices_with_recent_backup + '/' + ncm.total_devices, cssVar('--signal')) +
+      AAAPlatform.barRow('Never backed up', pct(ncm.devices_never_backed_up),
+        String(ncm.devices_never_backed_up), cssVar('--amber')) +
+      AAAPlatform.barRow('Last backup failed', pct(ncm.devices_with_failed_backup),
+        String(ncm.devices_with_failed_backup), cssVar('--red')) +
+      '<div class="content-sub" style="margin-top:10px;">' +
+      ncm.total_configurations + ' stored versions · ' + ncm.configurations_changed_recently +
+      ' changed in the last 48 hours</div>' +
+      (ncm.recent_changes.length
+        ? '<div style="margin-top:12px;">' + ncm.recent_changes.slice(0, 4).map((c) =>
+            '<div class="readout"><span class="readout-k">' + esc(c.device_name) + '</span>' +
+            '<span class="readout-v cell-mono">#' + c.version_number + ' · ' + esc(c.source) + '</span></div>').join('') +
+          '</div>'
+        : '');
   }
 
-  loadStatus();
-  const dashboardStatusInterval = setInterval(loadStatus, 15000);
-  if (window.AAAPlatform && AAAPlatform.onViewLeave) {
-    AAAPlatform.onViewLeave(() => clearInterval(dashboardStatusInterval));
+  function renderQuickActions() {
+    // Only real destinations -- every one of these routes exists.
+    const action = (icon, title, sub, href) =>
+      '<a href="' + href + '" class="dash-action">' +
+      '<span class="dash-action-icon">' + icon + '</span>' +
+      '<span><span class="dash-action-title">' + esc(title) + '</span>' +
+      '<span class="dash-action-sub">' + esc(sub) + '</span></span></a>';
+    document.getElementById('quick-actions').innerHTML = [
+      action(ICON_PLUS, 'Add Device', 'Register a new network device', '/tacacs/devices'),
+      action(ICON_SHIELD, 'Run Security Audit', 'Check device security posture', '/security/overview'),
+      action(ICON_DB, 'Backup Configurations', 'Archive device configurations', '/ncm/overview'),
+      action(ICON_TERMINAL, 'Run Command', 'Execute commands on devices', '/network-ops/jobs'),
+      action(ICON_SEARCH, 'Scan Network', 'Discover and provision devices', '/tacacs/devices'),
+      action(ICON_CLIPBOARD, 'Manage Policies', 'Authorization policies', '/tacacs/policies'),
+    ].join('');
   }
+
+  async function loadAll() {
+    document.getElementById('dash-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    const [health, activeSessions, ncm] = await Promise.all([loadHealth(), loadActiveCount(), loadNcm()]);
+    renderKpis(health, activeSessions, ncm);
+    renderNcmPosture(ncm);
+    renderQuickActions();
+    await renderActivityChart(health);
+    await renderResultsChart(health);
+    loadRecentActivity();
+    loadServiceHealth();
+  }
+
+  document.getElementById('dash-refresh-btn').addEventListener('click', loadAll);
+  loadAll();
+})();
 </script>
 {% endblock %}

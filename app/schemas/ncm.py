@@ -181,3 +181,50 @@ class NcmOverviewOut(BaseModel):
     active_jobs: int
     recent_changes: list[NcmRecentChangeOut]
     recent_jobs: list[NcmJobSummaryOut]
+
+
+class CompareRequest(BaseModel):
+    """At least two devices, since one device cannot be compared with
+    anything. Capped so a mis-click on "select all" against a large
+    fleet cannot ask the server to diff hundreds of configurations in
+    one request."""
+    device_ids: list[str] = Field(min_length=2, max_length=50)
+    configuration_type: str = "running"
+
+
+class CompareDeviceOut(BaseModel):
+    device_id: str
+    device_name: str
+    ip_address: str | None
+    configuration_id: str | None
+    version_number: int | None
+    created_at: datetime | None
+    has_snapshot: bool
+
+
+class CompareCellOut(BaseModel):
+    device_id: str
+    present: bool
+    matches_majority: bool
+    line_count: int
+
+
+class CompareCategoryOut(BaseModel):
+    category: str
+    cells: list[CompareCellOut]
+    matching_devices: int
+    total_devices: int
+    match_percent: float
+
+
+class CompareResultOut(BaseModel):
+    devices: list[CompareDeviceOut]
+    categories: list[CompareCategoryOut]
+    comparable_devices: int
+    devices_without_snapshot: list[str]
+    identical_devices: int
+    differing_devices: int
+    consistency_percent: float
+    outlier_device_id: str | None
+    outlier_difference_count: int
+    baseline_device_id: str | None

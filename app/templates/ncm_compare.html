@@ -1,0 +1,466 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Configuration Compare — NetworkAAA{% endblock %}
+{% block breadcrumb %}NCM / Configuration Compare{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="dash-hero">
+    <div class="dash-hero-title">
+      <span class="dash-hero-icon">{{ icons.icon('database', 26) }}</span>
+      <div>
+        <h1>Configuration Compare</h1>
+        <p class="content-sub">Compare archived device configurations, find differences, and spot the odd one out.</p>
+      </div>
+    </div>
+    <div class="dash-hero-meta">
+      <button type="button" class="btn-primary btn-with-icon" id="run-compare-btn" style="width:auto;">{{ icons.icon('check', 16) }}Run Comparison</button>
+    </div>
+  </div>
+
+  <div class="cmp-layout">
+    <!-- Device explorer -->
+    <aside class="panel panel-wide cmp-explorer">
+      <div class="panel-head"><span class="rail rail-dim"></span>Device Explorer</div>
+      <div class="panel-body">
+        <label class="field">
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+            <input type="text" id="explorer-search" placeholder="Search devices…">
+          </div>
+        </label>
+        <label class="field" style="margin-top:8px;">
+          <span class="field-label">Group</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('users', 14) }}</span>
+            <select id="explorer-group"><option value="">All groups</option></select>
+          </div>
+        </label>
+        <label class="field" style="margin-top:8px;">
+          <span class="field-label">Backup status</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('database', 14) }}</span>
+            <select id="explorer-status">
+              <option value="">All devices</option>
+              <option value="has">Has a snapshot</option>
+              <option value="none">No snapshot</option>
+            </select>
+          </div>
+        </label>
+
+        <div class="toolbar" style="margin:12px 0 6px;">
+          <span class="content-sub" id="explorer-count"></span>
+          <button type="button" class="btn-ghost btn-small" id="explorer-add-all">Add shown</button>
+        </div>
+
+        <div id="explorer-list" class="cmp-explorer-list"><div class="empty-state">Loading…</div></div>
+      </div>
+    </aside>
+
+    <!-- Workspace -->
+    <section class="cmp-main">
+      <div class="panel panel-wide">
+        <div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;">
+          <span><span class="rail rail-dim"></span>Comparison Workspace</span>
+          <span style="display:flex;align-items:center;gap:10px;">
+            <span class="content-sub" id="selection-count">0 devices selected</span>
+            <button type="button" class="btn-ghost btn-small" id="clear-selection-btn">Clear all</button>
+          </span>
+        </div>
+        <div class="panel-body">
+          <div id="workspace-drop" class="cmp-dropzone">
+            <div id="workspace-chips" class="cmp-chips"></div>
+            <div class="cmp-dropzone-hint" id="dropzone-hint">
+              Drag devices here, or use the checkboxes in the Device Explorer.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="compare-results" hidden>
+        <div class="status-card-grid" id="compare-kpis" style="margin:16px 0;"></div>
+
+        <div class="panel panel-wide" id="outlier-panel" hidden>
+          <div class="panel-body cmp-outlier" id="outlier-body"></div>
+        </div>
+
+        <div class="content-head" style="margin-top:16px;"><h2>Configuration Matrix</h2>
+          <p class="content-sub">A category matches when every device's lines in that category are byte-identical. This is textual equivalence, not a claim about behaviour.</p>
+        </div>
+        <div class="panel panel-wide" style="overflow-x:auto;">
+          <div class="panel-body" id="matrix-body"></div>
+        </div>
+
+        <div class="content-head" style="margin-top:16px;"><h2>Raw Diff</h2>
+          <p class="content-sub">Full unified diff between two of the selected devices' latest snapshots.</p>
+        </div>
+        <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+          <label class="field" style="min-width:200px;">
+            <span class="field-label">From device</span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+              <select id="raw-from"></select>
+            </div>
+          </label>
+          <label class="field" style="min-width:200px;">
+            <span class="field-label">To device</span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+              <select id="raw-to"></select>
+            </div>
+          </label>
+          <button type="button" class="btn-secondary btn-small" id="raw-diff-btn" style="width:auto;">Show Diff</button>
+        </div>
+        <div id="raw-diff-body"><div class="empty-state">Select two devices and choose Show Diff.</div></div>
+      </div>
+
+      <div id="compare-placeholder">
+        <div class="empty-state">
+          <div class="empty-state-title">Nothing compared yet</div>
+          <p class="empty-state-desc">Select at least two devices, then choose Run Comparison.</p>
+        </div>
+      </div>
+    </section>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_SERVER = '{{ icons.icon("server", 15) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const ICON_LIST = '{{ icons.icon("list-checks", 16) }}';
+  const ICON_X = '{{ icons.icon("x", 12) }}';
+  const esc = AAAPlatform.escapeHtml;
+  const cssVar = AAAPlatform.cssVar;
+
+  let devices = [];              // from /api/ncm/devices (real NCM state)
+  const selected = new Map();    // device_id -> device record
+  let lastResult = null;
+
+  // ---------------- Device explorer -------------------------------
+  function visibleDevices() {
+    const q = document.getElementById('explorer-search').value.trim().toLowerCase();
+    const group = document.getElementById('explorer-group').value;
+    const status = document.getElementById('explorer-status').value;
+    return devices.filter((d) => {
+      if (q && !(d.device_name.toLowerCase().includes(q) || (d.ip_address || '').toLowerCase().includes(q))) return false;
+      if (group && (d.device_group_name || '') !== group) return false;
+      if (status === 'has' && d.latest_version == null) return false;
+      if (status === 'none' && d.latest_version != null) return false;
+      return true;
+    });
+  }
+
+  function renderExplorer() {
+    const list = document.getElementById('explorer-list');
+    const rows = visibleDevices();
+    document.getElementById('explorer-count').textContent =
+      rows.length + ' of ' + devices.length + ' devices';
+
+    if (!devices.length) {
+      list.innerHTML = '<div class="empty-state"><div class="empty-state-title">No devices</div>' +
+        '<p class="empty-state-desc">Add devices under TACACS+ → Devices, then back them up from NCM.</p></div>';
+      return;
+    }
+    if (!rows.length) { list.innerHTML = '<div class="empty-state">No devices match these filters.</div>'; return; }
+
+    list.innerHTML = rows.map((d) => {
+      const hasSnap = d.latest_version != null;
+      return '<div class="cmp-device" draggable="true" data-device-id="' + d.device_id + '">' +
+        '<span class="checkbox-field"><input type="checkbox" class="cmp-check" data-device-id="' + d.device_id + '" ' +
+        (selected.has(d.device_id) ? 'checked' : '') + ' aria-label="Select ' + esc(d.device_name) + '"></span>' +
+        '<span class="cmp-device-icon">' + ICON_SERVER + '</span>' +
+        '<span class="cmp-device-body">' +
+        '<span class="cmp-device-name">' + esc(d.device_name) + '</span>' +
+        '<span class="cmp-device-meta cell-mono">' + esc(d.ip_address || '—') + '</span></span>' +
+        '<span class="cmp-device-snap ' + (hasSnap ? 'is-signal' : 'is-amber') + '">' +
+        (hasSnap ? '#' + d.latest_version : 'no snapshot') + '</span></div>';
+    }).join('');
+  }
+
+  // ---------------- Selection / workspace --------------------------
+  function renderWorkspace() {
+    const chips = document.getElementById('workspace-chips');
+    document.getElementById('selection-count').textContent =
+      selected.size + ' device' + (selected.size === 1 ? '' : 's') + ' selected';
+    document.getElementById('dropzone-hint').hidden = selected.size > 0;
+
+    chips.innerHTML = [...selected.values()].map((d) => {
+      const hasSnap = d.latest_version != null;
+      return '<span class="cmp-chip ' + (hasSnap ? '' : 'is-amber') + '">' +
+        '<span class="cmp-chip-name">' + esc(d.device_name) + '</span>' +
+        '<span class="cmp-chip-meta cell-mono">' + esc(d.ip_address || '—') + '</span>' +
+        '<span class="cmp-chip-meta">' + (hasSnap ? 'v#' + d.latest_version : 'no snapshot') + '</span>' +
+        '<button type="button" class="cmp-chip-remove" data-remove="' + d.device_id + '" ' +
+        'aria-label="Remove ' + esc(d.device_name) + '">' + ICON_X + '</button></span>';
+    }).join('');
+  }
+
+  function toggleDevice(id, on) {
+    const d = devices.find((x) => x.device_id === id);
+    if (!d) return;
+    if (on) selected.set(id, d); else selected.delete(id);
+    renderExplorer();
+    renderWorkspace();
+  }
+
+  document.getElementById('explorer-list').addEventListener('change', (e) => {
+    if (!e.target.classList.contains('cmp-check')) return;
+    toggleDevice(e.target.dataset.deviceId, e.target.checked);
+  });
+  document.getElementById('explorer-add-all').addEventListener('click', () => {
+    visibleDevices().forEach((d) => selected.set(d.device_id, d));
+    renderExplorer(); renderWorkspace();
+  });
+  document.getElementById('clear-selection-btn').addEventListener('click', () => {
+    selected.clear(); renderExplorer(); renderWorkspace();
+  });
+  document.getElementById('workspace-chips').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-remove]');
+    if (btn) toggleDevice(btn.dataset.remove, false);
+  });
+
+  // Drag and drop. The checkbox path above is the accessible,
+  // keyboard-operable route -- drag is an addition, never the only way
+  // to select a device.
+  document.getElementById('explorer-list').addEventListener('dragstart', (e) => {
+    const row = e.target.closest('.cmp-device');
+    if (!row) return;
+    e.dataTransfer.setData('text/plain', row.dataset.deviceId);
+    e.dataTransfer.effectAllowed = 'copy';
+  });
+  const drop = document.getElementById('workspace-drop');
+  drop.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    drop.classList.add('is-dragover');
+  });
+  drop.addEventListener('dragleave', () => drop.classList.remove('is-dragover'));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault();
+    drop.classList.remove('is-dragover');
+    const id = e.dataTransfer.getData('text/plain');
+    if (id) toggleDevice(id, true);
+  });
+
+  ['explorer-search', 'explorer-group', 'explorer-status'].forEach((id) => {
+    const el = document.getElementById(id);
+    el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', renderExplorer);
+  });
+
+  // ---------------- Comparison -------------------------------------
+  function showPlaceholder(html) {
+    document.getElementById('compare-results').hidden = true;
+    const ph = document.getElementById('compare-placeholder');
+    ph.hidden = false;
+    ph.innerHTML = html;
+  }
+
+  async function runComparison() {
+    const ids = [...selected.keys()];
+    if (ids.length < 2) {
+      showPlaceholder('<div class="empty-state"><div class="empty-state-title">Select at least two devices</div>' +
+        '<p class="empty-state-desc">One device on its own cannot be compared with anything.</p></div>');
+      return;
+    }
+
+    const btn = document.getElementById('run-compare-btn');
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    // Large selections take real time; say what is happening rather
+    // than leaving the button dead.
+    btn.textContent = 'Comparing ' + ids.length + ' devices…';
+    showPlaceholder('<div class="empty-state">Comparing ' + ids.length + ' device configurations…</div>');
+
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/ncm/compare', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_ids: ids, configuration_type: 'running' }),
+      });
+    } catch (e) { res = null; }
+
+    btn.disabled = false;
+    btn.innerHTML = original;
+
+    if (!res || !res.ok) {
+      const body = res ? await res.json().catch(() => ({})) : {};
+      const msg = res && res.status === 403
+        ? "Your role doesn't have permission to compare configurations."
+        : ((body.detail && typeof body.detail === 'string') ? body.detail : 'The comparison could not be completed.');
+      showPlaceholder('<div class="empty-state"><div class="empty-state-title">Comparison failed</div>' +
+        '<p class="empty-state-desc">' + esc(msg) + '</p></div>');
+      return;
+    }
+
+    lastResult = await res.json();
+    renderResult(lastResult);
+  }
+
+  function renderResult(r) {
+    // Fewer than two devices actually have a snapshot -> nothing was
+    // compared. Say exactly that instead of showing a 0% dial.
+    if (r.comparable_devices < 2) {
+      const missing = r.devices.filter((d) => !d.has_snapshot).map((d) => d.device_name);
+      showPlaceholder(
+        '<div class="empty-state"><div class="empty-state-title">Not enough archived configurations</div>' +
+        '<p class="empty-state-desc">Only ' + r.comparable_devices +
+        ' of the selected devices has an archived configuration, so there is nothing to compare. ' +
+        (missing.length ? 'No snapshot for: ' + esc(missing.join(', ')) + '. ' : '') +
+        'Run a backup from NCM Overview first.</p></div>');
+      return;
+    }
+
+    document.getElementById('compare-placeholder').hidden = true;
+    document.getElementById('compare-results').hidden = false;
+
+    const consistencyState = r.consistency_percent >= 95 ? 'is-signal'
+      : (r.consistency_percent >= 80 ? 'is-amber' : 'is-red');
+    document.getElementById('compare-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_LIST, label: 'Consistency', value: r.consistency_percent + '%',
+                            state: consistencyState, sub: 'across ' + r.categories.length + ' categories' }),
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'Matching Devices', value: r.identical_devices,
+                            state: 'is-signal', sub: 'of ' + r.comparable_devices + ' compared' }),
+      AAAPlatform.kpiCard({ icon: ICON_ALERT, label: 'Differing Devices', value: r.differing_devices,
+                            state: r.differing_devices ? 'is-amber' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_SERVER, label: 'No Snapshot', value: r.devices_without_snapshot.length,
+                            state: r.devices_without_snapshot.length ? 'is-amber' : '',
+                            sub: r.devices_without_snapshot.length ? 'excluded from the comparison' : null }),
+    ].join('');
+
+    // Outlier
+    const outlierPanel = document.getElementById('outlier-panel');
+    if (r.outlier_device_id) {
+      const dev = r.devices.find((d) => d.device_id === r.outlier_device_id);
+      outlierPanel.hidden = false;
+      document.getElementById('outlier-body').innerHTML =
+        '<span class="cmp-outlier-icon">' + ICON_ALERT + '</span>' +
+        '<div><div class="cmp-outlier-title">Configuration outlier</div>' +
+        '<div class="content-sub">' + esc(dev ? dev.device_name : 'A device') +
+        ' differs from the majority in ' + r.outlier_difference_count +
+        (r.outlier_difference_count === 1 ? ' category.' : ' categories.') + '</div></div>';
+    } else {
+      outlierPanel.hidden = true;
+    }
+
+    // Matrix
+    const matrix = document.getElementById('matrix-body');
+    if (!r.categories.length) {
+      matrix.innerHTML = '<div class="empty-state">No recognised configuration categories were found in these snapshots.</div>';
+    } else {
+      const compared = r.devices.filter((d) => d.has_snapshot);
+      matrix.innerHTML =
+        '<table class="data-table cmp-matrix"><thead><tr><th>Category</th>' +
+        compared.map((d) => '<th>' + esc(d.device_name) + '</th>').join('') +
+        '<th>Match</th></tr></thead><tbody>' +
+        r.categories.map((row) => {
+          const byDevice = new Map(row.cells.map((c) => [c.device_id, c]));
+          return '<tr><td>' + esc(row.category) + '</td>' +
+            compared.map((d) => {
+              const c = byDevice.get(d.device_id);
+              if (!c) return '<td class="cmp-cell">—</td>';
+              // Text label as well as colour: a matrix read only by hue
+              // is unusable for a colour-blind operator.
+              const cls = c.matches_majority ? 'is-signal' : 'is-red';
+              const label = c.matches_majority ? 'match' : (c.present ? 'differs' : 'absent');
+              return '<td class="cmp-cell ' + cls + '" title="' +
+                esc(d.device_name + ' · ' + row.category + ' · ' + c.line_count + ' lines') + '">' +
+                label + '</td>';
+            }).join('') +
+            '<td class="cell-mono">' + row.matching_devices + '/' + row.total_devices + '</td></tr>';
+        }).join('') + '</tbody></table>';
+    }
+
+    // Raw diff selectors -- only devices that actually have snapshots.
+    const withSnap = r.devices.filter((d) => d.has_snapshot);
+    const opts = withSnap.map((d) =>
+      '<option value="' + d.configuration_id + '">' + esc(d.device_name) + ' — v#' + d.version_number + '</option>').join('');
+    document.getElementById('raw-from').innerHTML = opts;
+    document.getElementById('raw-to').innerHTML = opts;
+    if (withSnap.length >= 2) {
+      const baseline = withSnap.find((d) => d.device_id === r.baseline_device_id) || withSnap[0];
+      const other = withSnap.find((d) => d.device_id === r.outlier_device_id)
+        || withSnap.find((d) => d.device_id !== baseline.device_id);
+      document.getElementById('raw-from').value = baseline.configuration_id;
+      if (other) document.getElementById('raw-to').value = other.configuration_id;
+    }
+    document.getElementById('raw-diff-body').innerHTML =
+      '<div class="empty-state">Choose Show Diff to compare these two configurations line by line.</div>';
+  }
+
+  // Reuses the EXISTING /api/ncm/diff endpoint rather than a second
+  // diff implementation -- the raw diff behaviour on the existing
+  // Configuration Diff page is unchanged.
+  document.getElementById('raw-diff-btn').addEventListener('click', async () => {
+    const from = document.getElementById('raw-from').value;
+    const to = document.getElementById('raw-to').value;
+    const body = document.getElementById('raw-diff-body');
+    if (!from || !to) { body.innerHTML = '<div class="empty-state">Select two configurations.</div>'; return; }
+    if (from === to) { body.innerHTML = '<div class="empty-state">Those are the same configuration.</div>'; return; }
+
+    body.innerHTML = '<div class="empty-state">Comparing…</div>';
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/ncm/diff', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from_configuration_id: from, to_configuration_id: to }),
+      });
+    } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      const b = res ? await res.json().catch(() => ({})) : {};
+      body.innerHTML = '<div class="empty-state">' +
+        esc((b.detail && typeof b.detail === 'string') ? b.detail : 'Could not produce a diff.') + '</div>';
+      return;
+    }
+    const d = await res.json();
+    if (d.identical) {
+      body.innerHTML = '<div class="empty-state"><div class="empty-state-title">These configurations are identical</div>' +
+        '<p class="empty-state-desc">Both snapshots have the same content.</p></div>';
+      return;
+    }
+    body.innerHTML =
+      '<div class="content-sub" style="margin-bottom:8px;">+' + d.added + ' added · −' + d.removed + ' removed</div>' +
+      '<div class="panel panel-wide"><div class="panel-body ncm-diff">' +
+      d.lines.map((l) =>
+        '<div class="ncm-diff-line is-' + l.type + '"><span class="ncm-diff-marker">' +
+        (l.type === 'add' ? '+' : (l.type === 'remove' ? '-' : ' ')) + '</span>' +
+        '<span class="ncm-diff-text">' + esc(l.text) + '</span></div>').join('') +
+      '</div></div>';
+  });
+
+  document.getElementById('run-compare-btn').addEventListener('click', runComparison);
+
+  async function load() {
+    let res, grpRes;
+    try {
+      res = await AAAPlatform.authedFetch('/api/ncm/devices');
+      grpRes = await AAAPlatform.authedFetch('/api/device-groups');
+    } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      document.getElementById('explorer-list').innerHTML =
+        '<div class="empty-state">' + (res && res.status === 403
+          ? "Your role doesn't have permission to view Configuration Management."
+          : 'Could not load devices.') + '</div>';
+      return;
+    }
+    devices = await res.json();
+
+    const groups = grpRes && grpRes.ok ? await grpRes.json() : [];
+    const names = [...new Set(
+      (groups.length ? groups.map((g) => g.name) : devices.map((d) => d.device_group_name)).filter(Boolean)
+    )].sort();
+    document.getElementById('explorer-group').innerHTML =
+      '<option value="">All groups</option>' +
+      names.map((n) => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
+
+    renderExplorer();
+    renderWorkspace();
+  }
+
+  load();
+})();
+</script>
+{% endblock %}

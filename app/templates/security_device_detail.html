@@ -1,6 +1,6 @@
 {% extends "app_shell.html" %}
 {% import "partials/icons.html" as icons %}
-{% block title %}Device Security — AAA Management Platform{% endblock %}
+{% block title %}Device Security — NetworkAAA{% endblock %}
 {% block breadcrumb %}Security Center / Devices / Detail{% endblock %}
 
 {% block view_content %}
@@ -54,6 +54,14 @@
     <h2>Interface Security</h2>
   </div>
   <div id="interface-section-body" hidden></div>
+
+  <div class="content-head" style="margin-top:32px;">
+    <h2>Configuration Management</h2>
+    <p class="content-sub">Backup, version history and diff for this device — the same device record NCM manages fleet-wide.</p>
+  </div>
+  <div class="panel panel-wide" style="margin-bottom:8px;">
+    <div class="panel-body" id="ncm-panel-body"><div class="empty-state">Loading…</div></div>
+  </div>
 
   <div class="content-head" style="margin-top:32px;">
     <h2>Audit History</h2>
@@ -590,8 +598,96 @@
     loadHistory();
   });
 
+  // ---- NCM panel -------------------------------------------------
+  // Uses the SAME device id as everything else on this page -- NCM
+  // references the existing device record rather than keeping its own
+  // device table, so nothing here needs a second lookup or mapping.
+  async function loadNcmPanel() {
+    const body = document.getElementById('ncm-panel-body');
+    let statusRes, historyRes;
+    try {
+      statusRes = await AAAPlatform.authedFetch('/api/ncm/devices');
+      historyRes = await AAAPlatform.authedFetch('/api/ncm/devices/' + deviceId + '/history');
+    } catch (e) {
+      statusRes = null;
+    }
+    if (!statusRes || !statusRes.ok) {
+      body.innerHTML = '<div class="empty-state">' + (statusRes && statusRes.status === 403
+        ? "Your role doesn't have permission to view Configuration Management."
+        : 'Could not load configuration management status.') + '</div>';
+      return;
+    }
+    const all = await statusRes.json();
+    const info = all.find((d) => d.device_id === deviceId);
+    const history = historyRes && historyRes.ok ? await historyRes.json() : [];
+
+    if (!info) {
+      body.innerHTML = '<div class="empty-state">This device is not currently managed by NCM.</div>';
+      return;
+    }
+
+    const backedUp = info.latest_version != null;
+    const statusText = info.last_backup_status === 'failed'
+      ? 'Last backup failed'
+      : (backedUp ? 'Healthy' : 'Never backed up');
+    const statusState = info.last_backup_status === 'failed'
+      ? 'is-red' : (backedUp ? 'is-signal' : 'is-amber');
+
+    body.innerHTML =
+      '<div class="status-card-grid" style="margin-bottom:12px;">' +
+      AAAPlatform.kpiCard({ label: 'Status', value: statusText, state: statusState }) +
+      AAAPlatform.kpiCard({ label: 'Current Version', value: backedUp ? '#' + info.latest_version : '—' }) +
+      AAAPlatform.kpiCard({ label: 'Stored Versions', value: info.total_versions }) +
+      AAAPlatform.kpiCard({ label: 'Last Backup',
+                            value: info.latest_backup_at ? new Date(info.latest_backup_at).toLocaleString() : 'never',
+                            sub: info.latest_source || null }) +
+      '</div>' +
+      (info.last_backup_error
+        ? '<div class="content-sub" style="color:var(--red);margin-bottom:10px;">' + escapeHtml(info.last_backup_error) + '</div>'
+        : '') +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+      '<button type="button" class="btn-primary btn-small" id="ncm-backup-now-btn" style="width:auto;">Backup Now</button>' +
+      (backedUp
+        ? '<a class="btn-secondary btn-small" href="/ncm/archive?configuration_id=' + info.latest_configuration_id + '">View Configuration</a>' +
+          '<a class="btn-secondary btn-small" href="/ncm/archive?device_id=' + deviceId + '">History</a>' +
+          (history.length >= 2
+            ? '<a class="btn-secondary btn-small" href="/ncm/diff?device_id=' + deviceId + '">Diff</a>'
+            : '')
+        : '') +
+      '</div>' +
+      (backedUp && history.length < 2
+        ? '<div class="content-sub" style="margin-top:8px;">Only one version archived so far — a diff needs two.</div>'
+        : '');
+
+    document.getElementById('ncm-backup-now-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('ncm-backup-now-btn');
+      btn.disabled = true;
+      btn.textContent = 'Backing up…';
+      let res;
+      try {
+        res = await AAAPlatform.authedFetch('/api/ncm/backup', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_ids: [deviceId], device_group_ids: [], configuration_types: ['running'] }),
+        });
+      } catch (e) { res = null; }
+      btn.disabled = false;
+      btn.textContent = 'Backup Now';
+      if (!res || !res.ok) {
+        const b = res ? await res.json().catch(() => ({})) : {};
+        AAAPlatform.toast((b.detail && typeof b.detail === 'string') ? b.detail : 'Backup failed.', 'error');
+        return;
+      }
+      const r = await res.json();
+      AAAPlatform.toast(r.changed
+        ? 'Backup complete — a new configuration version was archived.'
+        : 'Backup complete — the configuration was unchanged, so no new version was created.');
+      loadNcmPanel();
+    });
+  }
+
   loadDeviceSummary();
   loadHistory();
+  loadNcmPanel();
 })();
 </script>
 {% endblock %}

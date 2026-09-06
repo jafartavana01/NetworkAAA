@@ -12,6 +12,243 @@ it was built alongside.
 
 ## 2026-09-03
 
+### Added — NCM Configuration Compare: multi-device comparison, matrix and outlier detection
+
+A new `/ncm/compare` page plus the real backend behind it. Every value
+shown is computed from the ACTUAL stored configuration text of each
+device's latest snapshot -- no sampling, no placeholder categories, no
+demo data anywhere in the implementation.
+
+**New `app/services/ncm_compare.py`.** A "category" (AAA, SSH, SNMP,
+Logging, NTP, HTTP, Interfaces, Routing, ACL, Services) is a named set
+of real Cisco IOS line patterns. For each device the matching lines are
+extracted, normalised (trailing whitespace only -- LEADING whitespace
+is significant in IOS, it marks sub-mode) and hashed. Devices sharing a
+hash are running byte-identical configuration for that category.
+
+That is a claim the code can prove. What it deliberately does NOT claim
+is semantic equivalence: two different configurations that happen to
+behave identically are reported as different, because proving otherwise
+means modelling device behaviour. The UI says "identical", not
+"equivalent", for exactly that reason.
+
+**Deliberate correctness decisions, each a case where the easy
+implementation would have lied:**
+* Comparison is against the MAJORITY per category, not against
+  whichever device was clicked first -- otherwise the answer to "which
+  is the odd one out" would depend on click order.
+* With no majority (two devices that differ, or an all-different set)
+  NO outlier is named. Calling an arbitrary side "correct" would be a
+  guess presented as a finding.
+* An outlier is only named when it is UNIQUELY worst. On a tie there is
+  no single odd one out.
+* A category no device uses at all is dropped from the matrix rather
+  than shown as an empty row -- an empty row implies something was
+  checked and found absent, when nothing was checked.
+* Fewer than two devices with snapshots returns "nothing was compared",
+  NOT a 100%- or 0%-consistent result. A single device cannot be
+  consistent with anything.
+* Devices without a snapshot are returned explicitly in
+  `devices_without_snapshot`, never silently dropped or counted as
+  matching -- "we have never backed this up" is a finding.
+* A line may belong to several categories (an interface ACL is
+  arguably both). Categories are views over the configuration, not a
+  partition, because forcing exclusivity would hide a line from a
+  category an operator expects to find it in.
+
+**New `POST /api/ncm/compare`**, gated on `ncm:diff` (the same
+permission the two-version diff uses -- the same capability across
+devices) with CSRF on the mutating call, capped at 50 devices so a
+mis-click on "select all" cannot ask the server to diff a whole fleet
+at once. Latest snapshots are fetched in ONE query, not one per device.
+
+**The page**: device explorer with live search, group and
+backup-status filters; multi-select by checkbox AND drag-and-drop into
+the workspace (checkboxes are the accessible, keyboard-operable route
+-- drag is an addition, never the only way to select); removable
+device chips showing each device's archived version; consistency /
+matching / differing / no-snapshot KPIs; the configuration matrix; an
+outlier callout; and a raw diff pane that calls the EXISTING
+`/api/ncm/diff` endpoint rather than adding a second diff
+implementation. Matrix cells carry a text label ("match" / "differs" /
+"absent") as well as colour -- a matrix read only by hue is unusable
+for a colour-blind operator.
+
+**Empty and failure states, each distinct**: no devices at all; no
+device matching the filters; fewer than two selected; fewer than two
+with an archived snapshot (naming which devices are missing one); a
+403 stating it is a permission problem; and a general comparison
+failure. Large selections show progress on the button and in the
+results area rather than appearing frozen.
+
+**Tested by execution — 8 comparison cases**: three identical devices
+(100%, no outlier); a genuine outlier correctly identified with its
+differing-category count and the HTTP category appearing only because
+one device has it; two differing devices producing NO outlier; a
+device with no snapshot excluded but reported; a single device
+returning nothing-compared rather than a false 100%; an empty
+selection; unused categories dropped; and a baseline selected from a
+MATCHING device so "diff against baseline" doesn't compare one outlier
+against another.
+
+**Verified**: 41 templates parse; every existing NCM page (Overview,
+Archive, Diff, Jobs, Schedules) and the Dashboard re-rendered and
+re-syntax-checked to confirm nothing regressed; zero ID mismatches
+across 22 references on the new page; all icon constants render real
+SVG; new CSS classes present and brace-balanced; project-wide compile
+and `[hidden]` sweeps clean; branding confirmed as NetworkAAA.
+
+**Limitations**: categories cover common Cisco IOS syntax -- a line
+outside those patterns still appears in the raw diff but not in the
+matrix. Comparison reads archived snapshots only; it never contacts a
+device, so an unreachable device simply has no newer snapshot rather
+than failing the comparison.
+
+---
+
+### Fixed — "Building configuration..." truncation, product branding, Authorization Results
+
+**Bug 1 root cause — SSH read loop, not the archive layer.**
+`network_ops_execution._read_until_idle` stopped after 1.5 seconds of
+silence. A Cisco device answers `show running-config` by printing
+"Building configuration..." IMMEDIATELY, then going quiet for several
+seconds while it renders the configuration. The reader returned during
+that pause, so the banner WAS the entire captured output -- everything
+downstream (cleanup, hashing, archive, diff) then faithfully stored and
+compared a 25-byte string. Reproduced deterministically with a fake
+shell replaying real IOS timing before changing anything.
+
+**Fix: prompt-based completion detection.** New `_read_until_prompt`
+returns when the device's own prompt reappears at the END of the
+stream -- the device telling us it is finished. Silence is not that
+signal. Specifics:
+* The prompt regex is anchored to the tail, because a prompt-looking
+  string can legitimately appear INSIDE a configuration (a banner, a
+  description). Verified: a config containing `banner motd ^R2#^` is
+  no longer truncated at that line.
+* `--More--` is detected and answered with a space, so a device that
+  ignores `terminal length 0` yields output instead of hanging.
+* The idle window is kept only as a FALLBACK for prompts this regex
+  cannot match, raised to 8s for configuration commands and left at
+  1.5s otherwise -- so ordinary interactive commands stay responsive
+  and a config dump is never truncated. Config commands are matched
+  loosely (`sh run`, `show run`, `show startup-config`) since
+  operators abbreviate.
+* `_read_until_idle` is retained as an alias, so existing command
+  execution keeps working unchanged.
+
+**Driver cleanup improved**: strips the echoed command, the
+"Building configuration"/"Current configuration : N bytes" chatter,
+and the trailing prompt -- but never truncates on an unexpected line.
+Losing real configuration is far worse than carrying one odd line into
+the archive.
+
+**Tested** (7 SSH-reader cases + 6 cleanup assertions, all executed):
+the exact bug scenario now captures 15 lines where it previously
+captured 1; the reader returns immediately on prompt rather than
+waiting out the grace; the pager is stripped and answered; an
+unmatchable prompt still returns via fallback instead of hanging;
+prompt-like text inside a config is preserved; and abbreviation
+matching is correct. A real device could not be reached from this
+environment -- the fake shell replays real IOS output and timing,
+which is what makes the root cause and fix demonstrable here.
+
+**Bug 3 — Authorization Results was NOT a bug.** Traced it: the
+counter only counts records carrying a `result` field, which is
+correct. TACACS+ accounting records a permit/deny result on
+authorization events; a log holding only session start/stop records
+legitimately yields zero. The panel simply explained this badly. It
+now states how many accounting records WERE read, that session
+start/stop records don't carry an authorization result, and links to
+AAA Health -- rather than showing an unexplained empty donut. No
+counting logic was changed, because none was wrong.
+
+**Bug 2 — branding.** Sidebar now shows "NetworkAAA" with the
+subtitle "Network Security Operations Platform"; the login page
+matches; 38 page titles rebranded from "AAA Management Platform" to
+"NetworkAAA". Confirmed zero remaining product-name occurrences in
+the UI. Per instruction, no Python module, database table, API path
+or variable was renamed -- this was branding only.
+
+**Verified**: all 40 templates parse; project compiles; dashboard and
+sidebar render with the new branding and no stale name; extracted
+scripts pass Node syntax checks; CSS brace-balanced with the new
+brand classes present; `[hidden]` sweep clean.
+
+---
+
+### Completed — NCM device panel + docs; Dashboard rebuilt in the modern layout
+
+**NCM device-page panel.** Added to `/security/devices/{id}` -- which,
+confirmed by checking the routes rather than assuming, is the ONLY
+real per-device detail page in this project. It uses the same device
+id the rest of that page already has, so NCM references the existing
+device record with no second lookup and no NCM-specific device table.
+Shows status (healthy / never backed up / last backup failed), current
+version, stored version count, last backup time and source, plus
+Backup Now, View Configuration, History and Diff. The Diff link
+appears only when the device actually has two versions, with a line
+explaining why when it doesn't. After a backup it reports whether a
+new version was archived or the configuration was unchanged.
+
+**Documentation.** `docs/ARCHITECTURE.md` gains a full NCM section:
+relationship to Network Operations and AAA, an explicit table of what
+infrastructure is reused rather than duplicated, the data model, the
+backup lifecycle including deduplication and failure isolation, the
+driver abstraction, why the diff is text-based, how scheduling works,
+the security model, RBAC, and a candid limitations list (Cisco-only,
+retention stored but NOT yet enforced, no platform-wide audit-event
+log, text diff only, single daily run time). README gains an NCM entry
+in the feature table.
+
+**Dashboard rebuilt** in the attached reference's layout: a hero
+header, a five-card KPI row (devices, users, active sessions,
+authorization success rate, and config-backup coverage), an AAA
+Activity area chart, an Authorization Results donut with a centred
+total and a clickable legend, live "active in the last 5 minutes",
+service health, a Configuration Posture panel driven by NCM, quick
+actions, and core build information.
+
+`.dash-kpi` is its own component rather than a reuse of
+`.status-card`: these are larger, carry a sub-line and are the first
+thing read on the page -- reusing the compact card would have meant
+either shrinking these or bloating every other page's cards.
+
+**Three real field-name bugs caught by checking the API instead of
+trusting the field names I'd written:**
+1. Hourly activity returns `{hour: <ISO>, count: n}` -- I had written
+   `hour_label`/`label`, which would have produced a chart with blank
+   x-axis labels. Now parsed and formatted as a local time.
+2. Recent activity returns `event_count` and `last_seen` (ISO) -- I
+   had written `events` and a non-existent `last_seen_human`, which
+   would have shown "—" in both columns for every row.
+3. `/api/system/status` returns `database` as a plain STRING
+   ("connected") and each service with systemd's own `active_state`,
+   not booleans. My original code would have reported every service
+   and the database as down even when perfectly healthy.
+
+All three were found by reading the actual endpoints and service
+functions rather than assuming, and every remaining key used
+(`distinct_devices`, `distinct_users`, `permit_count`,
+`non_permit_count`, `sessions`, `build_info`, `os`) was verified the
+same way.
+
+The Authorization donut keeps the no-data behaviour fixed earlier: one
+neutral-grey segment labelled "No data yet", never a full green ring
+that would read as 100% permit when nothing was recorded. Service
+health carries a text state as well as a colour dot. The NCM posture
+panel distinguishes "no permission" from "error" -- a 403 is a
+permission outcome, not a failure.
+
+**Verified**: dashboard parses, zero ID mismatches, all nine icon
+constants render real SVG, scripts pass Node syntax checks; NCM device
+panel renders and passes the same checks (zero mismatches across 34
+references); project-wide compile, 40 templates, `view_scripts` and
+`[hidden]` sweeps all clean; CSS brace-balanced with every new class
+confirmed present.
+
+---
+
 ### Completed — NCM GUI: Overview, Archive with viewer, Diff, Jobs, Schedules
 
 NCM is now usable end-to-end from the browser. Five pages, all built

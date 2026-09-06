@@ -123,6 +123,18 @@ button {
 .brand-compact .brand-mark { width: 20px; height: 20px; }
 .brand-text { display: flex; flex-direction: column; }
 .brand-name { font-weight: 600; letter-spacing: 0.02em; }
+/* Product subtitle beneath the name. Stacked in its own flex column so
+   the wordmark stays vertically centred against the brand mark whether
+   or not a subtitle is present. */
+.brand-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+.brand-subtitle {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .brand-sub { font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
 
 .mono { font-family: var(--font-mono); }
@@ -1506,3 +1518,213 @@ summary:focus-visible {
 .ncm-diff-line.is-context .ncm-diff-text { color: var(--text-dim); }
 .ncm-diff-line.is-meta { color: var(--text-faint); margin-top: 8px; }
 .ncm-diff-line.is-meta .ncm-diff-text { color: var(--text-faint); }
+
+/* ==========================================================================
+   Dashboard — hero, KPI row, health list, quick actions
+   ========================================================================== */
+
+.dash-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+.dash-hero-title { display: flex; align-items: flex-start; gap: 14px; }
+.dash-hero-title h1 { margin: 0; }
+.dash-hero-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: var(--bg-panel-raised);
+  border: 1px solid var(--line-bright);
+  color: var(--signal);
+}
+.dash-hero-meta { display: flex; align-items: center; gap: 12px; }
+
+/* Hero KPI cards. Their own component rather than .status-card: these
+   are larger, carry a sub-line, and are the first thing read on the
+   page -- reusing the compact card would either shrink these or bloat
+   every other page's cards. */
+.dash-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.dash-kpi {
+  display: block;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+a.dash-kpi:hover { border-color: var(--line-bright); background: var(--bg-panel-raised); }
+.dash-kpi-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.dash-kpi-icon { display: flex; color: var(--text-faint); }
+.dash-kpi-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+.dash-kpi-value {
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+.dash-kpi-sub { margin-top: 6px; font-size: 11.5px; color: var(--text-faint); }
+.dash-kpi.is-signal .dash-kpi-value { color: var(--signal); }
+.dash-kpi.is-signal .dash-kpi-icon { color: var(--signal); }
+.dash-kpi.is-amber .dash-kpi-value { color: var(--amber); }
+.dash-kpi.is-amber .dash-kpi-icon { color: var(--amber); }
+.dash-kpi.is-red .dash-kpi-value { color: var(--red); }
+.dash-kpi.is-red .dash-kpi-icon { color: var(--red); }
+
+.dash-donut-center {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+}
+.dash-donut-value {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1;
+}
+.dash-donut-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+
+/* Service health list. State is carried by a text label as well as the
+   dot -- never colour alone. */
+.dash-health-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.dash-health-row:last-child { border-bottom: none; }
+.dash-health-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: var(--text-faint); }
+.dash-health-dot.is-signal { background: var(--signal); }
+.dash-health-dot.is-red { background: var(--red); }
+.dash-health-name { flex: 1; font-size: 13px; color: var(--text-primary); }
+.dash-health-state { font-size: 12px; font-family: var(--font-mono); color: var(--text-dim); }
+.dash-health-state.is-signal { color: var(--signal); }
+.dash-health-state.is-red { color: var(--red); }
+
+.dash-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+.dash-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-panel-raised);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 150ms ease;
+}
+.dash-action:hover { border-color: var(--signal); }
+.dash-action-icon { display: flex; color: var(--signal); flex-shrink: 0; }
+.dash-action-title { display: block; font-size: 13px; color: var(--text-primary); }
+.dash-action-sub { display: block; font-size: 11px; color: var(--text-faint); }
+
+/* ==========================================================================
+   NCM — Configuration Compare
+   ========================================================================== */
+
+.cmp-layout { display: grid; grid-template-columns: 320px 1fr; gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .cmp-layout { grid-template-columns: 1fr; } }
+.cmp-explorer { position: sticky; top: 12px; }
+.cmp-main { min-width: 0; }
+
+.cmp-explorer-list { max-height: 460px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-void); }
+.cmp-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  cursor: grab;
+}
+.cmp-device:last-child { border-bottom: none; }
+.cmp-device:hover { background: var(--bg-panel-raised); }
+.cmp-device-icon { display: flex; color: var(--text-faint); flex-shrink: 0; }
+.cmp-device-body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.cmp-device-name { font-size: 12.5px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmp-device-meta { font-size: 11px; color: var(--text-faint); }
+.cmp-device-snap { font-size: 10.5px; font-family: var(--font-mono); flex-shrink: 0; }
+.cmp-device-snap.is-signal { color: var(--signal); }
+.cmp-device-snap.is-amber { color: var(--amber); }
+
+.cmp-dropzone {
+  min-height: 92px;
+  border: 1.5px dashed var(--line-bright);
+  border-radius: var(--radius);
+  padding: 12px;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+.cmp-dropzone.is-dragover { border-color: var(--signal); background: rgba(79, 209, 165, 0.06); }
+.cmp-dropzone-hint { font-size: 12.5px; color: var(--text-faint); text-align: center; padding: 14px 0; }
+.cmp-dropzone-hint[hidden] { display: none; }
+
+.cmp-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.cmp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--line-bright);
+  border-radius: var(--radius);
+  background: var(--bg-panel-raised);
+  font-size: 12px;
+}
+.cmp-chip.is-amber { border-color: var(--amber); }
+.cmp-chip-name { color: var(--text-primary); }
+.cmp-chip-meta { color: var(--text-faint); font-size: 11px; }
+.cmp-chip-remove {
+  display: flex;
+  background: none;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 4px;
+}
+.cmp-chip-remove:hover { color: var(--red); background: var(--bg-panel); }
+
+.cmp-outlier { display: flex; align-items: flex-start; gap: 12px; }
+.cmp-outlier-icon { display: flex; color: var(--amber); flex-shrink: 0; margin-top: 2px; }
+.cmp-outlier-title { font-size: 13px; color: var(--amber); margin-bottom: 2px; }
+
+/* Matrix cells carry a text label as well as colour -- a matrix read
+   only by hue is unusable for a colour-blind operator. */
+.cmp-matrix td.cmp-cell {
+  text-align: center;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 8px 10px;
+}
+.cmp-cell.is-signal { background: rgba(79, 209, 165, 0.13); color: var(--signal); }
+.cmp-cell.is-red { background: rgba(224, 97, 90, 0.14); color: var(--red); }

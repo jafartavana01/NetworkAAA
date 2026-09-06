@@ -20,9 +20,15 @@ tested here would be fake structure, not architecture.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from . import network_ops_execution
+
+#: A bare device prompt on its own line (what the reader stops on).
+#: Anchored to the whole line so a config line that merely CONTAINS a
+#: "#" -- a comment, a banner delimiter -- is never mistaken for one.
+_TRAILING_PROMPT_RE = re.compile(r"^[\w.\-@/]+(?:\([\w\-]+\))?[>#]\s*$")
 
 
 @dataclass
@@ -56,11 +62,40 @@ class NetworkDeviceDriver:
     def supports(self, configuration_type: str) -> bool:
         return configuration_type in self.config_commands
 
+    #: Lines that are device chatter rather than configuration. Removed
+    #: only when they appear BEFORE the configuration body, never from
+    #: within it.
+    _NOISE_PREFIXES = ("Building configuration", "Current configuration")
+
     def clean_output(self, raw: str, command: str) -> str:
-        """Strip the echoed command and trailing prompt noise. Overridable."""
-        lines = raw.splitlines()
-        if lines and command.strip() and command.strip() in lines[0]:
+        """
+        Strips the echoed command, the device's own progress chatter,
+        and the trailing prompt, leaving the configuration itself.
+
+        Note what is NOT done here: this never truncates on encountering
+        an unexpected line. If the device sends something unrecognised,
+        it is kept -- losing real configuration is a far worse failure
+        than carrying one odd line into the archive.
+        """
+        text = raw.replace("\r\n", "\n").replace("\r", "\n")
+        lines = text.split("\n")
+
+        # Drop the echoed command (device echoes what we typed).
+        cmd = (command or "").strip()
+        if cmd and lines and cmd in lines[0]:
             lines = lines[1:]
+
+        # Drop leading blank/progress lines only.
+        while lines and (
+            not lines[0].strip()
+            or lines[0].strip().startswith(self._NOISE_PREFIXES)
+        ):
+            lines.pop(0)
+
+        # Drop the trailing prompt the reader stopped on, plus blanks.
+        while lines and (not lines[-1].strip() or _TRAILING_PROMPT_RE.match(lines[-1])):
+            lines.pop()
+
         return "\n".join(lines).strip()
 
     def get_configuration(

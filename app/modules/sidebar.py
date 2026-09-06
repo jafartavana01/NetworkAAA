@@ -101,7 +101,8 @@ _SECTION_BY_PATH: dict[str, tuple[str, list[str]]] = {
     "/security/compliance": ("security", ["compliance", "nist", "iso 27002", "cis benchmark", "disa stig", "controls"]),
     "/ncm/overview": ("ncm", ["ncm", "config management", "configuration management", "backup"]),
     "/ncm/archive": ("ncm", ["archive", "config archive", "configuration archive", "versions", "snapshots"]),
-    "/ncm/diff": ("ncm", ["diff", "compare", "configuration diff", "config compare"]),
+    "/ncm/compare": ("ncm", ["compare", "configuration compare", "multi device compare", "consistency", "outlier"]),
+    "/ncm/diff": ("ncm", ["diff", "raw diff", "configuration diff", "two versions"]),
     "/ncm/jobs": ("ncm", ["backup jobs", "ncm jobs", "config backup jobs"]),
     "/ncm/schedules": ("ncm", ["backup schedules", "scheduled backup", "recurring backup"]),
 
