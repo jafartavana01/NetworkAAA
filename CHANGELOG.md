@@ -12,6 +12,43 @@ it was built alongside.
 
 ## 2026-09-03
 
+### Added — browser icon (favicon)
+
+The app had no favicon at all, which is why Chrome showed a blank page
+icon on every tab. Added `app/static/favicon.svg`, linked from
+`base.html` so every page inherits it through the single shared head.
+
+Deliberately the same shape and palette as the in-app brand mark: the
+hexagon from `.brand-mark`, filled with the same signal-green
+gradient. Colours are hard coded rather than referencing CSS custom
+properties, because a favicon is fetched standalone by the browser
+outside any stylesheet -- a `var()` reference would resolve to nothing
+and render an invisible icon. A shield-and-check glyph sits inside the
+hexagon: the bare mark is not recognisable at tab size, and the check
+is stroked rather than filled so it survives downscaling to 16px
+without its interior closing up.
+
+Also added `apple-touch-icon` and a `theme-color` meta matching the
+app background, so a mobile browser's UI chrome matches the app
+instead of defaulting to white.
+
+**Two XML bugs caught and fixed during validation**, both in the
+explanatory comment rather than the artwork: an `-->` sequence
+terminated the comment early, and `--signal-dim` contains a double
+hyphen, which is illegal inside an XML comment. Either would have made
+the file unparseable and the icon silently absent. Found by actually
+parsing the SVG rather than eyeballing it.
+
+**Verified**: the SVG parses as well-formed XML; no attribute contains
+a `var()` reference (checked per-attribute, not by text search, since
+the word legitimately appears in the comment); the gradient id is
+correctly referenced; `/static` is confirmed mounted in `main.py`; the
+installer copies the whole `app/` tree so the icon ships automatically;
+and the link renders on dashboard, login, Security Center and NCM
+pages.
+
+---
+
 ### Fixed — literal "\\u2019" in dashboard text; Authorization Results now points at the right log
 
 **Two bugs, one of them mine.** The dashboard was rendering a literal

@@ -4,6 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}NetOpsGuard{% endblock %}</title>
+
+  {# Favicon. SVG is the primary format -- it stays sharp at every size
+     and is supported by all current browsers. `rel="icon"` with an
+     explicit type lets a browser that cannot render SVG skip it
+     silently rather than showing a broken icon. The theme colour is
+     the same signal green as the brand mark, so a mobile browser's
+     UI chrome matches the app instead of defaulting to white. #}
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="apple-touch-icon" href="/static/favicon.svg">
+  <meta name="theme-color" content="#0d1117">
+
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body class="{% block body_class %}{% endblock %}">
