@@ -1460,3 +1460,49 @@ summary:focus-visible {
   .sec-picker-row { grid-template-columns: 28px 1fr; }
   .sec-picker-ip, .sec-picker-row .content-sub { display: none; }
 }
+
+/* ==========================================================================
+   NCM — configuration viewer and diff
+   ========================================================================== */
+
+/* Configuration viewer. Scrolls in its own box rather than growing the
+   drawer, since a real device configuration is thousands of lines. */
+.ncm-config-view {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  background: var(--bg-void);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  max-height: 60vh;
+  overflow: auto;
+  padding: 8px 0;
+}
+.ncm-config-line { display: flex; gap: 12px; padding: 0 12px; white-space: pre; }
+.ncm-config-line.is-match { background: rgba(224, 168, 62, 0.14); }
+.ncm-config-lineno {
+  flex: 0 0 46px;
+  text-align: right;
+  color: var(--text-faint);
+  user-select: none;  /* so copying the config doesn't drag line numbers along */
+}
+.ncm-config-text { color: var(--text-dim); }
+
+/* Unified diff. Added/removed carry a +/- marker as well as colour --
+   the change must be readable without relying on hue. */
+.ncm-diff {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  max-height: 70vh;
+  overflow: auto;
+}
+.ncm-diff-line { display: flex; gap: 10px; padding: 0 6px; white-space: pre; }
+.ncm-diff-marker { flex: 0 0 12px; color: var(--text-faint); user-select: none; }
+.ncm-diff-line.is-add { background: rgba(79, 209, 165, 0.12); }
+.ncm-diff-line.is-add .ncm-diff-marker, .ncm-diff-line.is-add .ncm-diff-text { color: var(--signal); }
+.ncm-diff-line.is-remove { background: rgba(224, 97, 90, 0.12); }
+.ncm-diff-line.is-remove .ncm-diff-marker, .ncm-diff-line.is-remove .ncm-diff-text { color: var(--red); }
+.ncm-diff-line.is-context .ncm-diff-text { color: var(--text-dim); }
+.ncm-diff-line.is-meta { color: var(--text-faint); margin-top: 8px; }
+.ncm-diff-line.is-meta .ncm-diff-text { color: var(--text-faint); }

@@ -58,6 +58,7 @@ _SECTION_ORDER: list[tuple[str, str, str]] = [
     ("tacacs", "TACACS+ / RADIUS", "shield"),
     ("network_ops", "Network Operations", "terminal"),
     ("security", "Security Center", "shield-check"),
+    ("ncm", "Config Management", "database"),
     ("system", "System", "settings"),
 ]
 
@@ -98,6 +99,11 @@ _SECTION_BY_PATH: dict[str, tuple[str, list[str]]] = {
     "/security/schedule": ("security", ["schedule", "scheduled audit", "automatic audit", "daily audit", "service account"]),
     "/security/reports": ("security", ["reports", "audit reports", "audit report", "fleet audit"]),
     "/security/compliance": ("security", ["compliance", "nist", "iso 27002", "cis benchmark", "disa stig", "controls"]),
+    "/ncm/overview": ("ncm", ["ncm", "config management", "configuration management", "backup"]),
+    "/ncm/archive": ("ncm", ["archive", "config archive", "configuration archive", "versions", "snapshots"]),
+    "/ncm/diff": ("ncm", ["diff", "compare", "configuration diff", "config compare"]),
+    "/ncm/jobs": ("ncm", ["backup jobs", "ncm jobs", "config backup jobs"]),
+    "/ncm/schedules": ("ncm", ["backup schedules", "scheduled backup", "recurring backup"]),
 
     # ---- System ----
     "/tacacs/config": ("system", ["configuration", "config", "tac_plus", "compile"]),

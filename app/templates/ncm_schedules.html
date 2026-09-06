@@ -1,0 +1,254 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Backup Schedules — AAA Management Platform{% endblock %}
+{% block breadcrumb %}NCM / Backup Schedules{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+    <div>
+      <h1>Backup Schedules</h1>
+      <p class="content-sub">Recurring configuration backups. Schedules are stored on the server and run without the browser open.</p>
+    </div>
+    <button type="button" class="btn-primary btn-with-icon" id="add-schedule-btn" style="width:auto;">{{ icons.icon('plus', 16) }}New Schedule</button>
+  </div>
+
+  <div id="schedules-wrap"><div class="empty-state">Loading…</div></div>
+</main>
+
+<div class="modal-backdrop" id="schedule-modal-backdrop" hidden>
+  <div class="modal" style="max-width:min(94vw,760px);max-height:90vh;overflow-y:auto;">
+    <button type="button" class="modal-close-btn" id="schedule-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2 id="schedule-modal-title">New Schedule</h2>
+    <form id="schedule-form">
+      <input type="hidden" id="schedule-id">
+
+      <label class="field">
+        <span class="field-label">Name</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('clipboard-list', 14) }}</span>
+          <input type="text" id="schedule-name" required maxlength="128" placeholder="e.g. Daily Network Backup">
+        </div>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Description</span>
+        <textarea id="schedule-description" rows="2"></textarea>
+      </label>
+
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Daily run time (server local time)</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('history', 14) }}</span>
+            <input type="time" id="schedule-time" required value="02:00">
+          </div>
+        </label>
+        <label class="field">
+          <span class="field-label">Configuration types</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('folder', 14) }}</span>
+            <select id="schedule-types">
+              <option value="running">Running config</option>
+              <option value="startup">Startup config</option>
+              <option value="running,startup">Running + Startup</option>
+            </select>
+          </div>
+        </label>
+      </div>
+
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Retention (days)</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('database', 14) }}</span>
+            <input type="number" id="schedule-retention" min="1" max="3650" value="90">
+          </div>
+        </label>
+        <label class="toggle-field field" style="justify-content:flex-start;padding-top:22px;">
+          <span class="toggle-switch">
+            <input type="checkbox" id="schedule-enabled" checked>
+            <span class="toggle-switch-slider"></span>
+          </span>
+          <span>Enabled</span>
+        </label>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Target device groups</div>
+        <div id="schedule-groups" class="sec-picker" style="max-height:150px;"></div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Target devices</div>
+        <div id="schedule-devices" class="sec-picker" style="max-height:200px;"></div>
+      </div>
+
+      <div id="schedule-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="schedule-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save Schedule</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const esc = AAAPlatform.escapeHtml;
+  let schedules = [];
+  let devices = [];
+  let groups = [];
+
+  function renderList() {
+    const wrap = document.getElementById('schedules-wrap');
+    if (!schedules.length) {
+      wrap.innerHTML = '<div class="empty-state"><div class="empty-state-title">No backup schedules yet</div>' +
+        '<p class="empty-state-desc">Create one to back up devices or device groups automatically each day.</p></div>';
+      return;
+    }
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>Name</th><th>Status</th><th>Run time</th><th>Types</th>' +
+      '<th>Targets</th><th>Retention</th><th>Last run</th><th></th></tr></thead><tbody>' +
+      schedules.map((s) =>
+        '<tr><td>' + esc(s.name) + (s.description ? '<div class="content-sub">' + esc(s.description) + '</div>' : '') + '</td>' +
+        '<td><span class="badge sec-sev-badge ' + (s.enabled ? 'is-signal' : '') + '">' +
+        (s.enabled ? 'Enabled' : 'Disabled') + '</span></td>' +
+        '<td class="cell-mono">' + esc(s.daily_run_time) + '</td>' +
+        '<td class="content-sub">' + esc(s.configuration_types.join(', ')) + '</td>' +
+        '<td class="content-sub">' + s.device_ids.length + ' devices · ' + s.device_group_ids.length + ' groups</td>' +
+        '<td class="cell-mono">' + s.retention_days + 'd</td>' +
+        '<td class="content-sub">' + (s.last_run_at ? new Date(s.last_run_at).toLocaleString() : 'never') + '</td>' +
+        '<td class="cell-actions">' +
+        '<button type="button" class="btn-secondary btn-small" data-edit="' + s.id + '">Edit</button>' +
+        '<button type="button" class="btn-danger btn-small" data-delete="' + s.id + '">Delete</button></td></tr>'
+      ).join('') + '</tbody></table>';
+  }
+
+  function renderPickers(selectedDevices, selectedGroups) {
+    document.getElementById('schedule-groups').innerHTML = groups.length
+      ? groups.map((g) =>
+          '<label class="sec-picker-row" style="grid-template-columns:28px 1fr;">' +
+          '<span class="checkbox-field"><input type="checkbox" class="group-check" value="' + g.id + '" ' +
+          (selectedGroups.includes(g.id) ? 'checked' : '') + '></span>' +
+          '<span class="sec-picker-name">' + esc(g.name) + '</span></label>').join('')
+      : '<div class="empty-state">No device groups defined.</div>';
+
+    document.getElementById('schedule-devices').innerHTML = devices.length
+      ? devices.map((d) =>
+          '<label class="sec-picker-row">' +
+          '<span class="checkbox-field"><input type="checkbox" class="device-check" value="' + d.device_id + '" ' +
+          (selectedDevices.includes(d.device_id) ? 'checked' : '') + '></span>' +
+          '<span class="sec-picker-name">' + esc(d.device_name) + '</span>' +
+          '<span class="sec-picker-ip cell-mono">' + esc(d.ip_address) + '</span>' +
+          '<span class="content-sub">' + esc(d.device_group_name || '—') + '</span></label>').join('')
+      : '<div class="empty-state">No devices available.</div>';
+  }
+
+  function openModal(schedule) {
+    document.getElementById('schedule-error').hidden = true;
+    document.getElementById('schedule-modal-title').textContent = schedule ? 'Edit Schedule' : 'New Schedule';
+    document.getElementById('schedule-id').value = schedule ? schedule.id : '';
+    document.getElementById('schedule-name').value = schedule ? schedule.name : '';
+    document.getElementById('schedule-description').value = schedule ? (schedule.description || '') : '';
+    document.getElementById('schedule-time').value = schedule ? schedule.daily_run_time : '02:00';
+    document.getElementById('schedule-types').value = schedule ? schedule.configuration_types.join(',') : 'running';
+    document.getElementById('schedule-retention').value = schedule ? schedule.retention_days : 90;
+    document.getElementById('schedule-enabled').checked = schedule ? schedule.enabled : true;
+    renderPickers(schedule ? schedule.device_ids : [], schedule ? schedule.device_group_ids : []);
+    document.getElementById('schedule-modal-backdrop').hidden = false;
+  }
+  const closeModal = () => { document.getElementById('schedule-modal-backdrop').hidden = true; };
+
+  document.getElementById('add-schedule-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('schedule-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('schedule-modal-close-btn').addEventListener('click', closeModal);
+  document.getElementById('schedule-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'schedule-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('schedules-wrap').addEventListener('click', async (e) => {
+    const edit = e.target.closest('button[data-edit]');
+    if (edit) {
+      const s = schedules.find((x) => x.id === edit.dataset.edit);
+      if (s) openModal(s);
+      return;
+    }
+    const del = e.target.closest('button[data-delete]');
+    if (del) {
+      const s = schedules.find((x) => x.id === del.dataset.delete);
+      if (!s || !window.confirm('Delete the schedule "' + s.name + '"? Archived configurations are not affected.')) return;
+      const res = await AAAPlatform.authedFetch('/api/ncm/schedules/' + del.dataset.delete, { method: 'DELETE' });
+      if (!res.ok) { AAAPlatform.toast('Could not delete that schedule.', 'error'); return; }
+      AAAPlatform.toast('Schedule deleted.');
+      load();
+    }
+  });
+
+  document.getElementById('schedule-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('schedule-error');
+    errorBox.hidden = true;
+
+    const deviceIds = [...document.querySelectorAll('.device-check:checked')].map((c) => c.value);
+    const groupIds = [...document.querySelectorAll('.group-check:checked')].map((c) => c.value);
+    if (!deviceIds.length && !groupIds.length) {
+      errorBox.textContent = 'Select at least one device or device group.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const id = document.getElementById('schedule-id').value;
+    const payload = {
+      name: document.getElementById('schedule-name').value.trim(),
+      description: document.getElementById('schedule-description').value.trim() || null,
+      enabled: document.getElementById('schedule-enabled').checked,
+      device_ids: deviceIds,
+      device_group_ids: groupIds,
+      configuration_types: document.getElementById('schedule-types').value.split(','),
+      daily_run_time: document.getElementById('schedule-time').value,
+      retention_days: Number(document.getElementById('schedule-retention').value) || 90,
+    };
+
+    const res = await AAAPlatform.authedFetch(
+      id ? '/api/ncm/schedules/' + id : '/api/ncm/schedules',
+      { method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not save the schedule.';
+      errorBox.hidden = false;
+      return;
+    }
+    closeModal();
+    AAAPlatform.toast('Schedule saved.');
+    load();
+  });
+
+  async function load() {
+    const wrap = document.getElementById('schedules-wrap');
+    let res, devRes, grpRes;
+    try {
+      res = await AAAPlatform.authedFetch('/api/ncm/schedules');
+      devRes = await AAAPlatform.authedFetch('/api/ncm/devices');
+      grpRes = await AAAPlatform.authedFetch('/api/device-groups');
+    } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      wrap.innerHTML = '<div class="empty-state">' + (res && res.status === 403
+        ? "Your role doesn't have permission to view Configuration Management."
+        : 'Could not load schedules.') + '</div>';
+      return;
+    }
+    schedules = await res.json();
+    devices = devRes && devRes.ok ? await devRes.json() : [];
+    groups = grpRes && grpRes.ok ? await grpRes.json() : [];
+    renderList();
+  }
+
+  load();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,170 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Configuration Diff — AAA Management Platform{% endblock %}
+{% block breadcrumb %}NCM / Configuration Diff{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Configuration Diff</h1>
+    <p class="content-sub">Compare two archived versions of the same device. This is a text diff — it shows exactly what changed, without claiming to interpret what those lines mean to the device.</p>
+  </div>
+
+  <div class="toolbar" style="gap:12px;flex-wrap:wrap;align-items:flex-end;">
+    <label class="field" style="min-width:200px;">
+      <span class="field-label">Device</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+        <select id="diff-device"><option value="">Select a device…</option></select>
+      </div>
+    </label>
+    <label class="field" style="min-width:200px;">
+      <span class="field-label">From version</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('history', 14) }}</span>
+        <select id="diff-from"><option value="">—</option></select>
+      </div>
+    </label>
+    <label class="field" style="min-width:200px;">
+      <span class="field-label">To version</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('history', 14) }}</span>
+        <select id="diff-to"><option value="">—</option></select>
+      </div>
+    </label>
+    <button type="button" class="btn-primary btn-with-icon" id="run-diff-btn" style="width:auto;">{{ icons.icon('check', 16) }}Compare</button>
+    <button type="button" class="btn-secondary btn-small" id="current-vs-previous-btn" style="width:auto;">Current vs Previous</button>
+  </div>
+
+  <div class="status-card-grid" id="diff-summary" style="margin-bottom:16px;"></div>
+  <div id="diff-body"><div class="empty-state">Select a device and two versions to compare.</div></div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_PLUS = '{{ icons.icon("plus", 16) }}';
+  const ICON_MINUS = '{{ icons.icon("x", 16) }}';
+  const ICON_LIST = '{{ icons.icon("list-checks", 16) }}';
+  const esc = AAAPlatform.escapeHtml;
+
+  let allConfigs = [];
+
+  function versionsFor(deviceId) {
+    return allConfigs.filter((c) => c.device_id === deviceId)
+      .sort((a, b) => b.version_number - a.version_number);
+  }
+
+  function fillVersionSelects() {
+    const deviceId = document.getElementById('diff-device').value;
+    const versions = versionsFor(deviceId);
+    const opts = versions.map((c) =>
+      '<option value="' + c.id + '">#' + c.version_number + ' — ' + esc(c.configuration_type) +
+      ' — ' + new Date(c.created_at).toLocaleString() + '</option>').join('');
+    document.getElementById('diff-from').innerHTML = '<option value="">—</option>' + opts;
+    document.getElementById('diff-to').innerHTML = '<option value="">—</option>' + opts;
+
+    // Sensible default: previous -> current, the comparison an operator
+    // asks for most often.
+    if (versions.length >= 2) {
+      document.getElementById('diff-from').value = versions[1].id;
+      document.getElementById('diff-to').value = versions[0].id;
+    }
+  }
+
+  function setMessage(html) {
+    document.getElementById('diff-summary').innerHTML = '';
+    document.getElementById('diff-body').innerHTML = html;
+  }
+
+  async function runDiff(fromId, toId) {
+    if (!fromId || !toId) {
+      setMessage('<div class="empty-state">Select both a "from" and a "to" version.</div>');
+      return;
+    }
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/ncm/diff', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from_configuration_id: fromId, to_configuration_id: toId }),
+      });
+    } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      const body = res ? await res.json().catch(() => ({})) : {};
+      setMessage('<div class="empty-state">' +
+        esc((body.detail && typeof body.detail === 'string') ? body.detail : 'Could not compare those versions.') +
+        '</div>');
+      return;
+    }
+    const d = await res.json();
+
+    document.getElementById('diff-summary').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_PLUS, label: 'Added Lines', value: d.added, state: d.added ? 'is-signal' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_MINUS, label: 'Removed Lines', value: d.removed, state: d.removed ? 'is-red' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_LIST, label: 'Comparing', value: '#' + d.from_version + ' → #' + d.to_version,
+                            sub: d.device_name + ' · ' + d.configuration_type }),
+    ].join('');
+
+    if (d.identical) {
+      document.getElementById('diff-body').innerHTML =
+        '<div class="empty-state"><div class="empty-state-title">These versions are identical</div>' +
+        '<p class="empty-state-desc">Both snapshots have the same content, so there is nothing to show.</p></div>';
+      return;
+    }
+
+    document.getElementById('diff-body').innerHTML =
+      '<div class="panel panel-wide"><div class="panel-body ncm-diff">' +
+      d.lines.map((l) =>
+        '<div class="ncm-diff-line is-' + l.type + '">' +
+        '<span class="ncm-diff-marker">' + (l.type === 'add' ? '+' : (l.type === 'remove' ? '-' : ' ')) + '</span>' +
+        '<span class="ncm-diff-text">' + esc(l.text) + '</span></div>').join('') +
+      '</div></div>';
+  }
+
+  document.getElementById('diff-device').addEventListener('change', fillVersionSelects);
+  document.getElementById('run-diff-btn').addEventListener('click', () =>
+    runDiff(document.getElementById('diff-from').value, document.getElementById('diff-to').value));
+
+  document.getElementById('current-vs-previous-btn').addEventListener('click', () => {
+    const versions = versionsFor(document.getElementById('diff-device').value);
+    if (versions.length < 2) {
+      // Explicitly stated rather than silently doing nothing or
+      // fabricating a comparison against an empty configuration.
+      setMessage('<div class="empty-state"><div class="empty-state-title">No previous configuration available</div>' +
+        '<p class="empty-state-desc">This device has fewer than two archived versions, so there is nothing to compare against.</p></div>');
+      return;
+    }
+    document.getElementById('diff-from').value = versions[1].id;
+    document.getElementById('diff-to').value = versions[0].id;
+    runDiff(versions[1].id, versions[0].id);
+  });
+
+  async function load() {
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/ncm/configurations?limit=1000'); } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      setMessage('<div class="empty-state">' + (res && res.status === 403
+        ? "Your role doesn't have permission to view Configuration Management."
+        : 'Could not load configurations.') + '</div>');
+      return;
+    }
+    allConfigs = await res.json();
+    const devices = [...new Map(allConfigs.map((c) => [c.device_id, c.device_name])).entries()]
+      .sort((a, b) => a[1].localeCompare(b[1]));
+    document.getElementById('diff-device').innerHTML =
+      '<option value="">Select a device…</option>' +
+      devices.map(([id, name]) => '<option value="' + id + '">' + esc(name) + '</option>').join('');
+
+    const params = new URLSearchParams(window.location.search);
+    const preset = params.get('device_id');
+    if (preset && devices.some(([id]) => id === preset)) {
+      document.getElementById('diff-device').value = preset;
+      fillVersionSelects();
+    }
+  }
+
+  load();
+})();
+</script>
+{% endblock %}

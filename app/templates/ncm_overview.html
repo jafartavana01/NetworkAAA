@@ -1,0 +1,290 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}NCM Overview — AAA Management Platform{% endblock %}
+{% block breadcrumb %}NCM / Overview{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+    <div>
+      <h1>Configuration Management</h1>
+      <p class="content-sub">Configuration backup, immutable versioned archive, and scheduled backups across your devices.</p>
+    </div>
+    <button type="button" class="btn-primary btn-with-icon" id="open-backup-modal-btn" style="width:auto;">{{ icons.icon('plus', 16) }}Backup Now</button>
+  </div>
+
+  <div class="status-card-grid" id="ncm-kpis" style="margin-bottom:16px;"></div>
+
+  <section class="sec-grid sec-grid-risk">
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Recent Configuration Changes</div>
+      <div class="panel-body" id="recent-changes-body"><div class="empty-state">Loading…</div></div>
+    </div>
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Recent Backup Jobs</div>
+      <div class="panel-body" id="recent-jobs-body"><div class="empty-state">Loading…</div></div>
+    </div>
+  </section>
+
+  <div class="content-head"><h2>Device Backup Status</h2></div>
+  <div id="device-status-wrap"><div class="empty-state">Loading…</div></div>
+</main>
+
+<div class="modal-backdrop" id="backup-modal-backdrop" hidden>
+  <div class="modal" style="max-width:min(94vw,760px);max-height:90vh;overflow-y:auto;">
+    <button type="button" class="modal-close-btn" id="backup-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2>Backup Now</h2>
+    <div class="panel panel-wide" style="margin-bottom:14px;">
+      <div class="panel-body" style="font-size:12px;color:var(--text-dim);">
+        Devices are reached over SSH using the platform's own service account — configure it under <a href="/security/schedule">Scheduled Audits</a> if you haven't. A snapshot is archived only if the configuration actually changed; the backup itself is always recorded.
+      </div>
+    </div>
+
+    <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+      <label class="field" style="min-width:200px;flex:1;">
+        <span class="field-label">Search</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+          <input type="text" id="backup-device-search" placeholder="Filter by name or IP…">
+        </div>
+      </label>
+      <label class="field" style="min-width:180px;">
+        <span class="field-label">Configuration types</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('folder', 14) }}</span>
+          <select id="backup-types">
+            <option value="running">Running config</option>
+            <option value="startup">Startup config</option>
+            <option value="running,startup">Running + Startup</option>
+          </select>
+        </div>
+      </label>
+    </div>
+
+    <div class="toolbar" style="margin-bottom:8px;">
+      <span class="content-sub" id="backup-selection-count">0 devices selected</span>
+      <div style="display:flex;gap:8px;">
+        <button type="button" class="btn-ghost btn-small" id="backup-select-all-btn">Select all shown</button>
+        <button type="button" class="btn-ghost btn-small" id="backup-select-none-btn">Clear</button>
+      </div>
+    </div>
+
+    <div id="backup-device-list" class="sec-picker"></div>
+    <div id="backup-error" class="form-error" role="alert" hidden></div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="backup-cancel-btn">Cancel</button>
+      <button type="button" class="btn-primary btn-with-icon" id="run-backup-btn" style="width:auto;">{{ icons.icon('check', 16) }}Start Backup</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const ICON_CLOCK = '{{ icons.icon("history", 16) }}';
+  const ICON_DB = '{{ icons.icon("database", 16) }}';
+
+  const esc = AAAPlatform.escapeHtml;
+  let pickerDevices = [];
+  const pickerSelected = new Set();
+
+  function timeAgo(iso) {
+    if (!iso) return 'never';
+    const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return mins + ' min ago';
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return hrs + (hrs === 1 ? ' hour ago' : ' hours ago');
+    const days = Math.floor(hrs / 24);
+    return days + (days === 1 ? ' day ago' : ' days ago');
+  }
+
+  function jobStatusState(s) {
+    if (s === 'completed') return 'is-signal';
+    if (s === 'partial_success') return 'is-amber';
+    if (s === 'failed') return 'is-red';
+    return '';
+  }
+
+  async function loadOverview() {
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/ncm/overview'); } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      const msg = res && res.status === 403
+        ? "Your role doesn't have permission to view Configuration Management."
+        : 'Could not load the NCM overview.';
+      ['recent-changes-body', 'recent-jobs-body', 'device-status-wrap'].forEach((id) => {
+        document.getElementById(id).innerHTML = '<div class="empty-state">' + msg + '</div>';
+      });
+      document.getElementById('ncm-kpis').innerHTML = '';
+      return;
+    }
+    const d = await res.json();
+
+    document.getElementById('ncm-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_SERVER, label: 'Managed Devices', value: d.total_devices }),
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'Recent Backup', value: d.devices_with_recent_backup, state: 'is-signal', sub: 'last 48 hours' }),
+      AAAPlatform.kpiCard({ icon: ICON_ALERT, label: 'Failed', value: d.devices_with_failed_backup, state: d.devices_with_failed_backup ? 'is-red' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_CLOCK, label: 'Never Backed Up', value: d.devices_never_backed_up, state: d.devices_never_backed_up ? 'is-amber' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_DB, label: 'Stored Versions', value: d.total_configurations, sub: d.configurations_changed_recently + ' new in 48h' }),
+      AAAPlatform.kpiCard({ icon: ICON_CLOCK, label: 'Last Successful Backup', value: timeAgo(d.last_successful_backup_at) }),
+    ].join('');
+
+    const changes = document.getElementById('recent-changes-body');
+    changes.innerHTML = d.recent_changes.length
+      ? '<table class="data-table"><thead><tr><th>Device</th><th>Version</th><th>Type</th><th>Source</th><th>When</th></tr></thead><tbody>' +
+        d.recent_changes.map((c) =>
+          '<tr><td>' + esc(c.device_name) + '</td>' +
+          '<td class="cell-mono"><a href="/ncm/archive?configuration_id=' + c.configuration_id + '">#' + c.version_number + '</a></td>' +
+          '<td class="content-sub">' + esc(c.configuration_type) + '</td>' +
+          '<td class="content-sub">' + esc(c.source) + '</td>' +
+          '<td class="content-sub">' + timeAgo(c.created_at) + '</td></tr>').join('') +
+        '</tbody></table>'
+      : '<div class="empty-state">No configuration changes archived yet.</div>';
+
+    const jobs = document.getElementById('recent-jobs-body');
+    jobs.innerHTML = d.recent_jobs.length
+      ? '<table class="data-table"><thead><tr><th>Job</th><th>Status</th><th>Devices</th><th>Changed</th><th>Started</th></tr></thead><tbody>' +
+        d.recent_jobs.map((j) =>
+          '<tr><td class="cell-mono"><a href="/ncm/jobs?job=' + j.id + '">#' + j.display_number + '</a></td>' +
+          '<td><span class="badge sec-sev-badge">' + esc(j.status) + '</span></td>' +
+          '<td class="cell-mono">' + j.succeeded + '/' + j.total_devices + '</td>' +
+          '<td class="cell-mono">' + j.changed + '</td>' +
+          '<td class="content-sub">' + timeAgo(j.started_at) + '</td></tr>').join('') +
+        '</tbody></table>'
+      : '<div class="empty-state">No backup jobs have run yet.</div>';
+  }
+
+  async function loadDeviceStatus() {
+    const wrap = document.getElementById('device-status-wrap');
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/ncm/devices'); } catch (e) { res = null; }
+    if (!res || !res.ok) { wrap.innerHTML = '<div class="empty-state">Could not load device status.</div>'; return; }
+    const devices = await res.json();
+    if (!devices.length) { wrap.innerHTML = '<div class="empty-state">No devices to manage yet.</div>'; return; }
+
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>Device</th><th>IP Address</th><th>Group</th><th>Latest Version</th><th>Versions</th><th>Last Backup</th><th>Status</th><th></th></tr></thead><tbody>' +
+      devices.map((d) => {
+        const state = d.last_backup_status === 'failed' ? 'is-red'
+          : (d.last_backup_status === 'success' ? 'is-signal' : '');
+        const label = d.last_backup_status ? esc(d.last_backup_status) : 'never backed up';
+        return '<tr><td>' + esc(d.device_name) + '</td>' +
+          '<td class="cell-mono">' + esc(d.ip_address) + '</td>' +
+          '<td class="content-sub">' + esc(d.device_group_name || '—') + '</td>' +
+          '<td class="cell-mono">' + (d.latest_version != null ? '#' + d.latest_version : '—') + '</td>' +
+          '<td class="cell-mono">' + d.total_versions + '</td>' +
+          '<td class="content-sub">' + timeAgo(d.latest_backup_at) + '</td>' +
+          '<td><span class="badge sec-sev-badge ' + state + '">' + label + '</span></td>' +
+          '<td class="cell-actions"><a href="/ncm/archive?device_id=' + d.device_id + '" class="btn-secondary btn-small">History</a></td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  // ---- Backup modal (device picker) ----
+  function pickerVisible() {
+    const q = document.getElementById('backup-device-search').value.trim().toLowerCase();
+    return pickerDevices.filter((d) => !q || d.device_name.toLowerCase().includes(q) || d.ip_address.toLowerCase().includes(q));
+  }
+  function renderPicker() {
+    const list = document.getElementById('backup-device-list');
+    const rows = pickerVisible();
+    list.innerHTML = !pickerDevices.length
+      ? '<div class="empty-state">No devices available.</div>'
+      : (!rows.length ? '<div class="empty-state">No devices match this filter.</div>'
+        : rows.map((d) =>
+            '<label class="sec-picker-row">' +
+            '<span class="checkbox-field"><input type="checkbox" class="backup-device-check" data-device-id="' + d.device_id + '" ' +
+            (pickerSelected.has(d.device_id) ? 'checked' : '') + '></span>' +
+            '<span class="sec-picker-name">' + esc(d.device_name) + '</span>' +
+            '<span class="sec-picker-ip cell-mono">' + esc(d.ip_address) + '</span>' +
+            '<span class="content-sub">' + esc(d.device_group_name || '—') + '</span></label>').join(''));
+    document.getElementById('backup-selection-count').textContent =
+      pickerSelected.size + ' device' + (pickerSelected.size === 1 ? '' : 's') + ' selected';
+  }
+  async function loadPicker() {
+    if (pickerDevices.length) { renderPicker(); return; }
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/ncm/devices'); } catch (e) { res = null; }
+    if (!res || !res.ok) { document.getElementById('backup-device-list').innerHTML = '<div class="empty-state">Could not load devices.</div>'; return; }
+    pickerDevices = await res.json();
+    renderPicker();
+  }
+
+  const closeModal = () => { document.getElementById('backup-modal-backdrop').hidden = true; };
+  document.getElementById('open-backup-modal-btn').addEventListener('click', () => {
+    document.getElementById('backup-error').hidden = true;
+    document.getElementById('backup-modal-backdrop').hidden = false;
+    loadPicker();
+  });
+  document.getElementById('backup-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('backup-modal-close-btn').addEventListener('click', closeModal);
+  document.getElementById('backup-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'backup-modal-backdrop') closeModal();
+  });
+  document.getElementById('backup-device-list').addEventListener('change', (e) => {
+    if (!e.target.classList.contains('backup-device-check')) return;
+    const id = e.target.dataset.deviceId;
+    if (e.target.checked) pickerSelected.add(id); else pickerSelected.delete(id);
+    renderPicker();
+  });
+  document.getElementById('backup-device-search').addEventListener('input', renderPicker);
+  document.getElementById('backup-select-all-btn').addEventListener('click', () => {
+    pickerVisible().forEach((d) => pickerSelected.add(d.device_id)); renderPicker();
+  });
+  document.getElementById('backup-select-none-btn').addEventListener('click', () => {
+    pickerSelected.clear(); renderPicker();
+  });
+
+  document.getElementById('run-backup-btn').addEventListener('click', async () => {
+    const errorBox = document.getElementById('backup-error');
+    errorBox.hidden = true;
+    const ids = [...pickerSelected];
+    if (!ids.length) {
+      errorBox.textContent = 'Select at least one device to back up.';
+      errorBox.hidden = false;
+      return;
+    }
+    const btn = document.getElementById('run-backup-btn');
+    const original = btn.innerHTML;
+    btn.disabled = true;
+    btn.textContent = 'Backing up ' + ids.length + ' device' + (ids.length === 1 ? '' : 's') + '…';
+
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/ncm/backup', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device_ids: ids, device_group_ids: [],
+          configuration_types: document.getElementById('backup-types').value.split(','),
+        }),
+      });
+    } catch (e) { res = null; }
+
+    btn.disabled = false;
+    btn.innerHTML = original;
+
+    if (!res || !res.ok) {
+      const body = res ? await res.json().catch(() => ({})) : {};
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Backup failed.';
+      errorBox.hidden = false;
+      return;
+    }
+    const r = await res.json();
+    closeModal();
+    pickerSelected.clear();
+    AAAPlatform.toast('Backup job #' + r.job_display_number + ' finished — ' + r.succeeded + '/' + r.total_devices +
+                      ' devices, ' + r.changed + ' changed.');
+    loadOverview();
+    loadDeviceStatus();
+  });
+
+  loadOverview();
+  loadDeviceStatus();
+})();
+</script>
+{% endblock %}

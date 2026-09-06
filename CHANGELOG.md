@@ -12,6 +12,135 @@ it was built alongside.
 
 ## 2026-09-03
 
+### Completed — NCM GUI: Overview, Archive with viewer, Diff, Jobs, Schedules
+
+NCM is now usable end-to-end from the browser. Five pages, all built
+on the platform's existing shell, modal, drawer, table, KPI-card and
+toast conventions -- NCM reads as a native section, not a bolted-on
+app.
+
+**Overview** -- six KPI cards (managed devices, recent backup, failed,
+never backed up, stored versions, last successful backup), recent
+configuration changes, recent jobs, and a per-device backup status
+table. "Backup Now" opens a device picker with search and
+select-all-shown, and a configuration-type choice (running, startup,
+or both).
+
+**Configuration Archive + viewer** -- filterable by device, type and
+free text (device name or hash). The viewer opens in a drawer with
+line numbers, in-configuration search that reports a match count,
+copy, and download. Content is fetched ONCE per snapshot and held for
+search/copy/download, so searching a large configuration does not
+re-request it. Line numbers are `user-select: none`, so copying the
+configuration doesn't drag them along with it.
+
+**Diff** -- device plus from/to version selectors, defaulting to
+previous -> current (the comparison actually asked for most often),
+plus an explicit "Current vs Previous" action. Added/removed counts as
+KPI cards and a unified diff where every changed line carries a `+`/`-`
+marker as well as colour, so the change is readable without relying on
+hue. With fewer than two versions it states "No previous configuration
+available" rather than fabricating a comparison against nothing.
+
+**Backup Jobs** -- job list with status KPIs, and a detail drawer with
+per-device results. Failures report connection and retrieval
+separately ("could not reach the device" vs "connected but no config
+came back" are different problems with different fixes), and successes
+distinguish "new version archived" from "unchanged — nothing
+archived".
+
+**Schedules** -- full create/edit/delete with device AND device-group
+target pickers, daily run time, configuration types, retention, and an
+enabled toggle. Delete asks for confirmation and states plainly that
+archived configurations are not affected.
+
+**Verified**: all five templates parse with correct block structure
+and balanced `<main>` tags; zero ID mismatches across 60 references;
+every extracted script passes Node syntax checks; the
+`/api/device-groups` endpoint the schedules page calls confirmed to
+exist rather than assumed; new CSS classes confirmed present and
+brace-balanced; project-wide compile, template (40), `view_scripts`
+and `[hidden]` sweeps all clean.
+
+One check flagged `ncm_schedules` as having "no rendered SVG" -- that
+was my own check looking for the JS-constant icon pattern, which that
+page legitimately doesn't need since it builds no icons client-side.
+Confirmed by direct inspection: 12 real SVGs render inline.
+
+**Remaining NCM work**: the device-page NCM panel, and
+README/ARCHITECTURE documentation.
+
+---
+
+### Added — NCM API layer, module registration and navigation
+
+Builds on the NCM backend foundation below. The subsystem is now
+registered as a first-class platform module and reachable over HTTP;
+the GUI templates are the remaining piece.
+
+**15 endpoints** (`app/api/routes_ncm.py`), following this project's
+existing conventions -- `require_permission` on every endpoint,
+`verify_csrf` on every mutating one, Pydantic response models, safe
+error messages:
+overview, device status, configuration list/detail/download/delete,
+per-device history, backup, diff, job list/detail, and schedule
+list/create/update/delete.
+
+**Deliberate API design choices:**
+* List responses NEVER include `configuration_content`. Shipping
+  hundreds of full device configurations to render an archive table
+  would be slow and needless; content is fetched per snapshot.
+* `ncm:download` is a separate permission from `ncm:view` -- taking a
+  full device configuration off the platform as a file is a
+  higher-trust action than reading it in the UI.
+* The download filename is built by stripping the admin-supplied
+  device name to alphanumerics, hyphens and underscores, so a device
+  name cannot inject header content or path separators.
+* Backup with no targets is rejected rather than defaulting to the
+  whole fleet -- an accidental empty selection SSHing into every
+  device would be an expensive surprise.
+* Schedule target ids are validated at create/update time, so a
+  malformed id surfaces immediately rather than at 02:00 when the
+  schedule runs.
+
+**A bug caught in review before it shipped:** the diff endpoint's
+lookup was written as `{c.id: c in rows and c for c in rows}` -- a
+convoluted way of writing `{c.id: c}` that would also have misbehaved
+when comparing a version against ITSELF, since the query returns a
+single row for a repeated id. Simplified to a plain dict, which
+handles that case correctly.
+
+**Module registration** (`app/modules/ncm_module.py`, `web/routes_ncm.py`)
+mirrors the Security Center module exactly, so NCM gets navigation,
+module state and RBAC through existing machinery rather than as a
+bolted-on section. New sidebar section "Config Management" with five
+entries, plus Ctrl+K search keywords for each path.
+
+The spec's suggested "Templates" and "Compliance" nav entries are
+deliberately NOT registered: nav leading to an empty page is the fake
+UI the brief rules out, and they belong with the phases that
+implement them.
+
+**Two wrong assumptions caught by checking rather than trusting:** the
+web route module initially imported `current_admin_or_none` from
+`..services.admin_session` and a shared `..templating.templates`.
+Neither exists -- this project puts the first in `web.auth_helpers`
+and constructs `Jinja2Templates` per web-route module. Corrected to
+the real structure, then every imported name verified to exist.
+
+**Verified**: full project compiles; all 15 routes registered; every
+model attribute reference and schema construction cross-checked
+against the real definitions via AST (including inherited schema
+fields and `**spread` constructions); the NCM nav section confirmed to
+build with all five entries via the isolated sidebar test.
+
+**Still not built**: the five GUI templates (Overview, Archive with
+configuration viewer, Diff, Jobs, Schedules), device-page NCM panel,
+and README/architecture documentation. The API is complete and
+callable but has no pages yet.
+
+---
+
 ### Added — NCM backend foundation (models, drivers, archive, diff, backup engine, scheduler, RBAC)
 
 Per the spec's own instruction, inspected the real repository before

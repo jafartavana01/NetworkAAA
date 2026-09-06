@@ -1,0 +1,217 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Configuration Archive — AAA Management Platform{% endblock %}
+{% block breadcrumb %}NCM / Configuration Archive{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Configuration Archive</h1>
+    <p class="content-sub">Every archived configuration snapshot. A new version is stored only when the configuration actually changed.</p>
+  </div>
+
+  <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+    <label class="field" style="min-width:200px;">
+      <span class="field-label">Device</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+        <select id="filter-device"><option value="">All devices</option></select>
+      </div>
+    </label>
+    <label class="field" style="min-width:180px;">
+      <span class="field-label">Configuration type</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('folder', 14) }}</span>
+        <select id="filter-type">
+          <option value="">All types</option>
+          <option value="running">Running</option>
+          <option value="startup">Startup</option>
+        </select>
+      </div>
+    </label>
+    <label class="field" style="min-width:200px;flex:1;">
+      <span class="field-label">Search</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+        <input type="text" id="filter-search" placeholder="Search device or hash…">
+      </div>
+    </label>
+  </div>
+
+  <div id="archive-table-wrap"><div class="empty-state">Loading…</div></div>
+</main>
+
+<div class="drawer-backdrop" id="viewer-backdrop" hidden>
+  <aside class="drawer" style="width:min(96vw,900px);" role="dialog" aria-labelledby="viewer-title">
+    <button type="button" class="modal-close-btn" id="viewer-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <div class="drawer-head">
+      <h2 id="viewer-title" style="margin:0;font-size:17px;">Configuration</h2>
+    </div>
+    <div class="drawer-meta" id="viewer-meta"></div>
+
+    <div class="toolbar" style="margin:12px 0;">
+      <label class="field" style="flex:1;min-width:180px;">
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+          <input type="text" id="viewer-search" placeholder="Search within configuration…">
+        </div>
+      </label>
+      <div style="display:flex;gap:8px;">
+        <button type="button" class="btn-secondary btn-small" id="viewer-copy-btn">Copy</button>
+        <a class="btn-secondary btn-small" id="viewer-download-btn" href="#">Download</a>
+      </div>
+    </div>
+    <div class="content-sub" id="viewer-search-status" style="margin-bottom:6px;"></div>
+    <div class="ncm-config-view" id="viewer-body"></div>
+  </aside>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_VIEW = '{{ icons.icon("eye", 14) }}';
+  const esc = AAAPlatform.escapeHtml;
+
+  let rows = [];
+  let currentContent = '';
+
+  function fmtBytes(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function visible() {
+    const dev = document.getElementById('filter-device').value;
+    const type = document.getElementById('filter-type').value;
+    const q = document.getElementById('filter-search').value.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (dev && r.device_id !== dev) return false;
+      if (type && r.configuration_type !== type) return false;
+      if (q && !(r.device_name.toLowerCase().includes(q) || r.sha256.toLowerCase().includes(q))) return false;
+      return true;
+    });
+  }
+
+  function renderTable() {
+    const wrap = document.getElementById('archive-table-wrap');
+    const list = visible();
+    if (!list.length) {
+      wrap.innerHTML = rows.length
+        ? '<div class="empty-state">No snapshots match these filters.</div>'
+        : '<div class="empty-state"><div class="empty-state-title">No configurations archived yet</div>' +
+          '<p class="empty-state-desc">Run a backup from NCM Overview to archive your first configuration.</p></div>';
+      return;
+    }
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>Device</th><th>Version</th><th>Type</th><th>Size</th><th>Hash</th><th>Source</th><th>Archived</th><th></th></tr></thead><tbody>' +
+      list.map((r, i) =>
+        '<tr><td>' + esc(r.device_name) + '</td>' +
+        '<td class="cell-mono">#' + r.version_number + '</td>' +
+        '<td class="content-sub">' + esc(r.configuration_type) + '</td>' +
+        '<td class="cell-mono">' + fmtBytes(r.size_bytes) + '</td>' +
+        '<td class="cell-mono content-sub" title="' + esc(r.sha256) + '">' + esc(r.sha256.slice(0, 12)) + '…</td>' +
+        '<td class="content-sub">' + esc(r.source) + '</td>' +
+        '<td class="content-sub">' + new Date(r.created_at).toLocaleString() + '</td>' +
+        '<td class="cell-actions"><button type="button" class="btn-secondary btn-small btn-with-icon" data-view="' + r.id + '">' +
+        ICON_VIEW + 'View</button></td></tr>').join('') +
+      '</tbody></table>';
+  }
+
+  // The viewer renders line numbers alongside the configuration. Content
+  // is fetched once per snapshot and held for search/copy/download, so
+  // searching does not re-request a potentially large configuration.
+  function renderViewer(content, highlight) {
+    const q = (highlight || '').trim().toLowerCase();
+    const lines = content.split('\n');
+    let matches = 0;
+    const html = lines.map((line, i) => {
+      const hit = q && line.toLowerCase().includes(q);
+      if (hit) matches += 1;
+      return '<div class="ncm-config-line' + (hit ? ' is-match' : '') + '">' +
+        '<span class="ncm-config-lineno">' + (i + 1) + '</span>' +
+        '<span class="ncm-config-text">' + esc(line) + '</span></div>';
+    }).join('');
+    document.getElementById('viewer-body').innerHTML = html;
+    document.getElementById('viewer-search-status').textContent =
+      q ? (matches + (matches === 1 ? ' matching line' : ' matching lines')) : '';
+  }
+
+  async function openViewer(id) {
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/ncm/configurations/' + id); } catch (e) { res = null; }
+    if (!res || !res.ok) { AAAPlatform.toast('Could not load that configuration.', 'error'); return; }
+    const c = await res.json();
+    currentContent = c.configuration_content;
+
+    document.getElementById('viewer-title').textContent = c.device_name + ' — version #' + c.version_number;
+    document.getElementById('viewer-meta').innerHTML =
+      '<div class="readout"><span class="readout-k">type</span><span class="readout-v">' + esc(c.configuration_type) + '</span></div>' +
+      '<div class="readout"><span class="readout-k">archived</span><span class="readout-v">' + new Date(c.created_at).toLocaleString() + '</span></div>' +
+      '<div class="readout"><span class="readout-k">source</span><span class="readout-v">' + esc(c.source) + '</span></div>' +
+      '<div class="readout"><span class="readout-k">size</span><span class="readout-v cell-mono">' + fmtBytes(c.size_bytes) + '</span></div>' +
+      '<div class="readout"><span class="readout-k">sha256</span><span class="readout-v cell-mono" style="word-break:break-all;">' + esc(c.sha256) + '</span></div>';
+    document.getElementById('viewer-download-btn').href = '/api/ncm/configurations/' + c.id + '/download';
+    document.getElementById('viewer-search').value = '';
+    renderViewer(currentContent, '');
+    document.getElementById('viewer-backdrop').hidden = false;
+  }
+
+  const closeViewer = () => { document.getElementById('viewer-backdrop').hidden = true; };
+  document.getElementById('viewer-close-btn').addEventListener('click', closeViewer);
+  document.getElementById('viewer-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'viewer-backdrop') closeViewer();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.getElementById('viewer-backdrop').hidden) closeViewer();
+  });
+  document.getElementById('viewer-search').addEventListener('input', (e) => renderViewer(currentContent, e.target.value));
+  document.getElementById('viewer-copy-btn').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(currentContent);
+      AAAPlatform.toast('Configuration copied to clipboard.');
+    } catch (e) {
+      AAAPlatform.toast('Could not copy — your browser blocked clipboard access.', 'error');
+    }
+  });
+
+  document.getElementById('archive-table-wrap').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-view]');
+    if (btn) openViewer(btn.dataset.view);
+  });
+  ['filter-device', 'filter-type'].forEach((id) =>
+    document.getElementById(id).addEventListener('change', renderTable));
+  document.getElementById('filter-search').addEventListener('input', renderTable);
+
+  async function load() {
+    const params = new URLSearchParams(window.location.search);
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/ncm/configurations?limit=500'); } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      document.getElementById('archive-table-wrap').innerHTML =
+        '<div class="empty-state">' + (res && res.status === 403
+          ? "Your role doesn't have permission to view Configuration Management."
+          : 'Could not load the configuration archive.') + '</div>';
+      return;
+    }
+    rows = await res.json();
+
+    const devices = [...new Map(rows.map((r) => [r.device_id, r.device_name])).entries()]
+      .sort((a, b) => a[1].localeCompare(b[1]));
+    const sel = document.getElementById('filter-device');
+    sel.innerHTML = '<option value="">All devices</option>' +
+      devices.map(([id, name]) => '<option value="' + id + '">' + esc(name) + '</option>').join('');
+
+    // Deep links from the Overview ("history" / a specific snapshot).
+    const deviceId = params.get('device_id');
+    if (deviceId && devices.some(([id]) => id === deviceId)) sel.value = deviceId;
+    renderTable();
+    const configId = params.get('configuration_id');
+    if (configId) openViewer(configId);
+  }
+
+  load();
+})();
+</script>
+{% endblock %}
