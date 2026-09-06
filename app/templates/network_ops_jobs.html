@@ -21,6 +21,8 @@
     <button class="btn-primary btn-small" id="new-job-btn" style="width:auto;">+ New Command Job</button>
   </div>
 
+  <div class="status-card-grid" id="jobs-kpis" style="margin-bottom:16px;"></div>
+
   <div id="jobs-table-wrap">
     <div class="empty-state">Loading jobs…</div>
   </div>
@@ -277,6 +279,28 @@
     window.location.href = `/network-ops/jobs/${job.id}`;
   });
 
+  // Pre-rendered server-side via Jinja since these appear in
+  // client-built markup.
+  const ICON_TERMINAL = '{{ icons.icon("terminal", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const ICON_ACTIVITY = '{{ icons.icon("activity", 16) }}';
+
+  function renderJobKpis(jobs) {
+    // Uses the exact status vocabulary statusBadge() already maps
+    // (COMPLETED / PARTIAL / FAILED / RUNNING / PENDING / CANCELLED)
+    // rather than a parallel guess at what the API returns.
+    const count = (s) => jobs.filter((j) => j.status === s).length;
+    const failed = count('FAILED') + count('PARTIAL');
+    const inFlight = count('RUNNING') + count('PENDING');
+    document.getElementById('jobs-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_TERMINAL, label: 'Total Jobs', value: jobs.length }),
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'Completed', value: count('COMPLETED'), state: 'is-signal' }),
+      AAAPlatform.kpiCard({ icon: ICON_ACTIVITY, label: 'In Flight', value: inFlight, state: inFlight ? 'is-amber' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_ALERT, label: 'Failed or Partial', value: failed, state: failed ? 'is-red' : '' }),
+    ].join('');
+  }
+
   function statusBadge(status) {
     const colorClass = { COMPLETED: 'badge-on', PARTIAL: 'badge-off', FAILED: 'badge-off', RUNNING: 'badge-on', PENDING: 'badge-off', CANCELLED: 'badge-off' }[status] || 'badge-off';
     return `<span class="badge ${colorClass}">${escapeHtml(status)}</span>`;
@@ -288,9 +312,11 @@
     if (res.status === 401) { window.location.href = '/login'; return; }
     if (!res.ok) {
       wrap.innerHTML = '<div class="empty-state">Could not load jobs.</div>';
+      document.getElementById('jobs-kpis').innerHTML = '';
       return;
     }
     const jobs = await res.json();
+    renderJobKpis(jobs);
     document.getElementById('job-count').textContent = jobs.length + (jobs.length === 1 ? ' job' : ' jobs');
     if (jobs.length === 0) {
       wrap.innerHTML = '<div class="empty-state">No command jobs yet.</div>';

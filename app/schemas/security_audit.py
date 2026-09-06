@@ -311,3 +311,72 @@ class SecurityDashboardOut(BaseModel):
     top_risks: list[DashboardTopRiskOut]
     heatmap: list[DashboardHeatmapCellOut]
     heatmap_domains: list[str]
+
+
+class ComplianceControlOut(BaseModel):
+    """One control within a framework, aggregated across the fleet.
+
+    `devices_failing` / `devices_passing` count DEVICES, not findings:
+    a control failing on three devices is one control needing
+    attention on three devices, which is the number an auditor
+    actually asks about.
+    """
+    control_id: str
+    devices_passing: int
+    devices_failing: int
+    devices_manual: int
+    status: str  # fail | manual_review | pass -- worst status wins
+
+
+class ComplianceFrameworkOut(BaseModel):
+    framework_key: str
+    framework_name: str
+    total_controls: int
+    passing_controls: int
+    failing_controls: int
+    manual_controls: int
+    percentage: float
+    controls: list[ComplianceControlOut]
+
+
+class ComplianceOverviewOut(BaseModel):
+    devices_audited: int
+    frameworks: list[ComplianceFrameworkOut]
+
+
+class ActivityEventOut(BaseModel):
+    """One real audit run, shaped for the activity timeline.
+
+    Every event corresponds to a stored AuditRun -- the timeline never
+    synthesizes entries like "3 findings resolved" unless a real row
+    supports it. `score_delta` is populated only when that device has
+    an earlier completed run to compare against; otherwise it stays
+    null and the GUI shows no trend arrow rather than implying one.
+    """
+    audit_run_id: str
+    device_id: str | None
+    device_name: str
+    source: str
+    status: str
+    overall_score: float | None
+    score_delta: float | None
+    started_at: datetime
+
+
+class BulkAuditRequest(BaseModel):
+    """Audit a chosen set of devices as one job.
+
+    Empty `device_ids` is rejected rather than silently treated as
+    "everything" -- an accidental empty selection auditing the entire
+    fleet would be a genuinely surprising and expensive outcome.
+    """
+    device_ids: list[str] = Field(min_length=1)
+
+
+class BulkAuditResultOut(BaseModel):
+    batch_display_number: int
+    total_devices: int
+    succeeded: int
+    failed: int
+    status: str
+    summary: str

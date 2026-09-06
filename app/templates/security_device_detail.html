@@ -5,30 +5,69 @@
 
 {% block view_content %}
 <main class="content">
-  <div class="content-head">
-    <h1 id="device-detail-name">Loading…</h1>
-    <p class="content-sub" id="device-detail-sub"></p>
+  <div class="content-head" style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;">
+    <div>
+      <h1 id="device-detail-name">Loading…</h1>
+      <p class="content-sub" id="device-detail-sub"></p>
+    </div>
+    <button type="button" class="btn-primary btn-with-icon" id="open-audit-modal-btn" style="width:auto;" hidden>{{ icons.icon('plus', 16) }}Run New Audit</button>
   </div>
 
-  <section class="panel-grid" id="device-score-grid" hidden>
-    <div class="panel">
-      <div class="panel-head"><span class="rail" id="device-score-rail"></span>Security Score</div>
-      <div class="panel-body" id="device-score">—</div>
+  <section class="sec-grid sec-grid-posture" id="device-posture-section" hidden>
+    <div class="panel panel-wide sec-gauge-panel">
+      <div class="panel-head"><span class="rail rail-dim"></span>Security Score</div>
+      <div class="panel-body" style="display:flex;flex-direction:column;align-items:center;justify-content:center;">
+        <svg viewBox="0 0 120 120" class="sec-gauge" role="img" aria-labelledby="dev-gauge-a11y">
+          <title id="dev-gauge-a11y">Device security score</title>
+          <circle cx="60" cy="60" r="52" fill="none" stroke="var(--bg-panel-raised)" stroke-width="10"></circle>
+          <circle cx="60" cy="60" r="52" fill="none" stroke="var(--text-faint)" stroke-width="10"
+                  stroke-linecap="round" transform="rotate(-90 60 60)"
+                  id="dev-gauge-arc" stroke-dasharray="0 326.73"></circle>
+        </svg>
+        <div class="sec-gauge-value" id="dev-gauge-score">—</div>
+        <div class="sec-gauge-label" id="dev-gauge-status">No audit data</div>
+        <div class="content-sub" style="margin-top:8px;font-size:11.5px;" id="dev-last-audited"></div>
+      </div>
     </div>
-    <div class="panel">
-      <div class="panel-head"><span class="rail rail-dim"></span>Risk Level</div>
-      <div class="panel-body" id="device-risk">—</div>
+
+    <div class="status-card-grid sec-kpi-grid" id="device-kpi-grid"></div>
+  </section>
+
+  <section class="sec-grid sec-grid-charts" id="device-detail-section" hidden>
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Compliance</div>
+      <div class="panel-body" id="device-compliance-body"></div>
     </div>
-    <div class="panel">
-      <div class="panel-head"><span class="rail rail-dim"></span>Last Audited</div>
-      <div class="panel-body" id="device-last-audited">—</div>
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Security Score by Domain</div>
+      <div class="panel-body" id="device-domain-body"></div>
     </div>
   </section>
 
-  <div class="content-head" style="margin-top:32px;">
-    <h2>Run a New Audit</h2>
+  <div class="content-head" id="device-findings-head" hidden>
+    <h2>Findings</h2>
+    <p class="content-sub">Failing and correlated findings from this device's most recent audit. Select a row for full evidence and remediation.</p>
   </div>
-  <div class="panel" style="padding:16px;">
+  <div id="device-findings-wrap"></div>
+
+  <div class="content-head" id="interface-section-head" hidden>
+    <h2>Interface Security</h2>
+  </div>
+  <div id="interface-section-body" hidden></div>
+
+  <div class="content-head" style="margin-top:32px;">
+    <h2>Audit History</h2>
+  </div>
+  <div id="audit-history-table-wrap">
+    <div class="empty-state">Loading…</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="audit-modal-backdrop" hidden>
+  <div class="modal" style="max-width:min(94vw,720px);max-height:90vh;overflow-y:auto;">
+    <button type="button" class="modal-close-btn" id="audit-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2>Run a New Audit</h2>
+
     <div class="toolbar" style="margin-bottom:14px;">
       <button type="button" class="btn-secondary btn-small btn-with-icon" id="audit-mode-live-btn" style="width:auto;">{{ icons.icon('network', 14) }}Live SSH</button>
       <button type="button" class="btn-secondary btn-small btn-with-icon" id="audit-mode-upload-btn" style="width:auto;">{{ icons.icon('folder', 14) }}Paste Configuration</button>
@@ -53,71 +92,349 @@
     <div id="audit-upload-fields" hidden>
       <label class="field">
         <span class="field-label">Configuration text</span>
-        <textarea id="audit-config-text" rows="10" style="width:100%;font-family:var(--font-mono);font-size:12px;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;color:var(--text-primary);"></textarea>
+        <textarea id="audit-config-text" rows="12" class="mono"></textarea>
       </label>
     </div>
 
     <div id="audit-error" class="form-error" role="alert" hidden></div>
-    <div style="margin-top:12px;">
-      <button type="button" class="btn-primary btn-small" id="run-audit-btn" style="width:auto;">Run Audit</button>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="audit-cancel-btn">Cancel</button>
+      <button type="button" class="btn-primary" id="run-audit-btn" style="width:auto;">Run Audit</button>
     </div>
   </div>
+</div>
 
-  <div id="audit-result-panel" hidden style="margin-top:24px;">
-    <div class="content-head">
-      <h2>Latest Audit Result</h2>
-    </div>
-    <div class="panel" style="padding:16px;">
-      <div id="audit-result-summary" style="margin-bottom:16px;"></div>
-
-      <div class="content-head" style="margin-top:0;">
-        <h2 style="font-size:13px;">Domain Scores</h2>
-      </div>
-      <div id="audit-domain-scores"></div>
-
-      <div class="content-head">
-        <h2 style="font-size:13px;">Findings</h2>
-      </div>
-      <div id="audit-result-findings"></div>
-
-      <div class="content-head">
-        <h2 style="font-size:13px;">Compliance</h2>
-      </div>
-      <div id="audit-compliance-summary"></div>
-    </div>
-  </div>
-
-  <div class="content-head" style="margin-top:32px;">
-    <h2>Audit History</h2>
-  </div>
-  <div id="audit-history-table-wrap">
-    <div class="empty-state">Loading…</div>
-  </div>
-</main>
+<div class="drawer-backdrop" id="finding-drawer-backdrop" hidden>
+  <aside class="drawer" role="dialog" aria-labelledby="dev-drawer-title">
+    <button type="button" class="modal-close-btn" id="drawer-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <div id="drawer-body"></div>
+  </aside>
+</div>
 {% endblock %}
 
 {% block view_scripts %}
 <script>
 (() => {
+  // Pre-rendered server-side via Jinja (see the top-of-file macro
+  // import) since this markup is built client-side.
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const ICON_EYE = '{{ icons.icon("eye", 16) }}';
+  const ICON_LIST = '{{ icons.icon("list-checks", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+
+  // 2 * pi * r for the gauge's own r=52.
+  const GAUGE_CIRCUMFERENCE = 326.73;
+
   function escapeHtml(s) {
     const div = document.createElement('div');
     div.textContent = s == null ? '' : String(s);
     return div.innerHTML;
   }
-  function scoreRail(score) {
-    if (score == null) return 'rail-dim';
-    if (score >= 85) return 'rail-signal';
-    if (score >= 60) return 'rail-amber';
-    return 'rail-red';
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   }
-  function severityRail(sev) {
-    if (sev === 'critical' || sev === 'high') return 'rail-red';
-    if (sev === 'medium') return 'rail-amber';
-    return 'rail-dim';
+
+  // The exact values the engine's own Severity/Status enums emit.
+  const SEVERITY_META = {
+    critical: { label: 'Critical', varName: '--red' },
+    high:     { label: 'High',     varName: '--orange' },
+    medium:   { label: 'Medium',   varName: '--amber' },
+    low:      { label: 'Low',      varName: '--text-dim' },
+    info:     { label: 'Info',     varName: '--text-faint' },
+  };
+  const STATUS_LABEL = {
+    fail: 'Fail', pass: 'Pass', manual_review: 'Manual Review', na: 'Not Applicable', warn: 'Partial',
+  };
+  function severityColor(sev) {
+    const meta = SEVERITY_META[sev];
+    return (meta && cssVar(meta.varName)) || cssVar('--text-faint') || '#57616c';
+  }
+  function severityLabel(sev) { return (SEVERITY_META[sev] || {}).label || sev; }
+
+  function scoreColorVar(score) {
+    if (score == null) return cssVar('--text-faint') || '#57616c';
+    if (score >= 85) return cssVar('--signal') || '#4fd1a5';
+    if (score >= 60) return cssVar('--amber') || '#e0a83e';
+    return cssVar('--red') || '#e0615a';
+  }
+  function scoreStatusLabel(score) {
+    if (score == null) return 'No audit data';
+    if (score >= 90) return 'Excellent';
+    if (score >= 75) return 'Good';
+    if (score >= 60) return 'Fair';
+    return 'Poor';
   }
 
   const pathParts = window.location.pathname.split('/').filter(Boolean);
   const deviceId = pathParts[pathParts.length - 1];
+
+  let currentFindings = [];
+  let interfaceGroups = [];
+  // Severity order used to pick an interface's worst failing check and
+  // to sort its findings -- matches the engine's own Severity ordering.
+  const SEVERITY_ORDER = ['critical', 'high', 'medium', 'low', 'info'];
+
+  function renderGauge(score) {
+    const arc = document.getElementById('dev-gauge-arc');
+    const pct = score == null ? 0 : Math.max(0, Math.min(100, score)) / 100;
+    arc.setAttribute('stroke-dasharray', (GAUGE_CIRCUMFERENCE * pct).toFixed(2) + ' ' + (GAUGE_CIRCUMFERENCE * (1 - pct)).toFixed(2));
+    arc.setAttribute('stroke', scoreColorVar(score));
+    document.getElementById('dev-gauge-score').textContent = score != null ? String(score) : '—';
+    document.getElementById('dev-gauge-status').textContent = scoreStatusLabel(score);
+  }
+
+  function kpiCard(icon, label, value, cls) {
+    return '<div class="status-card ' + cls + '"><div class="status-card-icon">' + icon + '</div>' +
+      '<div class="status-card-body"><div class="status-card-title">' + escapeHtml(label) + '</div>' +
+      '<div class="status-card-value">' + escapeHtml(String(value)) + '</div></div></div>';
+  }
+
+  function renderKpis(result) {
+    const counts = { critical: 0, high: 0, medium: 0, low: 0 };
+    let manual = 0, passed = 0;
+    result.findings.forEach((f) => {
+      if (f.status === 'manual_review') manual += 1;
+      if (f.status === 'pass') passed += 1;
+      if (f.status !== 'fail') return;
+      if (counts[f.severity] !== undefined) counts[f.severity] += 1;
+    });
+    document.getElementById('device-kpi-grid').innerHTML = [
+      kpiCard(ICON_ALERT, 'Critical', counts.critical, 'is-red'),
+      kpiCard(ICON_ALERT, 'High', counts.high, 'is-red'),
+      kpiCard(ICON_ALERT, 'Medium', counts.medium, 'is-amber'),
+      kpiCard(ICON_ALERT, 'Low', counts.low, ''),
+      kpiCard(ICON_EYE, 'Manual Review', manual, ''),
+      kpiCard(ICON_CHECK, 'Passing Checks', passed, 'is-signal'),
+      kpiCard(ICON_LIST, 'Total Checks', result.findings.length, ''),
+    ].join('');
+  }
+
+  function renderDomains(result) {
+    const body = document.getElementById('device-domain-body');
+    if (!result.domain_scores.length) {
+      body.innerHTML = '<div class="empty-state">No domain scores.</div>';
+      return;
+    }
+    const sorted = [...result.domain_scores].sort((a, b) => a.score - b.score);
+    body.innerHTML = sorted.map((d) =>
+      '<div class="sec-bar-row" style="cursor:default;">' +
+      '<span class="sec-bar-label" title="' + escapeHtml(d.domain) + '">' + escapeHtml(d.domain) + '</span>' +
+      '<span class="sec-bar-track"><span class="sec-bar-fill" style="width:' + Math.max(2, d.score) + '%;background:' + scoreColorVar(d.score) + ';"></span></span>' +
+      '<span class="sec-bar-value cell-mono">' + d.score + '</span></div>' +
+      '<div class="content-sub" style="margin:-6px 0 10px 0;font-size:11px;">' +
+      d.fail_count + ' failing · ' + d.pass_count + ' passing' +
+      (d.manual_count ? ' · ' + d.manual_count + ' manual review' : '') + '</div>'
+    ).join('');
+  }
+
+  function renderCompliance(result) {
+    const body = document.getElementById('device-compliance-body');
+    const frameworks = Object.entries(result.compliance_summary || {});
+    if (!frameworks.length) {
+      body.innerHTML = '<div class="empty-state">No compliance mappings.</div>';
+      return;
+    }
+    body.innerHTML = frameworks.map(([key, data]) => {
+      const total = data.total || 0;
+      const fail = data.fail || 0;
+      // Percentage of referenced controls this device is NOT failing --
+      // derived from the same total/fail the backend already computed,
+      // never a second scoring rule invented in the browser.
+      const pct = total > 0 ? Math.round(((total - fail) / total) * 1000) / 10 : 0;
+      return '<div class="sec-bar-row" style="cursor:default;">' +
+        '<span class="sec-bar-label" title="' + escapeHtml(key) + '">' + escapeHtml(key) + '</span>' +
+        '<span class="sec-bar-track"><span class="sec-bar-fill" style="width:' + Math.max(2, pct) + '%;background:' + scoreColorVar(pct) + ';"></span></span>' +
+        '<span class="sec-bar-value cell-mono">' + pct + '%</span></div>' +
+        '<div class="content-sub" style="margin:-6px 0 10px 0;font-size:11px;">' +
+        total + ' controls referenced · ' + fail + ' failing</div>';
+    }).join('');
+  }
+
+  function renderFindings(result) {
+    document.getElementById('device-findings-head').hidden = false;
+    const wrap = document.getElementById('device-findings-wrap');
+    currentFindings = [...result.correlation_findings, ...result.findings.filter((f) => f.status === 'fail')];
+    if (!currentFindings.length) {
+      wrap.innerHTML = '<div class="empty-state"><div class="empty-state-title">No security findings</div>' +
+        '<p class="empty-state-desc">This audit did not identify any failing or correlated issues on this device.</p></div>';
+      return;
+    }
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>Severity</th><th>Domain</th><th>Finding</th><th>Check</th><th></th></tr></thead><tbody>' +
+      currentFindings.map((f, i) =>
+        '<tr class="sec-finding-row" data-finding-index="' + i + '" tabindex="0" role="button">' +
+        '<td><span class="badge sec-sev-badge" style="border-color:' + severityColor(f.severity) + ';color:' + severityColor(f.severity) + ';">' +
+        escapeHtml(severityLabel(f.severity)) + '</span></td>' +
+        '<td class="content-sub">' + escapeHtml(f.domain) + '</td>' +
+        '<td>' + escapeHtml(f.title) + '</td>' +
+        '<td class="cell-mono">' + escapeHtml(f.check_id) + '</td>' +
+        '<td class="cell-actions"><span class="content-sub">Details</span></td></tr>'
+      ).join('') +
+      '</tbody></table>';
+  }
+
+  // Per-interface security. The interface engine now runs as part of
+  // the same audit (see orchestrator.run_device_audit), so these
+  // findings arrive with the device's own results -- no second request.
+  // Still guarded: a config with no interfaces yields nothing here, and
+  // the section stays hidden rather than showing an empty panel.
+  function renderInterfaceSection(result) {
+    const perInterface = result.findings.filter((f) => f.interface_name);
+    if (!perInterface.length) return;
+
+    document.getElementById('interface-section-head').hidden = false;
+    const body = document.getElementById('interface-section-body');
+    body.hidden = false;
+
+    const byInterface = new Map();
+    perInterface.forEach((f) => {
+      if (!byInterface.has(f.interface_name)) {
+        byInterface.set(f.interface_name, { fail: 0, warn: 0, pass: 0, total: 0, worst: null, findings: [] });
+      }
+      const entry = byInterface.get(f.interface_name);
+      entry.total += 1;
+      entry.findings.push(f);
+      if (f.status === 'fail') entry.fail += 1;
+      else if (f.status === 'warn') entry.warn += 1;
+      else if (f.status === 'pass') entry.pass += 1;
+      if (f.status === 'fail') {
+        const rank = SEVERITY_ORDER.indexOf(f.severity);
+        const worstRank = entry.worst ? SEVERITY_ORDER.indexOf(entry.worst) : 99;
+        if (rank !== -1 && rank < worstRank) entry.worst = f.severity;
+      }
+    });
+
+    let secure = 0, warning = 0, atRisk = 0;
+    byInterface.forEach((v) => {
+      if (v.fail > 0) atRisk += 1;
+      else if (v.warn > 0) warning += 1;
+      else secure += 1;
+    });
+
+    interfaceGroups = [...byInterface.entries()];
+
+    body.innerHTML =
+      '<div class="status-card-grid" style="margin-bottom:12px;">' +
+      kpiCard(ICON_LIST, 'Interfaces', byInterface.size, '') +
+      kpiCard(ICON_CHECK, 'Secure', secure, 'is-signal') +
+      kpiCard(ICON_ALERT, 'Warning', warning, 'is-amber') +
+      kpiCard(ICON_ALERT, 'At Risk', atRisk, 'is-red') +
+      '</div>' +
+      '<div class="panel panel-wide"><div class="panel-body sec-port-grid">' +
+      interfaceGroups.map(([name, v], i) => {
+        const state = v.fail > 0 ? 'is-red' : (v.warn > 0 ? 'is-amber' : 'is-signal');
+        const label = v.fail > 0 ? v.fail + ' failing' : (v.warn > 0 ? v.warn + ' partial' : 'no findings');
+        return '<button type="button" class="sec-port ' + state + '" data-interface-index="' + i + '" ' +
+          'title="' + escapeHtml(name + ' — ' + label + ' of ' + v.total + ' checks') + '">' +
+          '<span class="cell-mono">' + escapeHtml(name) + '</span>' +
+          '<span class="sec-port-count cell-mono">' + (v.fail || v.warn || 0) + '</span></button>';
+      }).join('') +
+      '</div></div>';
+  }
+
+  // Clicking a port opens its own findings in the drawer -- the same
+  // component every other finding uses, so evidence and remediation
+  // read identically wherever the user arrived from.
+  function openInterfaceDrawer(name, group) {
+    const rows = group.findings
+      .slice()
+      .sort((a, b) => SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity));
+    document.getElementById('drawer-body').innerHTML =
+      '<div class="drawer-head"><h2 id="dev-drawer-title" style="margin:0;font-size:17px;" class="cell-mono">' +
+      escapeHtml(name) + '</h2></div>' +
+      '<div class="drawer-meta">' +
+      '<div class="readout"><span class="readout-k">checks</span><span class="readout-v">' + group.total + '</span></div>' +
+      '<div class="readout"><span class="readout-k">failing</span><span class="readout-v">' + group.fail + '</span></div>' +
+      '<div class="readout"><span class="readout-k">partial</span><span class="readout-v">' + group.warn + '</span></div>' +
+      '<div class="readout"><span class="readout-k">passing</span><span class="readout-v">' + group.pass + '</span></div>' +
+      '</div>' +
+      rows.map((f) =>
+        '<div class="drawer-section">' +
+        '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">' +
+        '<span class="badge sec-sev-badge" style="border-color:' + severityColor(f.severity) + ';color:' + severityColor(f.severity) + ';">' +
+        escapeHtml(severityLabel(f.severity)) + '</span>' +
+        '<span class="content-sub">' + escapeHtml(STATUS_LABEL[f.status] || f.status) + '</span></div>' +
+        '<div style="font-size:13px;color:var(--text-primary);margin-bottom:4px;">' + escapeHtml(f.title) + '</div>' +
+        (f.detail ? '<p class="drawer-text">' + escapeHtml(f.detail) + '</p>' : '') +
+        (f.fix_command ? '<div class="diff-view" style="margin-top:6px;">' + escapeHtml(f.fix_command) + '</div>' : '') +
+        '</div>'
+      ).join('');
+    document.getElementById('finding-drawer-backdrop').hidden = false;
+  }
+
+  document.getElementById('interface-section-body').addEventListener('click', (e) => {
+    const port = e.target.closest('.sec-port');
+    if (!port) return;
+    const entry = interfaceGroups[Number(port.dataset.interfaceIndex)];
+    if (entry) openInterfaceDrawer(entry[0], entry[1]);
+  });
+
+  // --- Finding drawer (same component/behaviour as the Findings page) ---
+  function section(title, html) {
+    if (!html) return '';
+    return '<div class="drawer-section"><div class="drawer-section-title">' + title + '</div>' + html + '</div>';
+  }
+
+  function openDrawer(f) {
+    const evidenceHtml = (f.evidence && f.evidence.length)
+      ? '<div class="diff-view">' + f.evidence.map((e) => escapeHtml(String(e))).join('\n') + '</div>'
+      : '';
+    document.getElementById('drawer-body').innerHTML =
+      '<div class="drawer-head">' +
+      '<span class="badge sec-sev-badge" style="border-color:' + severityColor(f.severity) + ';color:' + severityColor(f.severity) + ';">' +
+      escapeHtml(severityLabel(f.severity)) + '</span>' +
+      '<h2 id="dev-drawer-title" style="margin:8px 0 0;font-size:17px;">' + escapeHtml(f.title) + '</h2></div>' +
+      '<div class="drawer-meta">' +
+      '<div class="readout"><span class="readout-k">domain</span><span class="readout-v">' + escapeHtml(f.domain) + '</span></div>' +
+      '<div class="readout"><span class="readout-k">status</span><span class="readout-v">' + escapeHtml(STATUS_LABEL[f.status] || f.status) + '</span></div>' +
+      '<div class="readout"><span class="readout-k">check</span><span class="readout-v cell-mono">' + escapeHtml(f.check_id) + '</span></div>' +
+      (f.interface_name ? '<div class="readout"><span class="readout-k">interface</span><span class="readout-v cell-mono">' + escapeHtml(f.interface_name) + '</span></div>' : '') +
+      '</div>' +
+      section('Why this matters', f.why ? '<p class="drawer-text">' + escapeHtml(f.why) + '</p>' : '') +
+      section('Risk', f.risk ? '<p class="drawer-text">' + escapeHtml(f.risk) + '</p>' : '') +
+      section('Detail', f.detail ? '<p class="drawer-text">' + escapeHtml(f.detail) + '</p>' : '') +
+      section(escapeHtml(f.evidence_label || 'Evidence'), evidenceHtml) +
+      section('Recommendation', f.recommendation ? '<p class="drawer-text">' + escapeHtml(f.recommendation) + '</p>' : '') +
+      section('Proposed fix', f.fix_command ? '<div class="diff-view">' + escapeHtml(f.fix_command) + '</div>' : '') +
+      section('References', (f.references && f.references.length)
+        ? '<ul class="drawer-text" style="margin:0;padding-left:18px;">' + f.references.map((r) => '<li>' + escapeHtml(r) + '</li>').join('') + '</ul>' : '');
+    document.getElementById('finding-drawer-backdrop').hidden = false;
+  }
+  function closeDrawer() { document.getElementById('finding-drawer-backdrop').hidden = true; }
+
+  document.getElementById('drawer-close-btn').addEventListener('click', closeDrawer);
+  document.getElementById('finding-drawer-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'finding-drawer-backdrop') closeDrawer();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.getElementById('finding-drawer-backdrop').hidden) closeDrawer();
+  });
+
+  // Delegated so it survives every re-render of the findings table.
+  document.getElementById('device-findings-wrap').addEventListener('click', (e) => {
+    const row = e.target.closest('.sec-finding-row');
+    if (!row) return;
+    const f = currentFindings[Number(row.dataset.findingIndex)];
+    if (f) openDrawer(f);
+  });
+  document.getElementById('device-findings-wrap').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const row = e.target.closest('.sec-finding-row');
+    if (!row) return;
+    e.preventDefault();
+    const f = currentFindings[Number(row.dataset.findingIndex)];
+    if (f) openDrawer(f);
+  });
+
+  function renderAuditResult(result) {
+    document.getElementById('device-detail-section').hidden = false;
+    renderKpis(result);
+    renderDomains(result);
+    renderCompliance(result);
+    renderFindings(result);
+    renderInterfaceSection(result);
+  }
 
   async function loadDeviceSummary() {
     let res;
@@ -134,93 +451,33 @@
       return;
     }
     const devices = await res.json();
-    const device = devices.find(d => d.id === deviceId);
+    const device = devices.find((d) => d.id === deviceId);
     if (!device) {
       document.getElementById('device-detail-name').textContent = 'Device not found';
       return;
     }
     document.getElementById('device-detail-name').textContent = device.name;
-    document.getElementById('device-detail-sub').textContent = `${device.ip_address}${device.device_group_name ? ' — ' + device.device_group_name : ''}`;
+    document.getElementById('device-detail-sub').textContent =
+      device.ip_address + (device.device_group_name ? ' — ' + device.device_group_name : '');
+    document.getElementById('open-audit-modal-btn').hidden = false;
 
-    if (device.latest_score != null) {
-      document.getElementById('device-score-grid').hidden = false;
-      document.getElementById('device-score').textContent = `${device.latest_score} / 100`;
-      document.getElementById('device-score-rail').className = `rail ${scoreRail(device.latest_score)}`;
-      document.getElementById('device-risk').textContent = device.latest_risk_level || '—';
-      document.getElementById('device-last-audited').textContent = new Date(device.latest_audited_at).toLocaleString();
-    }
+    document.getElementById('device-posture-section').hidden = false;
+    renderGauge(device.latest_score);
+    document.getElementById('dev-last-audited').textContent = device.latest_audited_at
+      ? 'Last audited ' + new Date(device.latest_audited_at).toLocaleString()
+      : 'Never audited';
 
     if (device.latest_audit_run_id) {
-      const auditRes = await AAAPlatform.authedFetch(`/api/security/audits/${device.latest_audit_run_id}`);
+      const auditRes = await AAAPlatform.authedFetch('/api/security/audits/' + device.latest_audit_run_id);
       if (auditRes.ok) renderAuditResult(await auditRes.json());
     }
-  }
-
-  function renderAuditResult(result) {
-    document.getElementById('audit-result-panel').hidden = false;
-
-    document.getElementById('audit-result-summary').innerHTML = `
-      <div style="display:flex;gap:24px;align-items:baseline;flex-wrap:wrap;">
-        <div><strong style="font-size:22px;">${result.overall_score != null ? result.overall_score : '—'}</strong> / 100</div>
-        <div class="content-sub">${escapeHtml(result.risk_level || '')} risk</div>
-        <div class="content-sub">Source: ${escapeHtml(result.source)}</div>
-      </div>
-    `;
-
-    const domainBox = document.getElementById('audit-domain-scores');
-    domainBox.innerHTML = result.domain_scores.length ? `
-      <table class="data-table">
-        <thead><tr><th>Domain</th><th>Score</th><th>Failing</th><th>Manual Review</th></tr></thead>
-        <tbody>
-          ${result.domain_scores.map(d => `
-            <tr>
-              <td>${escapeHtml(d.domain)}</td>
-              <td><span class="rail ${scoreRail(d.score)}" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;"></span>${d.score}</td>
-              <td>${d.fail_count}</td>
-              <td>${d.manual_count}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    ` : '<div class="empty-state">No domain scores.</div>';
-
-    const allFindings = [...result.correlation_findings, ...result.findings.filter(f => f.status === 'fail')];
-    const findingsBox = document.getElementById('audit-result-findings');
-    findingsBox.innerHTML = allFindings.length ? `
-      <table class="data-table">
-        <thead><tr><th>Severity</th><th>Domain</th><th>Finding</th><th>Recommendation</th></tr></thead>
-        <tbody>
-          ${allFindings.map(f => `
-            <tr>
-              <td><span class="rail ${severityRail(f.severity)}" style="display:inline-block;width:10px;height:10px;border-radius:50%;"></span> ${escapeHtml(f.severity)}</td>
-              <td>${escapeHtml(f.domain)}</td>
-              <td>${escapeHtml(f.title)}</td>
-              <td class="content-sub">${escapeHtml(f.recommendation || f.why || '')}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    ` : '<div class="empty-state">No failing or correlated findings.</div>';
-
-    const complianceBox = document.getElementById('audit-compliance-summary');
-    const frameworks = Object.entries(result.compliance_summary || {});
-    complianceBox.innerHTML = frameworks.length ? `
-      <table class="data-table">
-        <thead><tr><th>Framework</th><th>Controls Referenced</th><th>Failing</th></tr></thead>
-        <tbody>
-          ${frameworks.map(([key, data]) => `
-            <tr><td>${escapeHtml(key)}</td><td>${data.total}</td><td>${data.fail}</td></tr>
-          `).join('')}
-        </tbody>
-      </table>
-    ` : '<div class="empty-state">No compliance mappings.</div>';
   }
 
   async function loadHistory() {
     const wrap = document.getElementById('audit-history-table-wrap');
     let res;
     try {
-      res = await AAAPlatform.authedFetch(`/api/security/devices/${deviceId}/audits`);
+      res = await AAAPlatform.authedFetch('/api/security/devices/' + deviceId + '/audits');
     } catch (err) {
       res = null;
     }
@@ -230,26 +487,39 @@
     }
     const runs = await res.json();
     if (!runs.length) {
-      wrap.innerHTML = '<div class="empty-state">No audits yet — run one above.</div>';
+      wrap.innerHTML = '<div class="empty-state">No audits yet — run one from the button above.</div>';
       return;
     }
-    wrap.innerHTML = `
-      <table class="data-table">
-        <thead><tr><th>Started</th><th>Source</th><th>Status</th><th>Score</th></tr></thead>
-        <tbody>
-          ${runs.map(r => `
-            <tr>
-              <td>${new Date(r.started_at).toLocaleString()}</td>
-              <td>${escapeHtml(r.source)}</td>
-              <td>${escapeHtml(r.status)}</td>
-              <td>${r.overall_score != null ? r.overall_score : '—'}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>Started</th><th>Source</th><th>Status</th><th>Score</th></tr></thead><tbody>' +
+      runs.map((r) =>
+        '<tr><td>' + new Date(r.started_at).toLocaleString() + '</td>' +
+        '<td>' + escapeHtml(r.source) + '</td><td>' + escapeHtml(r.status) + '</td>' +
+        '<td><span class="sec-inline-bar"><span class="sec-inline-bar-fill" style="width:' +
+        (r.overall_score != null ? Math.max(2, r.overall_score) : 0) + '%;background:' + scoreColorVar(r.overall_score) + ';"></span></span>' +
+        '<span class="cell-mono" style="margin-left:6px;">' + (r.overall_score != null ? r.overall_score : '—') + '</span></td></tr>'
+      ).join('') +
+      '</tbody></table>';
   }
 
+  // --- Audit modal -------------------------------------------------
+  function openAuditModal() {
+    document.getElementById('audit-error').hidden = true;
+    document.getElementById('audit-modal-backdrop').hidden = false;
+  }
+  function closeAuditModal() {
+    document.getElementById('audit-modal-backdrop').hidden = true;
+  }
+  document.getElementById('open-audit-modal-btn').addEventListener('click', openAuditModal);
+  document.getElementById('audit-cancel-btn').addEventListener('click', closeAuditModal);
+  document.getElementById('audit-modal-close-btn').addEventListener('click', closeAuditModal);
+  document.getElementById('audit-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'audit-modal-backdrop') closeAuditModal();
+  });
+
+  // Both mode buttons replace their own className wholesale, so
+  // btn-with-icon has to be re-applied here -- dropping it would break
+  // the icon's flex layout the moment either button is clicked.
   document.getElementById('audit-mode-live-btn').addEventListener('click', () => {
     document.getElementById('audit-live-fields').hidden = false;
     document.getElementById('audit-upload-fields').hidden = true;
@@ -264,6 +534,8 @@
   });
   document.getElementById('audit-mode-live-btn').click();
 
+  // Submit logic preserved verbatim from the previous page -- same
+  // endpoints, payloads, validation and error handling.
   document.getElementById('run-audit-btn').addEventListener('click', async () => {
     const errorBox = document.getElementById('audit-error');
     errorBox.hidden = true;
@@ -281,7 +553,7 @@
       }
       btn.disabled = true;
       btn.textContent = 'Connecting and auditing…';
-      res = await AAAPlatform.authedFetch(`/api/security/devices/${deviceId}/audit/live`, {
+      res = await AAAPlatform.authedFetch('/api/security/devices/' + deviceId + '/audit/live', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ssh_username: sshUsername, ssh_password: sshPassword }),
       });
@@ -311,8 +583,9 @@
     }
 
     const result = await res.json();
+    closeAuditModal();
     renderAuditResult(result);
-    AAAPlatform.toast(`Audit complete — score ${result.overall_score != null ? result.overall_score : '—'}/100.`);
+    AAAPlatform.toast('Audit complete — score ' + (result.overall_score != null ? result.overall_score : '—') + '/100.');
     loadDeviceSummary();
     loadHistory();
   });

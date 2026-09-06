@@ -240,6 +240,10 @@ select { color-scheme: dark; }
 }
 .btn-primary:hover { filter: brightness(1.08); }
 .btn-with-icon { display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+/* `display: inline-flex` beats the browser's own [hidden] rule, so a
+   button carrying both (e.g. an action revealed only once its data
+   loads) would otherwise stay visible. */
+.btn-with-icon[hidden] { display: none; }
 
 .btn-ghost {
   background: transparent;
@@ -1201,6 +1205,10 @@ table.data-table tr:hover td { background: var(--bg-panel-raised); }
    viewports so the Overview stays usable on tablet/mobile, per the
    redesign's own responsive requirement. */
 .sec-grid { display: grid; gap: 16px; margin-bottom: 16px; }
+/* Same reasoning as .btn-with-icon[hidden] above -- dashboard rows are
+   hidden until their data arrives, and `display: grid` would override
+   the hidden attribute. */
+.sec-grid[hidden] { display: none; }
 .sec-grid-posture { grid-template-columns: minmax(240px, 1fr) 2.2fr; }
 .sec-grid-charts { grid-template-columns: 1fr 1.6fr; }
 .sec-grid-trend { grid-template-columns: 1.8fr 1fr; }
@@ -1251,24 +1259,24 @@ table.data-table tr:hover td { background: var(--bg-panel-raised); }
 /* Horizontal score bar, shared by the domain-score and compliance
    sections. An <a> when it navigates, a <div> when it doesn't -- both
    need identical layout, hence the element-agnostic class. */
-.sec-bar-row {
+.bar-row, .sec-bar-row {
   display: flex; align-items: center; gap: 10px;
   padding: 6px 0; text-decoration: none; color: inherit;
 }
-a.sec-bar-row:hover .sec-bar-label { color: var(--text-primary); }
-.sec-bar-label {
+a.bar-row:hover .bar-label, a.sec-bar-row:hover .sec-bar-label { color: var(--text-primary); }
+.bar-label, .sec-bar-label {
   flex: 0 0 42%; font-size: 12.5px; color: var(--text-dim);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.sec-bar-track { flex: 1; height: 8px; background: var(--bg-panel-raised); border-radius: 3px; overflow: hidden; }
-.sec-bar-fill { display: block; height: 100%; border-radius: 3px; }
-.sec-bar-value { flex: 0 0 42px; text-align: right; font-size: 12px; color: var(--text-primary); }
+.bar-track, .sec-bar-track { flex: 1; height: 8px; background: var(--bg-panel-raised); border-radius: 3px; overflow: hidden; }
+.bar-fill, .sec-bar-fill { display: block; height: 100%; border-radius: 3px; }
+.bar-value, .sec-bar-value { flex: 0 0 42px; text-align: right; font-size: 12px; color: var(--text-primary); }
 
-.sec-inline-bar {
+.inline-bar, .sec-inline-bar {
   display: inline-block; width: 70px; height: 6px; vertical-align: middle;
   background: var(--bg-panel-raised); border-radius: 3px; overflow: hidden;
 }
-.sec-inline-bar-fill { display: block; height: 100%; border-radius: 3px; }
+.inline-bar-fill, .sec-inline-bar-fill { display: block; height: 100%; border-radius: 3px; }
 
 .sec-risk-card { padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
 .sec-risk-card:last-child { border-bottom: none; }
@@ -1342,3 +1350,113 @@ a.sec-bar-row:hover .sec-bar-label { color: var(--text-primary); }
    reachable by Tab and activated by Enter/Space. */
 .sec-finding-row { cursor: pointer; }
 .sec-finding-row:focus-visible { outline: 2px solid var(--signal); outline-offset: -2px; }
+
+/* Per-interface security summary. Rendered ONLY when findings that
+   actually carry an interface_name exist -- see the device page's own
+   comment on why no placeholder switch panel is drawn otherwise. Each
+   port shows its name and failing-check count as text, so state is
+   never carried by colour alone. */
+.sec-port-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.sec-port {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 11.5px;
+  background: var(--bg-panel-raised);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-family: inherit;
+}
+.sec-port:hover { border-color: var(--text-dim); }
+.sec-port:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+.sec-port.is-signal { border-color: var(--signal-dim); color: var(--signal); }
+.sec-port.is-red { border-color: var(--red); color: var(--red); }
+.sec-port-count {
+  min-width: 16px;
+  text-align: center;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+/* Audit activity timeline. A real <ol> so the sequence is conveyed to
+   screen readers, not just visually by the connecting line. */
+.sec-timeline { list-style: none; margin: 0; padding: 0; position: relative; }
+.sec-timeline::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: var(--line);
+}
+.sec-timeline-item { position: relative; display: flex; gap: 14px; padding: 8px 0; }
+.sec-timeline-dot {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  box-shadow: 0 0 0 3px var(--bg-panel);
+}
+.sec-timeline-dot.is-signal { background: var(--signal); }
+.sec-timeline-dot.is-red { background: var(--red); }
+.sec-timeline-body { min-width: 0; }
+.sec-timeline-line { font-size: 13px; color: var(--text-primary); }
+.sec-timeline-delta { font-size: 12px; font-family: var(--font-mono); margin-left: 4px; }
+.sec-timeline-delta.is-signal { color: var(--signal); }
+.sec-timeline-delta.is-red { color: var(--red); }
+
+/* Global keyboard focus indicator for buttons and links.
+   Inputs/textareas/selects already had their own :focus styling, but
+   buttons and links had none anywhere in this stylesheet -- meaning a
+   keyboard user tabbing through any page in the app had no visible
+   indication of where they were. Uses :focus-visible so the outline
+   appears for keyboard navigation without drawing a ring on every
+   mouse click. Declared once here rather than per-component so it
+   covers every existing button and link, including ones added later. */
+button:focus-visible,
+a:focus-visible,
+[role="button"]:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+/* Device picker inside the Run Security Audit modal. Scrolls rather
+   than growing the modal indefinitely -- a fleet of a few hundred
+   devices must not push the Run button off the screen. */
+.sec-picker {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-void);
+  margin-bottom: 14px;
+}
+.sec-picker-row {
+  display: grid;
+  grid-template-columns: 28px 1fr 150px 130px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.sec-picker-row:last-child { border-bottom: none; }
+.sec-picker-row:hover { background: var(--bg-panel-raised); }
+.sec-picker-name { color: var(--text-primary); }
+.sec-picker-ip { color: var(--text-dim); }
+@media (max-width: 640px) {
+  .sec-picker-row { grid-template-columns: 28px 1fr; }
+  .sec-picker-ip, .sec-picker-row .content-sub { display: none; }
+}

@@ -7,10 +7,63 @@
 <main class="content">
   <div class="content-head">
     <h1>Device Security</h1>
-    <p class="content-sub">Every NetworkAAA device, with its most recent security audit score if it has one.</p>
+    <p class="content-sub">Every NetworkAAA device with its most recent audit score. Select devices to run an audit across them as one job.</p>
   </div>
 
-  <div id="security-devices-table-wrap">
+  <div class="status-card-grid" id="device-summary" style="margin-bottom:16px;"></div>
+
+  <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+    <label class="field" style="min-width:220px;flex:1;">
+      <span class="field-label">Search</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+        <input type="text" id="filter-search" placeholder="Search by device name or IP…">
+      </div>
+    </label>
+    <label class="field" style="min-width:180px;">
+      <span class="field-label">Group</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('users', 14) }}</span>
+        <select id="filter-group"><option value="">All groups</option></select>
+      </div>
+    </label>
+    <label class="field" style="min-width:180px;">
+      <span class="field-label">Status</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('shield-check', 14) }}</span>
+        <select id="filter-status">
+          <option value="">All statuses</option>
+          <option value="audited">Audited</option>
+          <option value="not_audited">Not audited</option>
+        </select>
+      </div>
+    </label>
+    <label class="field" style="min-width:180px;">
+      <span class="field-label">Risk</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('alert-triangle', 14) }}</span>
+        <select id="filter-risk">
+          <option value="">All risk levels</option>
+          <option value="critical">Critical</option>
+          <option value="severe">Severe</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+          <option value="minimal">Minimal</option>
+        </select>
+      </div>
+    </label>
+  </div>
+
+  <div class="toolbar" id="bulk-bar" hidden>
+    <span class="content-sub" id="bulk-count"></span>
+    <div style="display:flex;gap:8px;">
+      <button type="button" class="btn-ghost btn-small" id="bulk-clear-btn">Clear selection</button>
+      <button type="button" class="btn-primary btn-small btn-with-icon" id="bulk-audit-btn" style="width:auto;">{{ icons.icon('activity', 14) }}Run Audit on Selected</button>
+    </div>
+  </div>
+
+  <div id="devices-table-wrap">
     <div class="empty-state">Loading…</div>
   </div>
 </main>
@@ -22,22 +75,192 @@
   // Pre-rendered server-side via Jinja (see the top-of-file macro
   // import) since this markup is built client-side, per table row.
   const ICON_VIEW = '{{ icons.icon("eye", 14) }}';
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const ICON_CLOCK = '{{ icons.icon("history", 16) }}';
+  const ICON_ROW_DEVICE = '{{ icons.icon("server", 15) }}';
 
   function escapeHtml(s) {
     const div = document.createElement('div');
     div.textContent = s == null ? '' : String(s);
     return div.innerHTML;
   }
+  function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
 
-  function scoreRail(score) {
-    if (score == null) return 'rail-dim';
-    if (score >= 85) return 'rail-signal';
-    if (score >= 60) return 'rail-amber';
-    return 'rail-red';
+  function scoreColorVar(score) {
+    if (score == null) return cssVar('--text-faint') || '#57616c';
+    if (score >= 85) return cssVar('--signal') || '#4fd1a5';
+    if (score >= 60) return cssVar('--amber') || '#e0a83e';
+    return cssVar('--red') || '#e0615a';
   }
 
-  async function loadDevices() {
-    const wrap = document.getElementById('security-devices-table-wrap');
+  // The six values scoring.risk_level() actually returns -- verified
+  // against that function, not assumed to be the usual three.
+  const HIGH_RISK = ['Critical', 'Severe', 'High'];
+
+  let devices = [];
+  const selected = new Set();
+
+  function riskColor(risk) {
+    if (!risk) return cssVar('--text-faint') || '#57616c';
+    if (HIGH_RISK.includes(risk)) return cssVar('--red') || '#e0615a';
+    if (risk === 'Medium') return cssVar('--amber') || '#e0a83e';
+    return cssVar('--signal') || '#4fd1a5';
+  }
+
+  function kpiCard(icon, label, value, cls) {
+    return '<div class="status-card ' + cls + '"><div class="status-card-icon">' + icon + '</div>' +
+      '<div class="status-card-body"><div class="status-card-title">' + escapeHtml(label) + '</div>' +
+      '<div class="status-card-value">' + escapeHtml(String(value)) + '</div></div></div>';
+  }
+
+  function renderSummary() {
+    const audited = devices.filter((d) => d.latest_score != null);
+    const atRisk = audited.filter((d) => HIGH_RISK.includes(d.latest_risk_level)).length;
+    const healthy = audited.length - atRisk;
+    document.getElementById('device-summary').innerHTML = [
+      kpiCard(ICON_SERVER, 'Total Devices', devices.length, ''),
+      kpiCard(ICON_CHECK, 'Healthy', healthy, 'is-signal'),
+      kpiCard(ICON_ALERT, 'At Risk', atRisk, 'is-red'),
+      kpiCard(ICON_CLOCK, 'Not Audited', devices.length - audited.length, ''),
+    ].join('');
+  }
+
+  function visibleDevices() {
+    const search = document.getElementById('filter-search').value.trim().toLowerCase();
+    const group = document.getElementById('filter-group').value;
+    const status = document.getElementById('filter-status').value;
+    const risk = document.getElementById('filter-risk').value;
+
+    return devices.filter((d) => {
+      if (search && !(d.name.toLowerCase().includes(search) || d.ip_address.toLowerCase().includes(search))) return false;
+      if (group && (d.device_group_name || '') !== group) return false;
+      if (status === 'audited' && d.latest_score == null) return false;
+      if (status === 'not_audited' && d.latest_score != null) return false;
+      if (risk && (d.latest_risk_level || '').toLowerCase() !== risk) return false;
+      return true;
+    });
+  }
+
+  function renderBulkBar() {
+    const bar = document.getElementById('bulk-bar');
+    bar.hidden = selected.size === 0;
+    document.getElementById('bulk-count').textContent =
+      selected.size + ' device' + (selected.size === 1 ? '' : 's') + ' selected';
+  }
+
+  function renderTable() {
+    const wrap = document.getElementById('devices-table-wrap');
+    const rows = visibleDevices();
+    if (!rows.length) {
+      wrap.innerHTML = devices.length
+        ? '<div class="empty-state">No devices match these filters.</div>'
+        : '<div class="empty-state"><div class="empty-state-title">No devices yet</div>' +
+          '<p class="empty-state-desc">Add devices under TACACS+ → Devices, then audit them from here.</p></div>';
+      return;
+    }
+    const allShownSelected = rows.every((d) => selected.has(d.id));
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr>' +
+      '<th style="width:34px;"><span class="checkbox-field"><input type="checkbox" id="select-all-visible" ' +
+      (allShownSelected ? 'checked' : '') + ' aria-label="Select all visible devices"></span></th>' +
+      '<th>Device</th><th>IP Address</th><th>Group</th><th>Status</th><th>Score</th><th>Last Audited</th><th></th>' +
+      '</tr></thead><tbody>' +
+      rows.map((d) => {
+        const audited = d.latest_score != null;
+        const statusLabel = audited ? (HIGH_RISK.includes(d.latest_risk_level) ? 'At Risk' : 'Healthy') : 'Not Audited';
+        const statusCol = audited ? riskColor(d.latest_risk_level) : (cssVar('--text-faint') || '#57616c');
+        return '<tr>' +
+          '<td><span class="checkbox-field"><input type="checkbox" class="device-select" data-device-id="' + d.id + '" ' +
+          (selected.has(d.id) ? 'checked' : '') + ' aria-label="Select ' + escapeHtml(d.name) + '"></span></td>' +
+          '<td style="display:flex;align-items:center;gap:8px;">' + ICON_ROW_DEVICE +
+          '<a href="/security/devices/' + d.id + '">' + escapeHtml(d.name) + '</a></td>' +
+          '<td class="cell-mono">' + escapeHtml(d.ip_address) + '</td>' +
+          '<td class="content-sub">' + escapeHtml(d.device_group_name || '—') + '</td>' +
+          '<td><span class="badge sec-sev-badge" style="border-color:' + statusCol + ';color:' + statusCol + ';">' +
+          statusLabel + '</span></td>' +
+          '<td>' + (audited
+            ? '<span class="sec-inline-bar"><span class="sec-inline-bar-fill" style="width:' + Math.max(2, d.latest_score) +
+              '%;background:' + scoreColorVar(d.latest_score) + ';"></span></span>' +
+              '<span class="cell-mono" style="margin-left:6px;">' + d.latest_score + '</span>'
+            : '<span class="content-sub">—</span>') + '</td>' +
+          '<td class="content-sub">' + (d.latest_audited_at ? new Date(d.latest_audited_at).toLocaleString() : '—') + '</td>' +
+          '<td class="cell-actions"><a href="/security/devices/' + d.id + '" class="btn-secondary btn-small btn-with-icon">' +
+          ICON_VIEW + 'View</a></td></tr>';
+      }).join('') +
+      '</tbody></table>';
+  }
+
+  function rerender() {
+    renderTable();
+    renderBulkBar();
+  }
+
+  // Delegated so it survives every re-render without re-binding.
+  document.getElementById('devices-table-wrap').addEventListener('change', (e) => {
+    if (e.target.id === 'select-all-visible') {
+      const shown = visibleDevices();
+      if (e.target.checked) shown.forEach((d) => selected.add(d.id));
+      else shown.forEach((d) => selected.delete(d.id));
+      rerender();
+      return;
+    }
+    if (e.target.classList.contains('device-select')) {
+      const id = e.target.dataset.deviceId;
+      if (e.target.checked) selected.add(id);
+      else selected.delete(id);
+      rerender();
+    }
+  });
+
+  ['filter-search', 'filter-group', 'filter-status', 'filter-risk'].forEach((id) => {
+    const el = document.getElementById(id);
+    el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', rerender);
+  });
+
+  document.getElementById('bulk-clear-btn').addEventListener('click', () => {
+    selected.clear();
+    rerender();
+  });
+
+  document.getElementById('bulk-audit-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('bulk-audit-btn');
+    const ids = [...selected];
+    if (!ids.length) return;
+
+    btn.disabled = true;
+    const original = btn.innerHTML;
+    btn.textContent = 'Auditing ' + ids.length + ' device' + (ids.length === 1 ? '' : 's') + '…';
+
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/security/audit/bulk', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_ids: ids }),
+      });
+    } catch (err) {
+      res = null;
+    }
+
+    btn.disabled = false;
+    btn.innerHTML = original;
+
+    if (!res || !res.ok) {
+      const body = res ? await res.json().catch(() => ({})) : {};
+      AAAPlatform.toast(
+        (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not run the audit.', 'error');
+      return;
+    }
+    const result = await res.json();
+    AAAPlatform.toast(
+      'Audit #' + result.batch_display_number + ' finished — ' +
+      result.succeeded + '/' + result.total_devices + ' devices audited.');
+    selected.clear();
+    load();
+  });
+
+  async function load() {
     let res;
     try {
       res = await AAAPlatform.authedFetch('/api/security/devices');
@@ -45,39 +268,26 @@
       res = null;
     }
     if (!res || !res.ok) {
-      wrap.innerHTML = '<div class="empty-state">Could not load devices.</div>';
+      document.getElementById('devices-table-wrap').innerHTML =
+        '<div class="empty-state">' + (res && res.status === 403
+          ? "Your role doesn't have permission to view Security Center."
+          : 'Could not load devices.') + '</div>';
       return;
     }
-    const devices = await res.json();
-    if (!devices.length) {
-      wrap.innerHTML = '<div class="empty-state">No devices yet — add one from the TACACS+ / RADIUS section first.</div>';
-      return;
-    }
-    wrap.innerHTML = `
-      <table class="data-table">
-        <thead><tr><th>Device</th><th>IP Address</th><th>Group</th><th>Score</th><th>Risk</th><th>Last Audited</th><th></th></tr></thead>
-        <tbody>
-          ${devices.map(d => `
-            <tr>
-              <td>${escapeHtml(d.name)}</td>
-              <td class="cell-mono">${escapeHtml(d.ip_address)}</td>
-              <td>${escapeHtml(d.device_group_name || '—')}</td>
-              <td>
-                ${d.latest_score != null
-                  ? `<span class="rail ${scoreRail(d.latest_score)}" style="display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;"></span>${d.latest_score}`
-                  : '<span class="content-sub">Not audited</span>'}
-              </td>
-              <td>${escapeHtml(d.latest_risk_level || '—')}</td>
-              <td>${d.latest_audited_at ? new Date(d.latest_audited_at).toLocaleString() : '—'}</td>
-              <td class="cell-actions"><a href="/security/devices/${d.id}" class="btn-secondary btn-small btn-with-icon">${ICON_VIEW}View</a></td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
+    devices = await res.json();
+
+    const groupSelect = document.getElementById('filter-group');
+    const chosen = groupSelect.value;
+    const groups = [...new Set(devices.map((d) => d.device_group_name).filter(Boolean))].sort();
+    groupSelect.innerHTML = '<option value="">All groups</option>' +
+      groups.map((g) => '<option value="' + escapeHtml(g) + '">' + escapeHtml(g) + '</option>').join('');
+    if (chosen && groups.includes(chosen)) groupSelect.value = chosen;
+
+    renderSummary();
+    rerender();
   }
 
-  loadDevices();
+  load();
 })();
 </script>
 {% endblock %}

@@ -97,6 +97,7 @@ _SECTION_BY_PATH: dict[str, tuple[str, list[str]]] = {
     "/security/findings": ("security", ["findings", "security findings", "vulnerabilities", "issues", "gaps"]),
     "/security/schedule": ("security", ["schedule", "scheduled audit", "automatic audit", "daily audit", "service account"]),
     "/security/reports": ("security", ["reports", "audit reports", "audit report", "fleet audit"]),
+    "/security/compliance": ("security", ["compliance", "nist", "iso 27002", "cis benchmark", "disa stig", "controls"]),
 
     # ---- System ----
     "/tacacs/config": ("system", ["configuration", "config", "tac_plus", "compile"]),

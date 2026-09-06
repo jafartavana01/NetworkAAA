@@ -1,0 +1,133 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Compliance — AAA Management Platform{% endblock %}
+{% block breadcrumb %}Security Center / Compliance{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Compliance Posture</h1>
+    <p class="content-sub">Control-level compliance across the fleet, from each device's most recent audit. A control counts as failing if any audited device fails it.</p>
+  </div>
+
+  <div id="compliance-body">
+    <div class="empty-state">Loading…</div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s == null ? '' : String(s);
+    return div.innerHTML;
+  }
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  function scoreColorVar(score) {
+    if (score == null) return cssVar('--text-faint') || '#57616c';
+    if (score >= 85) return cssVar('--signal') || '#4fd1a5';
+    if (score >= 60) return cssVar('--amber') || '#e0a83e';
+    return cssVar('--red') || '#e0615a';
+  }
+
+  // The exact statuses the backend emits for a control.
+  const STATUS_META = {
+    fail:          { label: 'Failing',       varName: '--red' },
+    manual_review: { label: 'Manual Review', varName: '--amber' },
+    pass:          { label: 'Passing',       varName: '--signal' },
+    na:            { label: 'Not Applicable', varName: '--text-faint' },
+  };
+  function statusColor(s) {
+    const meta = STATUS_META[s];
+    return (meta && cssVar(meta.varName)) || cssVar('--text-faint') || '#57616c';
+  }
+  function statusLabel(s) { return (STATUS_META[s] || {}).label || s; }
+
+  let frameworks = [];
+  const expanded = new Set();
+
+  function renderControls(fw) {
+    if (!fw.controls.length) {
+      return '<div class="empty-state">No controls recorded for this framework.</div>';
+    }
+    return '<table class="data-table"><thead><tr>' +
+      '<th>Control</th><th>Status</th><th>Devices Failing</th><th>Devices Passing</th><th>Manual Review</th>' +
+      '</tr></thead><tbody>' +
+      fw.controls.map((c) =>
+        '<tr><td class="cell-mono">' + escapeHtml(c.control_id) + '</td>' +
+        '<td><span class="badge sec-sev-badge" style="border-color:' + statusColor(c.status) + ';color:' + statusColor(c.status) + ';">' +
+        escapeHtml(statusLabel(c.status)) + '</span></td>' +
+        '<td class="cell-mono">' + c.devices_failing + '</td>' +
+        '<td class="cell-mono">' + c.devices_passing + '</td>' +
+        '<td class="cell-mono">' + c.devices_manual + '</td></tr>'
+      ).join('') +
+      '</tbody></table>';
+  }
+
+  function render() {
+    const body = document.getElementById('compliance-body');
+    if (!frameworks.length) {
+      body.innerHTML =
+        '<div class="empty-state"><div class="empty-state-title">No compliance results yet</div>' +
+        '<p class="empty-state-desc">Compliance controls are mapped as part of each device audit. Run an audit to populate this page.</p></div>';
+      return;
+    }
+    body.innerHTML = frameworks.map((fw, i) => {
+      const isOpen = expanded.has(fw.framework_key);
+      return '<div class="panel panel-wide" style="margin-bottom:16px;">' +
+        '<div class="panel-body">' +
+        '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:10px;">' +
+        '<h2 style="margin:0;font-size:15px;">' + escapeHtml(fw.framework_name) + '</h2>' +
+        '<span class="cell-mono" style="font-size:18px;color:' + scoreColorVar(fw.percentage) + ';">' + fw.percentage + '%</span>' +
+        '</div>' +
+        '<div class="sec-bar-track" style="margin-bottom:10px;">' +
+        '<span class="sec-bar-fill" style="width:' + Math.max(2, fw.percentage) + '%;background:' + scoreColorVar(fw.percentage) + ';"></span>' +
+        '</div>' +
+        '<div class="content-sub" style="font-size:11.5px;margin-bottom:12px;">' +
+        fw.total_controls + ' controls referenced · ' + fw.passing_controls + ' passing · ' +
+        fw.failing_controls + ' failing' + (fw.manual_controls ? ' · ' + fw.manual_controls + ' manual review' : '') +
+        '</div>' +
+        '<button type="button" class="btn-secondary btn-small" data-framework-index="' + i + '" aria-expanded="' + isOpen + '">' +
+        (isOpen ? 'Hide controls' : 'View controls') + '</button>' +
+        (isOpen ? '<div style="margin-top:12px;">' + renderControls(fw) + '</div>' : '') +
+        '</div></div>';
+    }).join('');
+  }
+
+  document.getElementById('compliance-body').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-framework-index]');
+    if (!btn) return;
+    const fw = frameworks[Number(btn.dataset.frameworkIndex)];
+    if (!fw) return;
+    if (expanded.has(fw.framework_key)) expanded.delete(fw.framework_key);
+    else expanded.add(fw.framework_key);
+    render();
+  });
+
+  async function load() {
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/security/compliance');
+    } catch (err) {
+      res = null;
+    }
+    if (!res || !res.ok) {
+      document.getElementById('compliance-body').innerHTML =
+        '<div class="empty-state">' + (res && res.status === 403
+          ? "Your role doesn't have permission to view Security Center."
+          : 'Could not load compliance results.') + '</div>';
+      return;
+    }
+    const data = await res.json();
+    frameworks = data.frameworks;
+    render();
+  }
+
+  load();
+})();
+</script>
+{% endblock %}

@@ -25,6 +25,8 @@
     <button class="btn-primary btn-small" id="add-policy-btn" style="width:auto;">+ Add policy</button>
   </div>
 
+  <div class="status-card-grid" id="policies-kpis" style="margin-bottom:16px;"></div>
+
   <div id="policies-table-wrap">
     <div class="empty-state">Loading policies…</div>
   </div>
@@ -686,7 +688,30 @@
     renderConditionTree();
   });
 
+  const ICON_KPI_LIST = '{{ icons.icon("clipboard-list", 16) }}';
+  const ICON_KPI_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_KPI_LOCK = '{{ icons.icon("lock", 16) }}';
+  const ICON_KPI_SHIELD = '{{ icons.icon("shield", 16) }}';
+
+  function renderPolicyKpis() {
+    // enabled / default_action / has_condition_tree are real fields on
+    // the policy objects rendered below.
+    const enabled = policies.filter((p) => p.enabled).length;
+    const permitDefault = policies.filter(
+      (p) => String(p.default_action || '').toLowerCase() === 'permit').length;
+    const conditional = policies.filter((p) => p.has_condition_tree).length;
+    document.getElementById('policies-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_KPI_LIST, label: 'Total Policies', value: policies.length }),
+      AAAPlatform.kpiCard({ icon: ICON_KPI_CHECK, label: 'Enabled', value: enabled, state: 'is-signal' }),
+      AAAPlatform.kpiCard({ icon: ICON_KPI_LOCK, label: 'Disabled', value: policies.length - enabled,
+                            state: (policies.length - enabled) ? 'is-amber' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_KPI_SHIELD, label: 'Default Permit', value: permitDefault,
+                            sub: conditional + ' with conditions' }),
+    ].join('');
+  }
+
   function renderTable() {
+    renderPolicyKpis();
     const wrap = document.getElementById('policies-table-wrap');
     document.getElementById('policy-count').textContent = policies.length + (policies.length === 1 ? ' policy' : ' policies');
 

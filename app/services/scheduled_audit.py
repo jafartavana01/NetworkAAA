@@ -58,6 +58,11 @@ class ScheduledAuditResult:
     succeeded: int = 0
     failed: int = 0
     failures: list[str] = field(default_factory=list)  # "<device name>: <reason>"
+    # The batch this run created, so a caller can report it without
+    # re-querying for "the most recent batch" -- which would be wrong
+    # under any concurrency (a scheduled run finishing mid-request
+    # would hand the caller the wrong report number).
+    batch_display_number: int = 0
 
     @property
     def status(self) -> str:
@@ -91,6 +96,7 @@ def _next_batch_display_number(db: Session) -> int:
 
 def run_scheduled_audit(
     db: Session, *, ssh_username: str, ssh_password_encrypted: str, batch_source: str = "scheduled",
+    device_ids: list | None = None, target_description: str | None = None,
 ) -> ScheduledAuditResult:
     """
     Audits every device in sequence (not in parallel -- a fleet-wide
@@ -115,17 +121,28 @@ def run_scheduled_audit(
     run, which is what the batch's own `source` records instead).
     """
     ssh_password = security.decrypt_secret(ssh_password_encrypted)
-    devices = db.query(NetworkDevice).filter(NetworkDevice.enabled.is_(True)).order_by(NetworkDevice.name.asc()).all()
+
+    # device_ids=None means the whole enabled fleet (the daily job's own
+    # behaviour, unchanged). A supplied list narrows it to exactly those
+    # devices -- still filtered by `enabled`, so a selection that
+    # includes a disabled device audits the rest rather than failing:
+    # the caller selected devices, not a promise that every one of them
+    # is currently auditable.
+    query = db.query(NetworkDevice).filter(NetworkDevice.enabled.is_(True))
+    if device_ids is not None:
+        query = query.filter(NetworkDevice.id.in_(device_ids))
+    devices = query.order_by(NetworkDevice.name.asc()).all()
 
     batch = AuditBatch(
         display_number=_next_batch_display_number(db), source=batch_source, status="running",
         total_devices=len(devices),
+        target_description=target_description or "All Network Devices",
     )
     db.add(batch)
     db.commit()
     db.refresh(batch)
 
-    result = ScheduledAuditResult(total_devices=len(devices))
+    result = ScheduledAuditResult(total_devices=len(devices), batch_display_number=batch.display_number)
 
     for device in devices:
         run = AuditRun(

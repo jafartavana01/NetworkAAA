@@ -174,6 +174,14 @@ def create_app() -> FastAPI:
         from .services.scheduled_audit import scheduler_loop
         asyncio.create_task(scheduler_loop())
 
+    @app.on_event("startup")
+    async def _start_ncm_scheduler_loop() -> None:
+        # Its own task rather than folded into the audit loop: the two
+        # schedule different things on their own settings, and a
+        # failure or slow run in one must not delay the other.
+        from .services.ncm_scheduler import scheduler_loop as ncm_scheduler_loop
+        asyncio.create_task(ncm_scheduler_loop())
+
     return app
 
 

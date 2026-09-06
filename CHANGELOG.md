@@ -12,6 +12,551 @@ it was built alongside.
 
 ## 2026-09-03
 
+### Added — NCM backend foundation (models, drivers, archive, diff, backup engine, scheduler, RBAC)
+
+Per the spec's own instruction, inspected the real repository before
+writing anything. What that found, and what is therefore REUSED rather
+than rebuilt:
+
+* **SSH execution** -- `network_ops_execution.run_commands_on_device`
+  already handles connection, interactive shell, paging, prompt and
+  timeouts. NCM's driver layer wraps it; there is no second paramiko
+  implementation anywhere in NCM.
+* **Bounded concurrency** -- `ThreadPoolExecutor`, the same mechanism
+  `run_job` already uses, not one thread per device.
+* **Device groups** -- resolved through the existing
+  `NetworkDevice.device_group_id`; no NCM-specific grouping table.
+* **Credentials** -- the existing encrypted service account
+  (`AuditScheduleSettings` + `app.security` Fernet helpers). No second
+  credential vault, and no credential is stored in, logged by, or
+  returned from any NCM table or code path.
+* **Scheduling** -- the asyncio background-loop pattern already
+  established for scheduled security audits. No Celery/Redis/broker
+  introduced.
+
+One finding worth stating plainly: **there is no generic audit-event
+model in this project.** Rather than invent one as a side effect of
+NCM, the audit trail lives in the NCM job and target records
+themselves (who, what device, what type, when, result, changed-or-not,
+sanitised error). A platform-wide event log is a real piece of work
+that deserves its own change, not a half-version smuggled in here.
+
+**New models** (`app/models/ncm.py`, all additive, registered in
+`init_db()` in the same edit that created them): `NcmConfiguration`
+(immutable snapshot: version, type, content, sha256, size, source,
+created_by, job_id), `NcmBackupSchedule`, `NcmBackupJob`,
+`NcmBackupJobTarget`.
+
+**Deduplication design.** A snapshot is written only when its SHA-256
+differs from that device's most recent snapshot OF THE SAME type --
+but a `NcmBackupJobTarget` row is written every time regardless, with
+a `configuration_changed` flag. That is what keeps "backup executed,
+configuration unchanged" distinct from "configuration changed"
+without accumulating an identical row nightly, and without losing
+backup history. Comparison is against the latest snapshot only, not
+all history: a config that changes and reverts is a real event that
+must not be silently swallowed.
+
+**Version numbers are per device AND per configuration type**, so
+running-config and startup-config each have their own sequence --
+otherwise "version #184" is ambiguous about what it versions.
+
+**Driver abstraction** (`ncm_drivers.py`) owns only the vendor-specific
+part: which command retrieves which config, and output cleanup. Only
+`CiscoIOSDriver` is implemented; empty subclasses for untestable
+vendors would be fake structure, not architecture. A driver simply
+omits a type it does not support, which is how "not every device has
+both" is represented without a flag.
+
+**Diff is honest text diff.** No semantic network meaning is claimed,
+because this implementation cannot prove it. "Changed" is not reported
+as a third count: in a line diff a modification genuinely is a removal
+plus an addition, and pairing them up would be a heuristic presented
+as fact.
+
+**Six RBAC permissions** (`ncm:view/backup/download/diff/schedule/
+delete`), split finely because reading an archive, downloading raw
+config, opening an SSH session and deleting history are different
+levels of trust. Deliberately NOT auto-granted to existing roles.
+
+**Verified by execution, not inspection**: driver tested against four
+paths (success with echoed-command stripping and paging preamble,
+connection failure, connected-but-empty, unsupported type) using a
+stubbed SSH layer; SHA-256 correctness and stability; diff across
+seven cases the spec names (changed line, identical, empty-to-content,
+content-to-empty, empty-vs-empty, pure addition); deduplication across
+four cases including a device selected directly and via two groups;
+job status rollup across five cases including partial success and a
+device that succeeds on one config type but fails another; scheduler
+timing across six cases including an unparseable time; and
+comma-separated id parsing including malformed entries. Every model
+field reference and constructor kwarg cross-checked against the real
+schemas via AST. Full project compiles.
+
+**Not yet built** (next step, not claimed as done): NCM API routes,
+schemas, GUI pages (Overview, Archive, Viewer, History, Diff, Backup
+Jobs, Schedules), device-page integration, nav registration, and
+README/architecture documentation. The backend is complete and tested
+but is not yet reachable from the browser.
+
+---
+
+### Completed — dashboard visual language now on every remaining section
+
+Finished converting the pages listed as outstanding last pass. Every
+one uses the shared `AAAPlatform.kpiCard` helper rather than its own
+copy, so the cards stay identical across sections by construction.
+
+**AAA Health** -- five cards (records in tail, last hour, devices,
+users, permit rate) added ABOVE the existing detail panels rather
+than replacing them: those readouts carry breakdowns (parsed vs
+unparsed, by accounting type) that a card row genuinely can't, so
+replacing them would have lost real information. The permit-rate card
+colours itself by threshold and reads "—" with a "no authorization
+records" sub-label when there is nothing to divide by, rather than
+showing a misleading 0%.
+
+**Network Operations → Jobs** -- total / completed / in-flight /
+failed-or-partial, counted using the exact status vocabulary
+`statusBadge()` already maps (COMPLETED, PARTIAL, FAILED, RUNNING,
+PENDING, CANCELLED) rather than a parallel guess at what the API
+returns.
+
+**Users** -- total, enabled, disabled, and an Active Directory count
+with the local count as its sub-label.
+
+**Groups** -- total groups, total memberships (summed from
+`member_count`), and how many are referenced by a policy with the
+unreferenced count alongside, which is the number worth noticing.
+
+**Devices** -- total, enabled, disabled, and device groups with the
+distinct vendor count as a sub-label.
+
+**Policies** -- total, enabled, disabled, and default-permit count
+with "with conditions" alongside.
+
+Every field used was confirmed against what each page's own row
+rendering already reads (`enabled`, `auth_source`, `vendor`,
+`member_count`, `has_condition_tree`, and so on) rather than assumed
+from the field name.
+
+**The stale-KPI bug found in Accounting last pass was checked for on
+every page converted here**, and fixed in the two that had it: AAA
+Health and Network Ops Jobs both replace their content with an error
+message on failure, which would have left the previous load's counts
+sitting above it describing data no longer on screen.
+
+**Verified**: all eight converted pages parse, render with both a KPI
+grid and real rendered SVG icons present in the output, and have zero
+ID mismatches (248 references checked across them); every extracted
+script passes Node syntax checks; the permit-rate maths tested
+separately across 6 explicit cases plus a 961-combination range check
+confirming it never leaves 0-100 or mis-thresholds; and project-wide
+compile, template, `view_scripts` and `[hidden]` sweeps are all
+clean.
+
+**Remaining pages deliberately not converted**: Diagnostics,
+Effective Access, Policy Simulator, Command Sets/Categories, Network
+Ops Templates/Checks/Audits and Config. These are input-driven tools
+and editors rather than status views -- a KPI row above a form or a
+one-shot diagnostic would be decoration, not information. Export
+Report remains unimplemented per instruction.
+
+---
+
+### Started — extending the dashboard visual language across the whole platform
+
+Request: bring the card/chart/visualisation language the Security
+Center now uses to every section of the platform. Started with the
+shared foundation plus two pages, rather than touching a dozen
+templates in one unverified sweep.
+
+**Generalised the shared visual primitives.** The bar-row and
+inline-bar components were named `.sec-*` because they were built for
+Security Center. Rather than leave every other section using
+Security-Center-prefixed classes (or duplicating the CSS under new
+names), each rule now carries a neutral alias alongside its original
+selector -- `.bar-row, .sec-bar-row { ... }` and so on. Existing
+Security Center templates keep working untouched; new pages use the
+neutral name.
+
+**New shared helpers in `app.js`**: `kpiCard`, `kpiGrid`, `barRow`,
+`scoreColor`, plus `escapeHtml`/`cssVar`. Every page adding KPI cards
+was otherwise going to redefine the same helpers inline, which makes
+the visual language "consistent until someone tweaks one copy".
+Defining them once means a change to card markup lands everywhere at
+once. `kpiCard` takes the same `is-signal`/`is-amber`/`is-red` state
+classes `.status-card` already defines rather than inventing a
+parallel vocabulary, and renders as a link when given an `href` --
+which is how the Security Center KPIs deep-link into filtered views.
+
+**Sessions** now leads with five KPI cards (active sessions, total,
+unique users, devices seen, commands logged), all counted from the
+sessions actually loaded, so the summary can never disagree with the
+table beneath it.
+
+**Accounting** leads with four (matching records with the in-log
+total as a sub-label, unique users, devices seen, commands), counted
+from the records returned for the current filter rather than a wider
+unfiltered set.
+
+**A real bug caught while wiring Accounting:** its load path replaces
+the table with a "Loading…" or error message, but the KPI row would
+have kept displaying the *previous* query's numbers -- counts sitting
+above a table that no longer contains them, which is worse than
+showing nothing. The KPI row is now cleared on the same path.
+
+**Verified**: the shared helpers tested directly against 13 cases --
+state classes applied, link-vs-div rendering, HTML escaping of both
+label and value (including a `<script>` payload), optional sub-label
+present/absent, grid wrapping, distinct score thresholds, and bar
+percentages clamped above 100, floored at 2% so a zero bar stays
+visible, and NaN-safe. Both templates parse, zero ID mismatches, icon
+constants confirmed to render real SVG, scripts pass Node syntax
+checks, CSS brace-balanced, and project-wide compile / template /
+`[hidden]` sweeps clean. The `[hidden]` sweep was also fixed to
+handle multi-selector rules, which the new comma-separated aliases
+introduced.
+
+**Still to convert**: AAA Health, Diagnostics, Network Operations
+(jobs/templates/checks/audits), Users, Groups, Devices, Policies and
+Effective Access. Export Report remains deliberately unimplemented
+per instruction.
+
+---
+
+### Changed — audit by device selection; Devices page rebuilt with filters and bulk audit
+
+Direct request with reference screenshots: make "Run Security Audit"
+pick devices/groups rather than take pasted config, give the Devices
+page filters and multi-select so an admin can audit a chosen set as
+one job, and bring both closer to the attached designs.
+
+**New `POST /api/security/audit/bulk`** audits a chosen set of
+devices as one job, producing a single numbered Audit Report through
+the same pipeline and batch model the scheduled fleet job already
+uses -- a narrower device list, not a second implementation. Gated on
+`security:audit` rather than `security:view`, since it reaches out and
+touches real devices. It uses the platform's stored audit service
+account for SSH rather than prompting per run (that account exists
+precisely so bulk auditing needs no per-device credentials), and if
+none is configured it fails with a message pointing at where to set
+one up instead of silently auditing nothing.
+
+**`run_scheduled_audit` gained optional device selection.**
+`device_ids=None` keeps the daily job's existing fleet-wide behaviour
+untouched; a supplied list narrows it. The list is still filtered by
+`enabled`, so a selection containing a disabled device audits the
+rest rather than failing the whole job -- the caller chose devices,
+not a guarantee every one is currently auditable. An empty selection
+is rejected at the schema rather than silently meaning "everything":
+an accidental empty list auditing the entire fleet would be a
+genuinely surprising and expensive outcome.
+
+**Fixed a concurrency bug while wiring this up.** The bulk endpoint
+first reported its report number by querying for "the most recent
+batch" -- which is wrong the moment anything runs concurrently, since
+a scheduled run finishing mid-request would hand the caller someone
+else's report number. `ScheduledAuditResult` now carries the number
+of the batch it actually created, so the endpoint reports its own
+result rather than whatever happens to be newest.
+
+**Devices page rebuilt**: four summary cards (total / healthy / at
+risk / not audited), four filters (search across name and IP, group,
+audit status, risk level), per-row and select-all-visible checkboxes,
+a selection bar that appears only when something is selected, and a
+"Run Audit on Selected" action. Rows now carry a device icon, group,
+a status badge and an inline score bar, matching the attached
+reference. Risk classification uses the six values
+`scoring.risk_level()` genuinely returns -- Critical/Severe/High
+count as at-risk -- not the usual three.
+
+**Run Security Audit is now a device picker.** The modal lists real
+devices with search and group filtering, select-all-shown and clear
+actions, a live selection count, and a scrolling list so a large
+fleet can't push the Run button off screen. The old paste-config
+textarea is gone from the Overview; pasting a config by hand remains
+available on each device's own page, and the modal says so rather
+than leaving that capability seemingly removed.
+
+**Verified**: device filter logic tested across 10 cases (each filter
+alone, search by name and by IP prefix, combinations, and a
+contradictory combination expecting zero) plus the summary counts;
+schema constructions cross-checked via AST (no missing or unknown
+fields); the permission name confirmed to exist in the permissions
+registry rather than assumed; zero stale references to the removed
+textarea fields; templates parse with correct block structure and
+zero ID mismatches across 28 and 10 references respectively; all icon
+constants confirmed to render real SVG; every new CSS class and
+variable confirmed to exist; scripts pass Node syntax checks; and
+project-wide compile / template / `[hidden]` sweeps all clean.
+
+**Not done in this pass**: the reference dashboard's Findings Trend
+multi-series chart and Export Report menu. Export remains the one
+unimplemented item from the earlier brief.
+
+---
+
+### Added — Audit Activity timeline (Phase 9) and accessibility/responsive pass (Phase 10)
+
+This completes the 10-phase Security Center redesign.
+
+**Phase 9 — Audit Activity timeline.** New
+`GET /api/security/activity` returns recent audit runs, newest first,
+one event per real stored `AuditRun` -- the timeline never synthesizes
+entries. `score_delta` compares each run against that SAME device's
+own chronologically-previous completed run, so "+8" means the device
+improved by 8 since its last audit, not that it differs from a fleet
+average. Runs with no comparison point (a device's first audit, or a
+failed run with no score) get a null delta and the GUI renders no
+arrow rather than implying a trend that doesn't exist. Deltas are
+computed in one pass over all runs rather than a per-row lookup,
+avoiding the N+1 pattern.
+
+Rendered on the Overview as a real `<ol>` so the sequence is conveyed
+to screen readers, not only visually by the connecting line. Fetched
+in its own request rather than bolted onto the dashboard payload: it
+is a different shape of data (a time-ordered log, not current
+posture), has its own limit, and keeping it separate means a slow or
+empty activity query can't delay the posture widgets from rendering.
+
+**Phase 10 — audited rather than assumed.** Checked responsive
+behaviour and accessibility against what the stylesheet actually
+contains:
+- Dashboard grids already collapse to one column at 1100px, tables
+  already scroll horizontally at 640px, and the drawer already sizes
+  to `min(94vw, 540px)` -- all verified in the CSS, no change needed.
+- Clickable finding rows already carry `tabindex` and `role="button"`
+  with Enter/Space handlers; icons are already `aria-hidden`;
+  icon-only close buttons already carry `aria-label`. Confirmed by
+  scanning every template, not assumed from memory.
+
+**One real, app-wide accessibility bug found and fixed:** inputs,
+textareas and selects had `:focus` styling, but **buttons and links
+had no focus indicator anywhere in the stylesheet**. A keyboard user
+tabbing through any page in the entire application -- not just
+Security Center -- had no visible indication of where they were.
+Fixed with a single global `:focus-visible` rule covering `button`,
+`a`, `[role="button"]` and `summary`, declared once so it also covers
+components added later. `:focus-visible` rather than `:focus` so the
+outline appears for keyboard navigation without ringing every mouse
+click.
+
+**Verified**: the per-device delta logic tested against 5 real cases
+covering a device's first audit (null), a genuine improvement, a
+decline where an intervening failed run is correctly skipped, a
+single-audit device, and a scoreless run -- plus explicit
+confirmation that one device is never compared against another.
+Schema construction cross-checked via AST (no missing or unknown
+fields). Template parses, zero ID mismatches across 24 references,
+timeline markup confirmed present in rendered output, scripts pass
+Node syntax checks, CSS brace-balanced with every new class
+confirmed to exist, and full project-wide compile / template /
+`view_scripts` / `[hidden]` sweeps all clean.
+
+**All 10 phases are now complete.** Findings export (CSV/PDF/JSON)
+remains the one item from the original brief that was never
+implemented -- it was listed as optional there and is genuinely not
+started, not partially built.
+
+---
+
+### Added — fleet-wide Compliance page (Phase 8)
+
+**New `GET /api/security/compliance`** aggregates every stored
+per-control result across each device's own most recent completed
+audit -- built on the same `_latest_completed_runs_by_device` basis
+every other Security Center view uses, so compliance posture can't
+disagree with what the Overview or Findings pages report.
+
+**Worst-status-wins per control**, deliberately: a control that fails
+on any audited device is a failing control for the fleet, regardless
+of how many devices pass it. Reporting it any other way would let a
+real gap disappear behind an average. `devices_passing` /
+`devices_failing` / `devices_manual` count DEVICES rather than
+findings, since "this control fails on 3 devices" is the number an
+auditor actually asks about.
+
+**Framework display names come from the mapping files' own
+`framework_name` field** ("NIST SP 800-53 Rev. 5", "ISO/IEC
+27002:2022", "CIS Cisco IOS XE 17.x Benchmark v2.1.0", "DISA STIG --
+Cisco IOS Switch L2S / Router RTR") rather than a hardcoded lookup in
+the API layer, so adding or renaming a framework needs no change
+here. Verified those names by reading the four mapping files
+directly, not assumed.
+
+**Frameworks with no stored results are omitted entirely** rather
+than rendered at 0%. "Not assessed" and "assessed and failing" are
+genuinely different states, and showing the former as the latter
+would be a real misstatement of posture -- exactly the kind of
+fabricated-looking data the redesign brief rules out.
+
+**The page** shows each framework as a card with its percentage,
+progress bar and control counts, expanding on demand into a
+per-control table (control ID, status badge, and device counts for
+failing/passing/manual). Controls are sorted worst-first, so failing
+controls are the first thing visible without scrolling. Status is
+carried by a labelled badge, never colour alone.
+
+**Verified**: the worst-status-wins classifier tested against 6 real
+cases including the two orderings that matter (a single failing
+device outranks five passing ones; a failing device outranks manual
+review), and the percentage math against 5 cases plus a
+900-combination range check confirming it can never fall outside
+0-100. Schema constructions cross-checked against their definitions
+via AST (no missing or unknown fields), every referenced name
+confirmed resolvable at module level, the new nav entry confirmed to
+render in the right position, template parses with correct block
+structure and zero ID mismatches, scripts pass Node syntax checks,
+and project-wide compile / template / `view_scripts` / `[hidden]`
+sweeps all clean.
+
+**Remaining (Phases 9-10)**: audit activity timeline, and the final
+responsive/performance/accessibility polish pass. Findings export
+remains unimplemented.
+
+---
+
+### Wired the interface engine into the audit run — Phase 7 now real, not deferred
+
+Explicit product decision given: interface results belong in the SAME
+audit run. That was the exact question `run_device_audit`'s own
+docstring had been holding open, so this closes it rather than
+working around it.
+
+**On the two GitHub repositories referenced**: no network access is
+available in this environment, so neither could be fetched -- but
+neither needed to be. Both engines were migrated into this project in
+earlier sessions and verified byte-identical against their originals
+(`cisco-ios-security-auditor` -> `security_center/checks/*` +
+`parser/cisco_config.py`; `cisco-interface-security-audit` ->
+`checks/interfaces.py` + `parser/interface_config.py`). The work here
+was never "port the repos" -- it was wiring the already-migrated
+interface engine into the audit flow and building the GUI over its
+real output.
+
+**`run_device_audit` now runs both engines** over the same raw config
+and merges their findings. Interface findings flow through the
+existing `to_unified_findings()` adapter, so they arrive as the same
+unified `Finding` type and need no special-casing anywhere
+downstream -- scoring, correlation, compliance mapping and
+persistence all just work. They carry an `Interface Security / *`
+domain prefix and a non-null `interface_name`, which is what lets the
+GUI separate per-port results from device-wide ones without a second
+query or a parallel storage path. `interface_name` was already
+persisted, so no migration was needed for the findings themselves.
+
+**New `run_interface_checks()` helper** with deliberate failure
+isolation at two levels: a config the interface parser chokes on
+degrades to "no interface findings" rather than failing the whole
+audit and losing the device-level results the user actually asked
+for, and one bad interface doesn't drop every other interface's
+results. Both failures are logged, not silently swallowed.
+
+**Phase 7 GUI is now real.** The Device Security page's Interface
+Security section shows Interfaces / Secure / Warning / At Risk
+counts and a clickable port grid; each port displays its name and
+failing-check count as text (never colour alone), and clicking one
+opens that port's own findings in the same drawer component every
+other finding uses -- so evidence and remediation read identically
+wherever the user arrived from. Ports are real `<button>` elements
+with hover and focus-visible states, so the grid is keyboard-operable.
+
+**Verified by actually running the pipeline, not by inspection:**
+- End-to-end against a real multi-interface config: 125 device-level
+  findings + 14 interface-level findings, correct `Interface
+  Security /` domain prefixes, correct per-interface attribution.
+- Graceful degradation confirmed against three hostile inputs -- a
+  config with no interfaces at all, a completely empty config, and
+  non-Cisco garbage text. All three still return a full device-level
+  audit rather than raising.
+- Interface grouping logic tested independently: per-interface
+  fail/warn/pass tallies, worst-failing-severity selection (a
+  critical correctly outranks a medium on the same port), and the
+  secure/warning/at-risk classification.
+- Plus the usual: templates parse, zero ID mismatches across 32
+  references, scripts pass Node syntax checks, CSS brace-balanced,
+  and project-wide compile / `view_scripts` / `[hidden]` sweeps all
+  clean.
+
+**Still not started (Phases 8-10)**: expanded Compliance page, audit
+activity timeline, and the final responsive/performance polish pass.
+Findings export remains unimplemented.
+
+One consequence worth stating plainly: because interface findings now
+join the scored denominator, device scores will shift for
+interface-heavy configs compared with audits run before this change.
+That is correct -- the score now reflects interface posture too --
+but historical runs were scored without them, so a score drop
+immediately after this change may be the new coverage, not a
+regression in the device.
+
+---
+
+### Redesigned — Device Security page (Phase 6); Phase 7 investigated and deliberately not built
+
+**Phase 6 done.** The Device Security page is now graphical: a radial
+score gauge (same verified arc math as the Overview), seven KPI cards
+(critical/high/medium/low/manual-review/passing/total checks computed
+from that device's own findings), horizontal domain-score bars sorted
+weakest-first with per-domain failing/passing/manual counts beneath,
+a compliance panel, and a findings table wired to the same Finding
+Detail Drawer built in Phase 5 -- so a finding opens identically
+whether reached from the fleet-wide Findings page or a single device.
+
+**The Run Audit form moved into a modal**, matching what the Overview
+already does. All submit logic is preserved verbatim -- same two
+endpoints (live SSH and paste-config), same payloads, same validation
+and error handling, same Live-SSH/Paste-Config mode toggle including
+the `btn-with-icon` class-reapplication those buttons need because
+they replace their own className wholesale.
+
+**Compliance percentage** is derived from the `total`/`fail` the
+backend already computes (share of referenced controls not failing),
+not a second scoring rule invented in the browser. Verified with 6
+explicit cases plus a 210-combination range check confirming it can
+never fall outside 0-100.
+
+**Phase 7 (graphical switch/interface view): investigated, and
+deliberately NOT built.** The spec scopes this to "where the backend
+data supports it" and forbids fabricating data. It does not:
+`app.security_center.engine.orchestrator` explicitly does not run the
+interface engine (its own docstring documents that as a deferred
+product decision), and `to_unified_findings()` -- the only path that
+converts interface checks into storable findings -- is never called
+anywhere in the application; grepping the whole codebase returns only
+comments mentioning it. So no interface-level finding is ever
+persisted, and a switch/port panel today could only show invented
+ports. Instead the page renders a real per-interface summary
+(interface count, how many have findings, and a port grid with each
+port's failing-check count) that appears ONLY when findings carrying
+an `interface_name` actually exist, and stays hidden entirely
+otherwise. When the interface engine is wired into the audit flow,
+that section will populate itself with no further frontend work.
+
+**Two real bugs caught by the project-wide `[hidden]` sweep, in code
+written this same pass:** the new "Run New Audit" button
+(`.btn-with-icon`) and both dashboard rows (`.sec-grid`) are hidden
+until their data loads, but both classes set a `display` value, which
+beats the browser's own `[hidden] { display: none }`. All three would
+have flashed visible and empty on every page load. This is the third
+time this bug class has appeared in this project; the sweep is now
+part of the standard verification run precisely because it keeps
+catching real instances. Fixed at the CSS level and re-swept: zero
+problems project-wide.
+
+**Verified**: template parses with correct block structure; zero ID
+mismatches across 32 references; all four icon constants confirmed to
+render real SVG; every new CSS class confirmed to exist; scripts pass
+Node syntax checks; full project-wide compile, template,
+`view_scripts` and `[hidden]` sweeps all clean.
+
+**Still not started (Phases 8-10)**: expanded Compliance page, audit
+activity timeline, and the final responsive/performance/accessibility
+polish pass. Findings export remains unimplemented.
+
+---
+
 ### Redesigned — Findings page as an investigation workspace, plus the Finding Detail Drawer (Phase 4-5)
 
 Continuing the Security Center redesign in its own specified phase

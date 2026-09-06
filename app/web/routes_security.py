@@ -90,6 +90,14 @@ def schedule_settings_page(
     return _render(request, session_token, "security_schedule.html", require_superadmin=True)
 
 
+@router.get("/security/compliance", response_class=HTMLResponse)
+def compliance_page(
+    request: Request,
+    session_token: str | None = Cookie(default=None, alias=security.SESSION_COOKIE_NAME),
+):
+    return _render(request, session_token, "security_compliance.html")
+
+
 @router.get("/security/reports", response_class=HTMLResponse)
 def audit_reports_list_page(
     request: Request,

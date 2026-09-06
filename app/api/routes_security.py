@@ -31,6 +31,8 @@ from ..schemas.security_audit import (
     AuditBatchSummaryListItemOut, AuditBatchSummaryOut, AuditCompareOut, AuditLiveRequest, AuditRunDetailOut,
     AuditRunSummaryOut, AuditScheduleOut,
     AuditScheduleUpdateRequest, AuditUploadRequest, BatchCategoryCountOut, BatchDeviceRowOut, BatchTopFindingOut,
+    ActivityEventOut, BulkAuditRequest, BulkAuditResultOut,
+    ComplianceControlOut, ComplianceFrameworkOut, ComplianceOverviewOut,
     DashboardComplianceOut, DashboardDomainScoreOut, DashboardHeatmapCellOut, DashboardRiskyDeviceOut,
     DashboardSeverityCountOut, DashboardTopRiskOut, DashboardTrendPointOut,
     DomainScoreOut, FindingOut, FleetFindingOut, SecurityDashboardOut, SecurityDeviceOut, SecurityOverviewOut,
@@ -840,4 +842,179 @@ def get_security_dashboard(
         domain_scores=domain_scores, score_trend=score_trend, compliance=compliance,
         risky_devices=risky_devices, top_risks=top_risks,
         heatmap=heatmap, heatmap_domains=heatmap_domains,
+    )
+
+
+# Worst-status-wins ordering: if a control fails on ANY device it is a
+# failing control for the fleet, regardless of how many devices pass.
+_COMPLIANCE_STATUS_RANK = {"fail": 0, "manual_review": 1, "pass": 2, "na": 3}
+
+
+@router.get("/compliance", response_model=ComplianceOverviewOut)
+def get_compliance_overview(
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("security:view")),
+):
+    """
+    Fleet-wide compliance posture, per framework and per control,
+    built from each device's own most recent completed audit -- the
+    same `_latest_completed_runs_by_device` basis every other Security
+    Center view uses, so posture can't disagree between pages.
+
+    Framework display names come from the mapping files' own
+    `framework_name` field rather than a hardcoded lookup here, so
+    adding or renaming a framework needs no change in this layer.
+    Frameworks with no stored results are omitted entirely rather than
+    shown at 0% -- an unmapped framework is "not assessed", which is a
+    different thing from "assessed and failing", and rendering it as
+    the latter would be a real misstatement of posture.
+    """
+    from ..security_center.compliance.loader import load_compliance_mappings
+
+    latest_by_device = _latest_completed_runs_by_device(db)
+    if not latest_by_device:
+        return ComplianceOverviewOut(devices_audited=0, frameworks=[])
+
+    run_ids = [r.id for r in latest_by_device.values()]
+    rows = db.query(AuditComplianceResult).filter(AuditComplianceResult.audit_run_id.in_(run_ids)).all()
+
+    names = {f["_framework_key"]: f.get("framework_name", f["_framework_key"]) for f in load_compliance_mappings()}
+
+    # framework -> control_id -> {status: device_count}
+    acc: dict = {}
+    for row in rows:
+        control = acc.setdefault(row.framework, {}).setdefault(row.control_id, {"pass": 0, "fail": 0, "manual_review": 0, "na": 0})
+        if row.status in control:
+            control[row.status] += 1
+
+    frameworks = []
+    for framework_key, controls in sorted(acc.items()):
+        control_out = []
+        passing = failing = manual = 0
+        for control_id, counts in sorted(controls.items()):
+            if counts["fail"]:
+                status = "fail"
+                failing += 1
+            elif counts["manual_review"]:
+                status = "manual_review"
+                manual += 1
+            elif counts["pass"]:
+                status = "pass"
+                passing += 1
+            else:
+                status = "na"
+            control_out.append(ComplianceControlOut(
+                control_id=control_id, devices_passing=counts["pass"],
+                devices_failing=counts["fail"], devices_manual=counts["manual_review"], status=status,
+            ))
+
+        control_out.sort(key=lambda c: (_COMPLIANCE_STATUS_RANK.get(c.status, 9), c.control_id))
+        scored = passing + failing
+        frameworks.append(ComplianceFrameworkOut(
+            framework_key=framework_key, framework_name=names.get(framework_key, framework_key),
+            total_controls=len(control_out), passing_controls=passing, failing_controls=failing,
+            manual_controls=manual,
+            percentage=round((passing / scored) * 100, 1) if scored else 0.0,
+            controls=control_out,
+        ))
+
+    return ComplianceOverviewOut(devices_audited=len(latest_by_device), frameworks=frameworks)
+
+
+@router.get("/activity", response_model=list[ActivityEventOut])
+def list_security_activity(
+    limit: int = 25,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("security:view")),
+):
+    """
+    Recent audit activity, newest first -- one event per real AuditRun.
+
+    `score_delta` compares each run against that SAME device's own
+    chronologically-previous completed run, so "+8" means this device
+    improved by 8 since its last audit, not that it differs from some
+    fleet average. Runs with no earlier comparison point (a device's
+    very first audit, or a failed run with no score) get a null delta
+    and the GUI renders no arrow rather than implying a trend that
+    doesn't exist.
+
+    Ordering is done once over all runs rather than per-event queries:
+    a naive implementation would issue one "previous run" lookup per
+    row, which is the N+1 pattern this redesign exists to avoid.
+    """
+    limit = max(1, min(limit, 100))
+
+    runs = db.query(AuditRun).order_by(AuditRun.started_at.desc()).limit(200).all()
+
+    # Walk oldest-first per device so each run's predecessor is the run
+    # immediately before it, then look deltas up by run id.
+    by_device: dict = {}
+    for run in sorted(runs, key=lambda r: r.started_at):
+        by_device.setdefault(run.device_id, []).append(run)
+
+    delta_by_run: dict = {}
+    for device_runs in by_device.values():
+        previous_score = None
+        for run in device_runs:
+            if run.overall_score is not None:
+                if previous_score is not None:
+                    delta_by_run[run.id] = round(run.overall_score - previous_score, 1)
+                previous_score = run.overall_score
+
+    return [
+        ActivityEventOut(
+            audit_run_id=str(run.id),
+            device_id=str(run.device_id) if run.device_id else None,
+            device_name=run.device_name, source=run.source, status=run.status,
+            overall_score=run.overall_score, score_delta=delta_by_run.get(run.id),
+            started_at=run.started_at,
+        )
+        for run in runs[:limit]
+    ]
+
+
+@router.post("/audit/bulk", response_model=BulkAuditResultOut, dependencies=[Depends(verify_csrf)])
+def run_bulk_audit(
+    payload: BulkAuditRequest,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("security:audit")),
+):
+    """
+    Audits a chosen set of devices as one job, producing a single
+    numbered Audit Report the same way the scheduled fleet job does --
+    same pipeline, same batch model, just a narrower device list.
+
+    Uses the platform's stored service account (Scheduled Audits) for
+    SSH rather than prompting per run: that account exists precisely so
+    unattended/bulk auditing doesn't require a human to re-enter
+    credentials per device. If it isn't configured, this fails with a
+    clear message pointing at where to set it up rather than silently
+    auditing nothing.
+
+    Gated on `security:audit` (not `security:view`) since this reaches
+    out and touches real devices.
+    """
+    settings = db.query(AuditScheduleSettings).first()
+    if not settings or not settings.ssh_username or not settings.ssh_password_encrypted:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="No audit service account is configured. Set one up under Security Center → Scheduled Audits first.",
+        )
+
+    try:
+        device_uuids = [uuid.UUID(d) for d in payload.device_ids]
+    except ValueError:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="One or more device identifiers were malformed.")
+
+    count = len(device_uuids)
+    result = run_scheduled_audit(
+        db, ssh_username=settings.ssh_username, ssh_password_encrypted=settings.ssh_password_encrypted,
+        batch_source="manual", device_ids=device_uuids,
+        target_description=f"{count} selected device{'s' if count != 1 else ''}",
+    )
+
+    return BulkAuditResultOut(
+        batch_display_number=result.batch_display_number,
+        total_devices=result.total_devices, succeeded=result.succeeded, failed=result.failed,
+        status=result.status, summary=result.summary,
     )

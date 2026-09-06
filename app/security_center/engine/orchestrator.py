@@ -17,16 +17,21 @@ separate decision rather than an oversight.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
+from ..checks.interfaces import assess_features, to_unified_findings
 from ..checks.policy import DEFAULT_POLICY
 from ..checks.registry import DOMAIN_REGISTRY, run_all_device_checks
 from ..compliance.loader import control_status, load_compliance_mappings, map_findings_to_compliance
 from ..parser.cisco_config import CiscoConfig
+from ..parser.interface_config import parse_interface_config
 from .context import Context
 from .correlation import run_correlation_engine
 from .finding import Finding
 from .scoring import ScoreBreakdown, risk_level, score_by_domain, score_findings
+
+logger = logging.getLogger(__name__)
 
 _COMPLIANCE_FRAMEWORKS_CACHE = None  # loaded once per process; the 4 JSON files never change at runtime
 
@@ -50,28 +55,69 @@ class DeviceAuditResult:
     compliance_status: dict[str, dict[str, str]] = field(default_factory=dict)  # framework_key -> control -> status
 
 
+def run_interface_checks(raw_config_text: str) -> list:
+    """
+    Runs the interface-level engine over every interface in the config
+    and returns its findings already converted to unified Finding
+    objects.
+
+    Wrapped in a broad try/except on purpose: this is an addition to an
+    already-working device-level audit, and a config this parser
+    chokes on (an unusual platform, a truncated capture) must degrade
+    to "no interface findings" rather than failing the whole audit and
+    losing the device-level results the user actually asked for. The
+    failure is logged, not swallowed silently.
+    """
+    try:
+        device = parse_interface_config(raw_config_text)
+    except Exception:
+        logger.exception("Interface parsing failed; continuing with device-level findings only.")
+        return []
+
+    findings: list = []
+    global_features = device.get("global", {})
+    for iface in device.get("interfaces", []):
+        name = iface.get("name")
+        if not name:
+            continue
+        try:
+            assessment = assess_features(iface, global_features)
+            findings.extend(to_unified_findings(name, assessment))
+        except Exception:
+            # One bad interface must not drop every other interface's
+            # results -- same reasoning as the per-device isolation in
+            # app.services.scheduled_audit.
+            logger.exception("Interface assessment failed for %s; skipping that interface.", name)
+    return findings
+
+
 def run_device_audit(raw_config_text: str, policy: dict | None = None) -> DeviceAuditResult:
     """
-    Runs the complete device-level pipeline against one running-config
-    text: all 9 domains, correlation, compliance, and overall/per-
-    domain scoring.
+    Runs the complete audit pipeline against one running-config text:
+    all 9 device-level domains, the interface-level engine over every
+    interface in that same config, correlation, compliance, and
+    overall/per-domain scoring.
 
-    Deliberately does NOT also run the interface-level engine here --
-    the two engines use different parsers over the same raw text (see
-    app.security_center.parser's own module docstring on why that's a
-    deliberate design choice, not an oversight) and produce Finding
-    lists in two genuinely different shapes-of-origin (device checks
-    via F(), interface checks via to_unified_findings()). Combining
-    both into one call now, before either has a real caller (the API
-    layer isn't built yet), would be premature -- a caller that wants
-    both today can run app.security_center.checks.interfaces'
-    to_unified_findings() per-interface alongside this, and combine the
-    two finding lists itself; whether device- and interface-level
-    audits should always run together, or be independently triggerable
-    (spec section 9's "audit a single device" vs likely wanting
-    interface results as part of that same run) is a real product
-    decision for the API layer design, not something to silently
-    decide here.
+    Interface-level results are part of THIS run by explicit product
+    decision (previously deferred here pending exactly that decision):
+    auditing a device means auditing its interfaces too, so both
+    engines run over the same raw text and their findings are merged
+    into one list. The two engines deliberately keep their own parsers
+    (see app.security_center.parser's own module docstring on why that
+    is a design choice, not an oversight) and their findings arrive in
+    two shapes-of-origin -- device checks via F(), interface checks via
+    to_unified_findings() -- but both produce the same unified Finding
+    type, so downstream scoring, correlation, compliance mapping and
+    persistence need no special-casing.
+
+    Interface findings carry their own `Interface Security / *` domain
+    prefix and a non-null `interface_name`, which is what lets the GUI
+    separate per-interface results from device-wide ones without a
+    second query or a parallel storage path.
+
+    A malformed or interface-less config must not fail the whole audit:
+    the interface pass is wrapped so a device-level audit still returns
+    its full result if interface parsing raises.
     """
     policy = policy or DEFAULT_POLICY
     cfg = CiscoConfig(raw_config_text)
@@ -79,12 +125,14 @@ def run_device_audit(raw_config_text: str, policy: dict | None = None) -> Device
 
     device_findings = run_all_device_checks(cfg, policy, ctx)
     correlation_findings = run_correlation_engine(cfg, policy, ctx)
+    interface_findings = run_interface_checks(raw_config_text)
 
     # Correlation findings are scored alongside the individual findings
     # that fed them -- they're real, additional findings (their own
     # CORR-* check_id, own severity), not just annotations on existing
-    # ones, so they belong in the denominator too.
-    all_findings = device_findings + correlation_findings
+    # ones, so they belong in the denominator too. Interface findings
+    # likewise: they are real pass/fail checks against this device.
+    all_findings = device_findings + interface_findings + correlation_findings
 
     overall = score_findings(all_findings)
     domain_scores = score_by_domain(all_findings)
@@ -99,7 +147,7 @@ def run_device_audit(raw_config_text: str, policy: dict | None = None) -> Device
 
     return DeviceAuditResult(
         hostname=cfg.get_hostname(),
-        findings=device_findings,
+        findings=device_findings + interface_findings,
         correlation_findings=correlation_findings,
         overall=overall,
         overall_risk_level=risk_level(overall.score),

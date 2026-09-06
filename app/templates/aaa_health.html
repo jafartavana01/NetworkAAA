@@ -1,4 +1,5 @@
 {% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
 {% block title %}AAA Health — AAA Management Platform{% endblock %}
 {% block breadcrumb %}TACACS+ / AAA Health{% endblock %}
 
@@ -20,6 +21,7 @@
   </section>
 
   <div class="content-head"><h2>Accounting Activity</h2></div>
+  <div class="status-card-grid" id="activity-kpis" style="margin-bottom:16px;"></div>
   <section class="panel-grid" id="activity-grid">
     <div class="panel"><div class="panel-loading">Loading…</div></div>
   </section>
@@ -47,6 +49,14 @@
     if (state === 'activating' || state === 'reloading') return 'amber';
     return 'red';
   }
+
+  // Pre-rendered server-side via Jinja since these appear in
+  // client-built markup.
+  const ICON_LIST = '{{ icons.icon("clipboard-list", 16) }}';
+  const ICON_ACTIVITY = '{{ icons.icon("activity", 16) }}';
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_USER = '{{ icons.icon("user", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
 
   function renderReadout(label, value) {
     return `<div class="readout"><span class="readout-k">${label}</span><span class="readout-v">${value}</span></div>`;
@@ -89,11 +99,33 @@
     if (!res.ok) {
       activityGrid.innerHTML = '<div class="panel"><div class="panel-body">Could not load accounting statistics.</div></div>';
       failureGrid.innerHTML = '';
+      // Clear the KPI row too -- stale counts above an error message
+      // would describe data that is no longer on screen.
+      document.getElementById('activity-kpis').innerHTML = '';
       return;
     }
     const data = await res.json();
 
     const accttypeRows = Object.entries(data.by_accttype).map(([k, v]) => renderReadout(escapeHtml(k), v)).join('') || '<div class="content-sub">none</div>';
+
+    // A KPI summary above the existing detail panels rather than
+    // instead of them: the readouts below carry breakdowns (parsed vs
+    // unparsed, by accounting type) that a five-card row can't, so
+    // replacing them would lose real information.
+    const authTotal = data.permit_count + data.non_permit_count;
+    const permitRate = authTotal > 0 ? Math.round((data.permit_count / authTotal) * 100) : null;
+    document.getElementById('activity-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_LIST, label: 'Records In Tail', value: data.total_records_in_tail }),
+      AAAPlatform.kpiCard({ icon: ICON_ACTIVITY, label: 'Last Hour', value: data.events_last_hour }),
+      AAAPlatform.kpiCard({ icon: ICON_SERVER, label: 'Devices', value: data.distinct_devices }),
+      AAAPlatform.kpiCard({ icon: ICON_USER, label: 'Users', value: data.distinct_users }),
+      AAAPlatform.kpiCard({
+        icon: ICON_CHECK, label: 'Permit Rate',
+        value: permitRate != null ? permitRate + '%' : '—',
+        sub: authTotal > 0 ? data.permit_count + ' of ' + authTotal : 'no authorization records',
+        state: permitRate == null ? '' : (permitRate >= 85 ? 'is-signal' : (permitRate >= 60 ? 'is-amber' : 'is-red')),
+      }),
+    ].join('');
 
     activityGrid.innerHTML = `
       <div class="panel">

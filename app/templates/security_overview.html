@@ -86,6 +86,14 @@
   <div class="panel panel-wide" style="overflow-x:auto;">
     <div class="panel-body" id="heatmap-body"><div class="empty-state">Loading…</div></div>
   </div>
+
+  <div class="content-head">
+    <h2>Audit Activity</h2>
+    <p class="content-sub">Recent audit runs, newest first. Score changes compare each device against its own previous audit.</p>
+  </div>
+  <div class="panel panel-wide">
+    <div class="panel-body" id="activity-body"><div class="empty-state">Loading…</div></div>
+  </div>
 </main>
 
 <div class="modal-backdrop" id="audit-modal-backdrop" hidden>
@@ -95,22 +103,36 @@
 
     <div class="panel panel-wide" style="margin-bottom:16px;">
       <div class="panel-body" style="font-size:12px;color:var(--text-dim);">
-        Paste a device's full <span class="cell-mono">show running-config</span> output. Live SSH auditing of an existing device is available from that device's own page, and fleet-wide scheduled auditing from Scheduled Audits.
+        Select the devices to audit. Each is reached over SSH using the platform's own audit service account — configure it under <a href="/security/schedule">Scheduled Audits</a> if you haven't yet. To audit a config you've pasted by hand instead, use that device's own page.
       </div>
     </div>
 
-    <label class="field">
-      <span class="field-label">Device name (optional — detected from the config's own hostname if left blank)</span>
-      <div class="field-icon-wrap">
-        <span class="field-icon">{{ icons.icon('server', 14) }}</span>
-        <input type="text" id="audit-device-name" placeholder="e.g. CORE-SW01">
-      </div>
-    </label>
+    <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+      <label class="field" style="min-width:200px;flex:1;">
+        <span class="field-label">Search</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+          <input type="text" id="audit-device-search" placeholder="Filter by name or IP…">
+        </div>
+      </label>
+      <label class="field" style="min-width:200px;">
+        <span class="field-label">Device group</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('users', 14) }}</span>
+          <select id="audit-group-select"><option value="">All groups</option></select>
+        </div>
+      </label>
+    </div>
 
-    <label class="field">
-      <span class="field-label">Configuration text</span>
-      <textarea id="audit-config-text" rows="14" class="mono" placeholder="hostname CORE-SW01"></textarea>
-    </label>
+    <div class="toolbar" style="margin-bottom:8px;">
+      <span class="content-sub" id="audit-selection-count">0 devices selected</span>
+      <div style="display:flex;gap:8px;">
+        <button type="button" class="btn-ghost btn-small" id="audit-select-all-btn">Select all shown</button>
+        <button type="button" class="btn-ghost btn-small" id="audit-select-none-btn">Clear</button>
+      </div>
+    </div>
+
+    <div id="audit-device-list" class="sec-picker"></div>
 
     <div id="audit-error" class="form-error" role="alert" hidden></div>
 
@@ -466,9 +488,67 @@
     await renderTrend(data);
   }
 
+  // --- Run Security Audit: device picker ---------------------------
+  let pickerDevices = [];
+  const pickerSelected = new Set();
+
+  function pickerVisible() {
+    const search = document.getElementById('audit-device-search').value.trim().toLowerCase();
+    const group = document.getElementById('audit-group-select').value;
+    return pickerDevices.filter((d) => {
+      if (search && !(d.name.toLowerCase().includes(search) || d.ip_address.toLowerCase().includes(search))) return false;
+      if (group && (d.device_group_name || '') !== group) return false;
+      return true;
+    });
+  }
+
+  function renderPicker() {
+    const list = document.getElementById('audit-device-list');
+    const rows = pickerVisible();
+    if (!pickerDevices.length) {
+      list.innerHTML = '<div class="empty-state">No devices available to audit.</div>';
+    } else if (!rows.length) {
+      list.innerHTML = '<div class="empty-state">No devices match this filter.</div>';
+    } else {
+      list.innerHTML = rows.map((d) =>
+        '<label class="sec-picker-row">' +
+        '<span class="checkbox-field"><input type="checkbox" class="audit-device-check" data-device-id="' + d.id + '" ' +
+        (pickerSelected.has(d.id) ? 'checked' : '') + '></span>' +
+        '<span class="sec-picker-name">' + escapeHtml(d.name) + '</span>' +
+        '<span class="sec-picker-ip cell-mono">' + escapeHtml(d.ip_address) + '</span>' +
+        '<span class="content-sub">' + escapeHtml(d.device_group_name || '—') + '</span>' +
+        '</label>'
+      ).join('');
+    }
+    document.getElementById('audit-selection-count').textContent =
+      pickerSelected.size + ' device' + (pickerSelected.size === 1 ? '' : 's') + ' selected';
+  }
+
+  async function loadPickerDevices() {
+    if (pickerDevices.length) { renderPicker(); return; }
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/security/devices');
+    } catch (err) {
+      res = null;
+    }
+    if (!res || !res.ok) {
+      document.getElementById('audit-device-list').innerHTML =
+        '<div class="empty-state">Could not load devices.</div>';
+      return;
+    }
+    pickerDevices = await res.json();
+    const groups = [...new Set(pickerDevices.map((d) => d.device_group_name).filter(Boolean))].sort();
+    document.getElementById('audit-group-select').innerHTML =
+      '<option value="">All groups</option>' +
+      groups.map((g) => '<option value="' + escapeHtml(g) + '">' + escapeHtml(g) + '</option>').join('');
+    renderPicker();
+  }
+
   function openAuditModal() {
     document.getElementById('audit-error').hidden = true;
     document.getElementById('audit-modal-backdrop').hidden = false;
+    loadPickerDevices();
   }
   function closeAuditModal() {
     document.getElementById('audit-modal-backdrop').hidden = true;
@@ -480,32 +560,55 @@
     if (e.target.id === 'audit-modal-backdrop') closeAuditModal();
   });
 
-  // Submit logic preserved verbatim from the previous Overview -- the
-  // same endpoint, payload and error handling, just relocated into the
-  // modal so the dashboard isn't dominated by a permanent textarea.
+  // Delegated so it survives every re-render of the list.
+  document.getElementById('audit-device-list').addEventListener('change', (e) => {
+    if (!e.target.classList.contains('audit-device-check')) return;
+    const id = e.target.dataset.deviceId;
+    if (e.target.checked) pickerSelected.add(id);
+    else pickerSelected.delete(id);
+    renderPicker();
+  });
+  document.getElementById('audit-device-search').addEventListener('input', renderPicker);
+  document.getElementById('audit-group-select').addEventListener('change', renderPicker);
+  document.getElementById('audit-select-all-btn').addEventListener('click', () => {
+    pickerVisible().forEach((d) => pickerSelected.add(d.id));
+    renderPicker();
+  });
+  document.getElementById('audit-select-none-btn').addEventListener('click', () => {
+    pickerSelected.clear();
+    renderPicker();
+  });
+
   document.getElementById('run-audit-btn').addEventListener('click', async () => {
     const errorBox = document.getElementById('audit-error');
     errorBox.hidden = true;
-    const configText = document.getElementById('audit-config-text').value.trim();
-    if (!configText) {
-      errorBox.textContent = 'Paste the configuration text first.';
+    const ids = [...pickerSelected];
+    if (!ids.length) {
+      errorBox.textContent = 'Select at least one device to audit.';
       errorBox.hidden = false;
       return;
     }
-    const deviceName = document.getElementById('audit-device-name').value.trim() || null;
 
     const btn = document.getElementById('run-audit-btn');
     btn.disabled = true;
+    const originalHtml = btn.innerHTML;
+    btn.textContent = 'Auditing ' + ids.length + ' device' + (ids.length === 1 ? '' : 's') + '\u2026';
 
-    const res = await AAAPlatform.authedFetch('/api/security/audit/upload', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ raw_config: configText, device_name: deviceName }),
-    });
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/security/audit/bulk', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_ids: ids }),
+      });
+    } catch (err) {
+      res = null;
+    }
 
     btn.disabled = false;
+    btn.innerHTML = originalHtml;
 
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
+    if (!res || !res.ok) {
+      const body = res ? await res.json().catch(() => ({})) : {};
       errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Audit failed.';
       errorBox.hidden = false;
       return;
@@ -513,13 +616,61 @@
 
     const result = await res.json();
     closeAuditModal();
-    document.getElementById('audit-config-text').value = '';
-    document.getElementById('audit-device-name').value = '';
-    AAAPlatform.toast('Audit complete — score ' + (result.overall_score != null ? result.overall_score : '—') + '/100.');
+    pickerSelected.clear();
+    AAAPlatform.toast(
+      'Audit #' + result.batch_display_number + ' finished \u2014 ' +
+      result.succeeded + '/' + result.total_devices + ' devices audited.');
     loadDashboard();
+    loadActivity();
   });
 
+  // Activity is its own request rather than another field on the
+  // dashboard payload: it's a different shape of data (a time-ordered
+  // log, not current posture), it has its own `limit`, and keeping it
+  // separate means a slow or empty activity query can't delay the
+  // posture widgets above it from rendering.
+  async function loadActivity() {
+    const body = document.getElementById('activity-body');
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch('/api/security/activity?limit=15');
+    } catch (err) {
+      res = null;
+    }
+    if (!res || !res.ok) {
+      body.innerHTML = '<div class="empty-state">Could not load audit activity.</div>';
+      return;
+    }
+    const events = await res.json();
+    if (!events.length) {
+      body.innerHTML = '<div class="empty-state">No audits have been run yet.</div>';
+      return;
+    }
+    body.innerHTML = '<ol class="sec-timeline">' + events.map((e) => {
+      const scoreText = e.overall_score != null ? e.overall_score + '/100' : 'no score';
+      let delta = '';
+      if (e.score_delta != null && e.score_delta !== 0) {
+        const up = e.score_delta > 0;
+        delta = '<span class="sec-timeline-delta ' + (up ? 'is-signal' : 'is-red') + '">' +
+          (up ? '▲ +' : '▼ ') + e.score_delta + '</span>';
+      }
+      const name = e.device_id
+        ? '<a href="/security/devices/' + e.device_id + '">' + escapeHtml(e.device_name) + '</a>'
+        : escapeHtml(e.device_name);
+      return '<li class="sec-timeline-item">' +
+        '<span class="sec-timeline-dot ' + (e.status === 'completed' ? 'is-signal' : (e.status === 'failed' ? 'is-red' : '')) + '"></span>' +
+        '<div class="sec-timeline-body">' +
+        '<div class="sec-timeline-line">' + name +
+        ' <span class="content-sub">audited — ' + escapeHtml(scoreText) + '</span> ' + delta + '</div>' +
+        '<div class="content-sub" style="font-size:11px;">' +
+        new Date(e.started_at).toLocaleString() + ' · ' + escapeHtml(e.source) +
+        (e.status !== 'completed' ? ' · ' + escapeHtml(e.status) : '') +
+        '</div></div></li>';
+    }).join('') + '</ol>';
+  }
+
   loadDashboard();
+  loadActivity();
 })();
 </script>
 {% endblock %}

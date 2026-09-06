@@ -68,6 +68,8 @@
         <span class="content-sub" id="record-count"></span>
       </div>
 
+      <div class="status-card-grid" id="accounting-kpis" style="margin-bottom:16px;"></div>
+
       <div id="accounting-table-wrap">
         <div class="empty-state">Loading accounting records…</div>
       </div>
@@ -186,7 +188,32 @@
       '<option value="">— Any —</option>' + groups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
   }
 
+  // Pre-rendered server-side via Jinja since these appear in
+  // client-built markup.
+  const ICON_LIST = '{{ icons.icon("clipboard-list", 16) }}';
+  const ICON_USER = '{{ icons.icon("user", 16) }}';
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_TERMINAL = '{{ icons.icon("terminal", 16) }}';
+
+  function renderAccountingKpis(data) {
+    // Summarises the records actually returned for the current filter,
+    // so these numbers always describe the rows shown below rather
+    // than some wider unfiltered set.
+    const parsed = data.records.filter((r) => r.parsed);
+    const users = new Set(parsed.map((r) => r.user).filter(Boolean)).size;
+    const devices = new Set(parsed.map((r) => r.nas).filter(Boolean)).size;
+    const commands = parsed.filter((r) => r.cmd).length;
+    document.getElementById('accounting-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_LIST, label: 'Matching Records', value: data.matched,
+                            sub: data.total_in_log + ' in log' }),
+      AAAPlatform.kpiCard({ icon: ICON_USER, label: 'Unique Users', value: users }),
+      AAAPlatform.kpiCard({ icon: ICON_SERVER, label: 'Devices Seen', value: devices }),
+      AAAPlatform.kpiCard({ icon: ICON_TERMINAL, label: 'Commands', value: commands }),
+    ].join('');
+  }
+
   function renderTable(data) {
+    renderAccountingKpis(data);
     const wrap = document.getElementById('accounting-table-wrap');
     document.getElementById('record-count').textContent =
       `${data.matched} matching (of ${data.total_in_log} in log)`;
@@ -235,6 +262,10 @@
   async function loadRecords() {
     const wrap = document.getElementById('accounting-table-wrap');
     wrap.innerHTML = '<div class="empty-state">Loading…</div>';
+    // Clear the KPI row too. Leaving the previous query's numbers on
+    // screen while a new query loads (or after it fails) would show
+    // counts that no longer describe anything below them.
+    document.getElementById('accounting-kpis').innerHTML = '';
 
     const query = buildQuery();
     const res = await AAAPlatform.authedFetch('/api/tacacs-accounting' + (query ? '?' + query : ''));

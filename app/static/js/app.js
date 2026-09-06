@@ -435,5 +435,70 @@ window.AAAPlatform = (function () {
     });
   });
 
-  return { readCookie, authedFetch, toast, setupQuickAdd, onViewLeave, runViewCleanup, showContextMenu, trackBackgroundOperation };
+  // ---- Shared dashboard primitives -------------------------------
+  // Every page that shows KPI cards or score bars was otherwise going
+  // to redefine the same escapeHtml/cssVar/card-markup helpers inline.
+  // Defining them once here keeps the visual language genuinely
+  // consistent across sections rather than "consistent until someone
+  // tweaks one copy", and means a change to card markup lands
+  // everywhere at once.
+
+  function escapeHtml(value) {
+    const div = document.createElement('div');
+    div.textContent = value == null ? '' : String(value);
+    return div.innerHTML;
+  }
+
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+
+  /**
+   * One KPI card. `state` is '', 'is-signal', 'is-amber' or 'is-red'
+   * -- the same state classes .status-card already defines, not a new
+   * vocabulary. `href` is optional; when given the card becomes a
+   * link, which is how the Security Center KPIs deep-link into
+   * filtered views.
+   */
+  function kpiCard({ icon = '', label, value, state = '', href = null, sub = null }) {
+    const inner =
+      (icon ? '<div class="status-card-icon">' + icon + '</div>' : '') +
+      '<div class="status-card-body">' +
+      '<div class="status-card-title">' + escapeHtml(label) + '</div>' +
+      '<div class="status-card-value">' + escapeHtml(value) + '</div>' +
+      (sub ? '<div class="status-card-sub">' + escapeHtml(sub) + '</div>' : '') +
+      '</div>';
+    return href
+      ? '<a href="' + href + '" class="status-card ' + state + '" style="text-decoration:none;">' + inner + '</a>'
+      : '<div class="status-card ' + state + '">' + inner + '</div>';
+  }
+
+  function kpiGrid(cards) {
+    return '<div class="status-card-grid">' + cards.join('') + '</div>';
+  }
+
+  /** Colour for a 0-100 score, using the same thresholds everywhere. */
+  function scoreColor(score) {
+    if (score == null) return cssVar('--text-faint') || '#57616c';
+    if (score >= 85) return cssVar('--signal') || '#4fd1a5';
+    if (score >= 60) return cssVar('--amber') || '#e0a83e';
+    return cssVar('--red') || '#e0615a';
+  }
+
+  /** A labelled horizontal bar row (label / track / value). */
+  function barRow(label, percent, valueText, color) {
+    const pct = Math.max(0, Math.min(100, Number(percent) || 0));
+    return '<div class="bar-row">' +
+      '<span class="bar-label" title="' + escapeHtml(label) + '">' + escapeHtml(label) + '</span>' +
+      '<span class="bar-track"><span class="bar-fill" style="width:' + Math.max(2, pct) +
+      '%;background:' + (color || scoreColor(pct)) + ';"></span></span>' +
+      '<span class="bar-value cell-mono">' + escapeHtml(valueText != null ? valueText : pct) + '</span>' +
+      '</div>';
+  }
+
+  return {
+    readCookie, authedFetch, toast, setupQuickAdd, onViewLeave, runViewCleanup,
+    showContextMenu, trackBackgroundOperation,
+    escapeHtml, cssVar, kpiCard, kpiGrid, scoreColor, barRow,
+  };
 })();

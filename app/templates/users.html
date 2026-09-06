@@ -15,6 +15,8 @@
         <button class="btn-primary btn-small" id="add-user-btn" style="width:auto;">+ Add user</button>
       </div>
 
+      <div class="status-card-grid" id="users-kpis" style="margin-bottom:16px;"></div>
+
       <div id="users-table-wrap">
         <div class="empty-state">Loading users…</div>
       </div>
@@ -197,7 +199,30 @@
       groups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
   }
 
+  // Pre-rendered server-side via Jinja since these appear in
+  // client-built markup.
+  const ICON_USERS = '{{ icons.icon("users", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_LOCK = '{{ icons.icon("lock", 16) }}';
+  const ICON_BUILDING = '{{ icons.icon("building", 16) }}';
+
+  function renderUserKpis() {
+    // auth_source and enabled are the real fields the API returns --
+    // confirmed against the row rendering below, not assumed.
+    const enabled = tacacsUsers.filter((u) => u.enabled).length;
+    const ad = tacacsUsers.filter((u) => u.auth_source === 'ad').length;
+    document.getElementById('users-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_USERS, label: 'Total Users', value: tacacsUsers.length }),
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'Enabled', value: enabled, state: 'is-signal' }),
+      AAAPlatform.kpiCard({ icon: ICON_LOCK, label: 'Disabled', value: tacacsUsers.length - enabled,
+                            state: (tacacsUsers.length - enabled) ? 'is-amber' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_BUILDING, label: 'Active Directory', value: ad,
+                            sub: (tacacsUsers.length - ad) + ' local' }),
+    ].join('');
+  }
+
   function renderTable() {
+    renderUserKpis();
     const wrap = document.getElementById('users-table-wrap');
     document.getElementById('user-count').textContent = tacacsUsers.length + (tacacsUsers.length === 1 ? ' user' : ' users');
 

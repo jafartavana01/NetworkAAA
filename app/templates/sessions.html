@@ -40,6 +40,8 @@
     <span class="content-sub" id="session-count"></span>
   </div>
 
+  <div class="status-card-grid" id="sessions-kpis" style="margin-bottom:16px;"></div>
+
   <div id="sessions-table-wrap">
     <div class="empty-state">Loading sessions…</div>
   </div>
@@ -85,7 +87,32 @@
     return `${m}m ${s}s${stopIso ? '' : ' (ongoing)'}`;
   }
 
+  // Pre-rendered server-side via Jinja since these are used in
+  // client-built markup.
+  const ICON_ACTIVITY = '{{ icons.icon("activity", 16) }}';
+  const ICON_USER = '{{ icons.icon("user", 16) }}';
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_TERMINAL = '{{ icons.icon("terminal", 16) }}';
+
+  function renderKpis() {
+    // Counted from the sessions actually loaded -- these summarise the
+    // current log tail, the same data the table below shows, so the
+    // numbers can never disagree with the rows.
+    const active = sessions.filter((s) => s.is_active).length;
+    const users = new Set(sessions.map((s) => s.user).filter(Boolean)).size;
+    const devices = new Set(sessions.map((s) => s.device).filter(Boolean)).size;
+    const commands = sessions.reduce((sum, s) => sum + (Array.isArray(s.commands) ? s.commands.length : 0), 0);
+    document.getElementById('sessions-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_ACTIVITY, label: 'Active Sessions', value: active, state: active ? 'is-signal' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_TERMINAL, label: 'Total Sessions', value: sessions.length }),
+      AAAPlatform.kpiCard({ icon: ICON_USER, label: 'Unique Users', value: users }),
+      AAAPlatform.kpiCard({ icon: ICON_SERVER, label: 'Devices Seen', value: devices }),
+      AAAPlatform.kpiCard({ icon: ICON_TERMINAL, label: 'Commands Logged', value: commands }),
+    ].join('');
+  }
+
   function renderTable() {
+    renderKpis();
     const wrap = document.getElementById('sessions-table-wrap');
     document.getElementById('session-count').textContent = sessions.length + (sessions.length === 1 ? ' session' : ' sessions');
 

@@ -57,6 +57,20 @@ PERMISSION_CATALOG: list[Permission] = [
     Permission("security:view", "View Security Center", "See security audit findings, scores, compliance results, and audit history."),
     Permission("security:audit", "Run Security Audits", "Trigger a device or interface security audit (live SSH, uploaded config, or stored snapshot)."),
     Permission("security:remediate", "Apply Security Remediation", "Send a security finding's recommended fix through the configuration Apply workflow."),
+    # NCM (Network Configuration Management). Split finely on purpose:
+    # viewing an archive, downloading raw configuration, triggering a
+    # device connection, and deleting history are genuinely different
+    # levels of trust, so they are separate grants rather than one
+    # blanket "ncm" permission. Deliberately NOT auto-granted to any
+    # existing role -- an admin who could previously only read
+    # accounting should not silently gain the ability to SSH into every
+    # device because a new subsystem shipped.
+    Permission("ncm:view", "View Configuration Management", "See the configuration archive, backup jobs, schedules, and version history."),
+    Permission("ncm:backup", "Run Configuration Backups", "Trigger a manual configuration backup against devices or device groups."),
+    Permission("ncm:download", "Download Configurations", "Download an archived device configuration as a file."),
+    Permission("ncm:diff", "Compare Configurations", "Compare two archived configuration versions."),
+    Permission("ncm:schedule", "Manage Backup Schedules", "Create, edit, enable, disable, and delete recurring backup schedules."),
+    Permission("ncm:delete", "Delete Configurations", "Permanently delete archived configuration snapshots."),
 ]
 
 PERMISSION_KEYS = {p.key for p in PERMISSION_CATALOG}

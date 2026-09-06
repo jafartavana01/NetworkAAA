@@ -21,6 +21,8 @@
     <button class="btn-primary btn-small" id="add-group-btn" style="width:auto;">+ Add group</button>
   </div>
 
+  <div class="status-card-grid" id="groups-kpis" style="margin-bottom:16px;"></div>
+
   <div id="groups-table-wrap">
     <div class="empty-state">Loading groups…</div>
   </div>
@@ -126,7 +128,26 @@
     return div.innerHTML;
   }
 
+  // Pre-rendered server-side via Jinja since these appear in
+  // client-built markup.
+  const ICON_USERS = '{{ icons.icon("users", 16) }}';
+  const ICON_USER = '{{ icons.icon("user", 16) }}';
+  const ICON_LIST = '{{ icons.icon("list-checks", 16) }}';
+
+  function renderGroupKpis() {
+    const members = tacacsGroups.reduce((sum, g) => sum + (g.member_count || 0), 0);
+    const inPolicy = tacacsGroups.filter(
+      (g) => (g.referenced_by_policy_names || []).length > 0).length;
+    document.getElementById('groups-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_USERS, label: 'Total Groups', value: tacacsGroups.length }),
+      AAAPlatform.kpiCard({ icon: ICON_USER, label: 'Total Memberships', value: members }),
+      AAAPlatform.kpiCard({ icon: ICON_LIST, label: 'Used By Policies', value: inPolicy,
+                            sub: (tacacsGroups.length - inPolicy) + ' unreferenced' }),
+    ].join('');
+  }
+
   function renderTable() {
+    renderGroupKpis();
     const wrap = document.getElementById('groups-table-wrap');
     document.getElementById('group-count').textContent = tacacsGroups.length + (tacacsGroups.length === 1 ? ' group' : ' groups');
 

@@ -41,6 +41,7 @@ def _build_module() -> Module:
                     NavEntry(label="Overview", path="/security/overview"),
                     NavEntry(label="Devices", path="/security/devices"),
                     NavEntry(label="Findings", path="/security/findings"),
+                    NavEntry(label="Compliance", path="/security/compliance"),
                     NavEntry(label="Audit Reports", path="/security/reports"),
                     NavEntry(label="Scheduled Audits", path="/security/schedule", requires_superadmin=True),
                 ],

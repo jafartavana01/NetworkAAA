@@ -15,6 +15,8 @@
     <button class="btn-primary btn-small" id="add-device-btn" style="width:auto;">+ Add device</button>
   </div>
 
+  <div class="status-card-grid" id="devices-kpis" style="margin-bottom:16px;"></div>
+
   <div id="devices-table-wrap">
     <div class="empty-state">Loading devices…</div>
   </div>
@@ -457,7 +459,29 @@
     return div.innerHTML;
   }
 
+  const ICON_KPI_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_KPI_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_KPI_LOCK = '{{ icons.icon("lock", 16) }}';
+  const ICON_KPI_USERS = '{{ icons.icon("users", 16) }}';
+
+  function renderDeviceKpis() {
+    // enabled / vendor / device_group_name are the real fields the
+    // rows below already render -- verified, not assumed.
+    const enabled = devices.filter((d) => d.enabled).length;
+    const groups = new Set(devices.map((d) => d.device_group_name).filter(Boolean)).size;
+    const vendors = new Set(devices.map((d) => d.vendor).filter(Boolean)).size;
+    document.getElementById('devices-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_KPI_SERVER, label: 'Total Devices', value: devices.length }),
+      AAAPlatform.kpiCard({ icon: ICON_KPI_CHECK, label: 'Enabled', value: enabled, state: 'is-signal' }),
+      AAAPlatform.kpiCard({ icon: ICON_KPI_LOCK, label: 'Disabled', value: devices.length - enabled,
+                            state: (devices.length - enabled) ? 'is-amber' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_KPI_USERS, label: 'Device Groups', value: groups,
+                            sub: vendors + (vendors === 1 ? ' vendor' : ' vendors') }),
+    ].join('');
+  }
+
   function renderTable() {
+    renderDeviceKpis();
     const wrap = document.getElementById('devices-table-wrap');
     document.getElementById('device-count').textContent = devices.length + (devices.length === 1 ? ' device' : ' devices');
 
