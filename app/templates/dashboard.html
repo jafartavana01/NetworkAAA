@@ -1,6 +1,6 @@
 {% extends "app_shell.html" %}
 {% import "partials/icons.html" as icons %}
-{% block title %}Dashboard — NetworkAAA{% endblock %}
+{% block title %}Dashboard — NetOpsGuard{% endblock %}
 {% block breadcrumb %}Dashboard{% endblock %}
 
 {% block view_content %}
@@ -242,18 +242,24 @@
         '<a href="/tacacs/accounting" class="sec-legend-row"><span class="sec-legend-dot" style="background:' +
         (cssVar('--red') || '#e0615a') + ';"></span><span class="sec-legend-label">Non-permit</span>' +
         '<span class="sec-legend-count cell-mono">' + nonPermit.toLocaleString() + '</span></a>'
-      // No authorization records is a real, explainable state, not a
-      // failure: TACACS+ accounting only records a permit/deny result
-      // on authorization events. A log holding only session start/stop
-      // records legitimately produces zero here, and saying so is more
-      // useful than an unexplained blank panel.
-      : '<div class="content-sub">No authorization results in the current log tail — ' +
+      // This chart reads the ACCOUNTING log, whose ${result} field is
+      // populated only on authorization events -- session start/stop
+      // records leave it empty. tac_plus-ng writes its actual
+      // permit/deny decisions to a SEPARATE authorization log, which
+      // this project serves as raw text rather than parsing (its exact
+      // file format was never independently confirmed -- see
+      // app/api/routes_tacacs_logs.py's own docstring). So an empty
+      // chart here is a real state, and the useful thing is to point
+      // at where those decisions actually are rather than leave the
+      // reader thinking nothing happened.
+      : '<div class="content-sub">No authorization results in the accounting log' +
         (health && health.total_records_in_tail
-          ? health.total_records_in_tail.toLocaleString() +
-            ' accounting records were read, but none carried an authorization result ' +
-            '(session start/stop records don\\u2019t). '
-          : 'no accounting records were read. ') +
-        '<a href="/tacacs/aaa-health">See AAA Health</a> for the full breakdown.</div>';
+          ? ' \u2014 ' + health.total_records_in_tail.toLocaleString() +
+            ' records were read, but none carried a result field (session start/stop records don\u2019t carry one).'
+          : ' \u2014 no accounting records were read.') +
+        ' Permit/deny decisions go to a separate authorization log \u2014 see ' +
+        '<a href="/tacacs/diagnostics">Diagnostics</a> for its live tail, or ' +
+        '<a href="/tacacs/aaa-health">AAA Health</a> for the accounting breakdown.</div>';
 
     try { await ensureChartJsLoaded(); } catch (e) { return; }
     const canvas = document.getElementById('results-chart');
@@ -360,7 +366,7 @@
     const body = document.getElementById('ncm-posture-body');
     if (!ncm) { body.innerHTML = '<div class="empty-state">Could not load configuration posture.</div>'; return; }
     if (ncm.forbidden) {
-      body.innerHTML = '<div class="empty-state">Your role doesn\\u2019t have permission to view Configuration Management.</div>';
+      body.innerHTML = '<div class="empty-state">Your role doesn\u2019t have permission to view Configuration Management.</div>';
       return;
     }
     if (!ncm.total_devices) {

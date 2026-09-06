@@ -1586,7 +1586,7 @@ platform's own inventory (`NetworkDevice`/`DeviceGroup` rows) --
 never an arbitrary user-supplied host. Nothing in the execution path
 uses `subprocess` or a server-side shell with device- or command-
 derived strings; all execution is over paramiko SSH sessions against
-the *target* device, never the NetworkAAA host itself.
+the *target* device, never the NetOpsGuard host itself.
 
 ### RBAC
 

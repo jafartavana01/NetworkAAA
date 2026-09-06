@@ -32,8 +32,10 @@ from ..schemas.security_audit import (
     AuditRunSummaryOut, AuditScheduleOut,
     AuditScheduleUpdateRequest, AuditUploadRequest, BatchCategoryCountOut, BatchDeviceRowOut, BatchTopFindingOut,
     ActivityEventOut, BulkAuditRequest, BulkAuditResultOut,
-    ComplianceControlOut, ComplianceFrameworkOut, ComplianceOverviewOut,
+    ComplianceControlDetailOut, ComplianceControlOut, ComplianceFindingOut,
+    ComplianceFrameworkOut, ComplianceOverviewOut,
     DashboardComplianceOut, DashboardDomainScoreOut, DashboardHeatmapCellOut, DashboardRiskyDeviceOut,
+    ManualReviewCategoryOut, ManualReviewOut, ScoreContributionOut, ScoreExplanationOut,
     DashboardSeverityCountOut, DashboardTopRiskOut, DashboardTrendPointOut,
     DomainScoreOut, FindingOut, FleetFindingOut, SecurityDashboardOut, SecurityDeviceOut, SecurityOverviewOut,
 )
@@ -686,6 +688,7 @@ def get_security_dashboard(
             severity_counts=[], total_findings=0, manual_review_findings=0, failed_checks=0,
             domain_scores=[], score_trend=[], compliance=[], risky_devices=[], top_risks=[],
             heatmap=[], heatmap_domains=[],
+            score_explanation=None, manual_review=ManualReviewOut(total=0, categories=[]),
         )
 
     run_ids = [r.id for r in runs]
@@ -822,6 +825,51 @@ def get_security_dashboard(
                 domain=d.domain, score=d.score, fail_count=d.fail_count, manual_count=d.manual_count,
             ))
 
+    # Score explanation: attribute the gap between a perfect score and
+    # the actual one across domains. Each domain's shortfall
+    # (100 - its own score) is weighted by its equal share of all
+    # domains, so the parts sum to the whole gap.
+    #
+    # This is an ATTRIBUTION of the engine's own domain scores, not a
+    # second scoring algorithm -- and it is flagged approximate,
+    # because the engine's real denominator (`applicable_weight`) is
+    # not persisted per domain, so exact weighted deductions cannot be
+    # reconstructed from stored rows. Saying "approximate" is honest;
+    # presenting it as exact would not be.
+    score_explanation = None
+    if domain_scores and average_score is not None:
+        share = 1.0 / len(domain_scores)
+        contributions = sorted(
+            (
+                ScoreContributionOut(
+                    domain=d.domain, score=d.score,
+                    points_lost=round((100.0 - d.score) * share, 1),
+                    fail_count=d.fail_count, manual_count=d.manual_count,
+                )
+                for d in domain_scores
+            ),
+            key=lambda c: c.points_lost, reverse=True,
+        )
+        score_explanation = ScoreExplanationOut(
+            base_score=100.0, final_score=average_score,
+            total_deduction=round(sum(c.points_lost for c in contributions), 1),
+            contributions=contributions, is_approximate=True,
+        )
+
+    # Manual review, broken down by the domain each item came from --
+    # real domains from real findings, never a fixed category list.
+    manual_by_domain: dict = {}
+    for f in findings:
+        if f.status == Status.MANUAL.value:
+            manual_by_domain[f.domain] = manual_by_domain.get(f.domain, 0) + 1
+    manual_review = ManualReviewOut(
+        total=manual_review_findings,
+        categories=[
+            ManualReviewCategoryOut(domain=k, count=v)
+            for k, v in sorted(manual_by_domain.items(), key=lambda kv: kv[1], reverse=True)
+        ],
+    )
+
     # Trend points come only from audit runs that really exist and
     # completed with a score -- one point per run, chronological. No
     # interpolation, no synthesized history: with a single audit the
@@ -842,6 +890,7 @@ def get_security_dashboard(
         domain_scores=domain_scores, score_trend=score_trend, compliance=compliance,
         risky_devices=risky_devices, top_risks=top_risks,
         heatmap=heatmap, heatmap_domains=heatmap_domains,
+        score_explanation=score_explanation, manual_review=manual_review,
     )
 
 
@@ -1017,4 +1066,107 @@ def run_bulk_audit(
         batch_display_number=result.batch_display_number,
         total_devices=result.total_devices, succeeded=result.succeeded, failed=result.failed,
         status=result.status, summary=result.summary,
+    )
+
+
+@router.get("/compliance/{framework_key}/{control_id}", response_model=ComplianceControlDetailOut)
+def get_compliance_control_detail(
+    framework_key: str,
+    control_id: str,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("security:view")),
+):
+    """
+    Everything behind one compliance control: its real title from the
+    framework mapping, and every actual audit finding that determines
+    its status across the fleet.
+
+    The mapping file is check_id -> [controls], so this inverts it to
+    find which checks feed THIS control, then pulls those findings from
+    each device's own latest completed audit. Nothing is generated:
+    the recommendation and fix shown are the ones the audit engine
+    already produced for that check.
+    """
+    from ..security_center.compliance.loader import load_compliance_mappings
+
+    framework = next(
+        (f for f in load_compliance_mappings() if f["_framework_key"] == framework_key), None
+    )
+    if framework is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Framework not found.")
+
+    # Invert the mapping: which check_ids reference this control, and
+    # with what relationship (direct vs supporting).
+    relationship_by_check: dict[str, str] = {}
+    control_title = ""
+    for check_id, entries in (framework.get("checks") or {}).items():
+        for entry in entries:
+            if str(entry.get("control")) == control_id:
+                relationship_by_check[check_id] = entry.get("relationship", "direct")
+                control_title = control_title or entry.get("title", "")
+
+    if not relationship_by_check:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail="That control is not referenced by any check in this framework's mapping.",
+        )
+
+    latest_runs = _latest_completed_runs_by_device(db)
+    run_ids = [r.id for r in latest_runs.values()]
+    device_name_by_run = {r.id: r.device_name for r in latest_runs.values()}
+    device_id_by_run = {r.id: r.device_id for r in latest_runs.values()}
+
+    findings: list[ComplianceFindingOut] = []
+    if run_ids:
+        rows = (
+            db.query(AuditFinding)
+            .filter(
+                AuditFinding.audit_run_id.in_(run_ids),
+                AuditFinding.check_id.in_(list(relationship_by_check.keys())),
+            )
+            .all()
+        )
+        for f in rows:
+            findings.append(ComplianceFindingOut(
+                check_id=f.check_id, title=f.title, domain=f.domain,
+                status=f.status, severity=f.severity,
+                device_name=device_name_by_run.get(f.audit_run_id, "Unknown device"),
+                device_id=str(device_id_by_run.get(f.audit_run_id)) if device_id_by_run.get(f.audit_run_id) else None,
+                recommendation=f.recommendation or "", fix_command=f.fix_command or "",
+                why=f.why or "",
+                relationship=relationship_by_check.get(f.check_id, "direct"),
+            ))
+
+    # Failing first, then manual review -- the order an operator works in.
+    findings.sort(key=lambda f: (_COMPLIANCE_STATUS_RANK.get(f.status, 9), f.device_name, f.check_id))
+
+    rows_for_control = (
+        db.query(AuditComplianceResult)
+        .filter(
+            AuditComplianceResult.audit_run_id.in_(run_ids),
+            AuditComplianceResult.framework == framework_key,
+            AuditComplianceResult.control_id == control_id,
+        )
+        .all()
+        if run_ids else []
+    )
+    counts = {"pass": 0, "fail": 0, "manual_review": 0}
+    for r in rows_for_control:
+        if r.status in counts:
+            counts[r.status] += 1
+
+    if counts["fail"]:
+        overall = "fail"
+    elif counts["manual_review"]:
+        overall = "manual_review"
+    elif counts["pass"]:
+        overall = "pass"
+    else:
+        overall = "na"
+
+    return ComplianceControlDetailOut(
+        control_id=control_id, control_title=control_title or control_id,
+        framework_key=framework_key, framework_name=framework.get("framework_name", framework_key),
+        status=overall, devices_passing=counts["pass"], devices_failing=counts["fail"],
+        devices_manual=counts["manual_review"], findings=findings,
     )

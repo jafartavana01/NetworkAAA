@@ -1,18 +1,18 @@
 {% extends "app_shell.html" %}
 {% import "partials/icons.html" as icons %}
-{% block title %}Scheduled Audits — NetworkAAA{% endblock %}
+{% block title %}Scheduled Audits — NetOpsGuard{% endblock %}
 {% block breadcrumb %}Security Center / Scheduled Audits{% endblock %}
 
 {% block view_content %}
 <main class="content">
   <div class="content-head">
     <h1>Scheduled Audits</h1>
-    <p class="content-sub">A platform-owned SSH account NetworkAAA uses to audit every enabled device on its own, once a day, without a human logging in each time.</p>
+    <p class="content-sub">A platform-owned SSH account NetOpsGuard uses to audit every enabled device on its own, once a day, without a human logging in each time.</p>
   </div>
 
   <div class="panel panel-wide" style="margin-bottom:20px;border-color:var(--amber);">
     <div class="panel-body" style="font-size:12px;color:var(--amber);">
-      ⚠ This account can reach every enabled device unattended — treat its password with the same care as a device's own TACACS+ shared secret. It is never displayed once saved. Restrict where it can actually be used to sign in by allow-listing this platform's own management IP on each device's own SSH access-list — NetworkAAA has no way to configure that restriction on a device itself, so it's on you to set it up there; use the field below to note that IP for your own reference.
+      ⚠ This account can reach every enabled device unattended — treat its password with the same care as a device's own TACACS+ shared secret. It is never displayed once saved. Restrict where it can actually be used to sign in by allow-listing this platform's own management IP on each device's own SSH access-list — NetOpsGuard has no way to configure that restriction on a device itself, so it's on you to set it up there; use the field below to note that IP for your own reference.
     </div>
   </div>
 

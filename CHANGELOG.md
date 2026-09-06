@@ -12,6 +12,235 @@ it was built alongside.
 
 ## 2026-09-03
 
+### Fixed — literal "\\u2019" in dashboard text; Authorization Results now points at the right log
+
+**Two bugs, one of them mine.** The dashboard was rendering a literal
+`don\\u2019t` instead of an apostrophe. Cause: writing that template
+through a Python heredoc double-escaped the sequence, so the browser
+received the escape as text rather than a character. Fixed, then swept
+EVERY template's rendered output for the same pattern -- zero other
+instances.
+
+**Authorization Results: investigated properly rather than trusting my
+earlier conclusion.** I previously reported this as "not a bug -- the
+counter correctly counts only records carrying a result field." That
+was true but incomplete, and the incompleteness is what made the panel
+useless.
+
+Tracing the actual log configuration: `tac_plus-ng` is configured with
+THREE log targets, and permit/deny decisions go to
+`tac_plus-ng-authorization.log` -- a SEPARATE file. The accounting
+log's `${result}` field is populated only on authorization accounting
+events; session start/stop records leave it empty. So this chart was
+reading the right field in the wrong file for what it claimed to show,
+and on a deployment whose traffic is session accounting it will always
+be empty no matter how much AAA activity there is.
+
+The authorization log is deliberately NOT parsed by this project (its
+exact file format was never independently confirmed -- see
+`routes_tacacs_logs.py`'s own docstring), so the honest fix is not to
+invent a parser to fill the chart. Instead the empty state now
+explains that permit/deny decisions live in a separate log and links
+to **Diagnostics**, which already serves that log's live tail.
+
+Route verified before linking: an earlier draft pointed at
+`/tacacs/logs`, which does not exist -- that would have shipped a dead
+link. The real page is `/tacacs/diagnostics`, confirmed in
+`tacacs_module.py` before use.
+
+**Verified**: rendered output confirmed free of double-escaped
+sequences across all templates; both link targets confirmed to exist;
+the JS escapes confirmed to produce real em-dash and apostrophe
+characters when executed; dashboard parses with zero ID mismatches;
+scripts pass Node syntax checks; 41 templates and the full project
+compile.
+
+**Still open, honestly**: parsing the authorization log would let this
+chart show real permit/deny counts. That needs a confirmed sample of
+the file's actual line format from a live deployment -- guessing at it
+risks silently mis-counting security decisions, which is worse than an
+empty chart that explains itself.
+
+---
+
+### Changed — rebranded to NetOpsGuard; compliance control drill-down; README rewritten
+
+**Rebranded to "NetOpsGuard — Network Operations & Security"** across
+the sidebar, login page, all 41 page titles, in-app prose, README and
+`docs/ARCHITECTURE.md`. Zero stale "NetworkAAA" or "AAA Platform"
+references remain in the UI. As before, no Python module, database
+table, API path or variable was renamed -- branding only.
+
+**Compliance control drill-down.** Clicking any control in Security
+Center → Compliance now opens a drawer showing the control's real
+title from the framework mapping, per-device pass/fail/manual counts,
+and every actual audit finding that determines its status -- grouped
+as what is failing, what needs manual verification, and what passes.
+
+The important part: **the descriptions and remediation shown are the
+audit engine's OWN output for each check** -- its `why`,
+`recommendation` and `fix_command` fields, already stored per finding.
+Nothing is generated for the compliance view, and where a check has no
+recommendation, nothing is invented in its place. Writing plausible-
+sounding remediation text would have looked more complete and been
+worth less than nothing on a compliance screen.
+
+The mapping file is `check_id -> [controls]`, so the endpoint inverts
+it to find which checks feed a given control. Verified against the
+real ISO 27002 mapping: control 8.5 ("Secure authentication") resolves
+to 16 real checks including AAA-02, PWD-04 and BOOT-08. Findings sort
+failing-first, then manual review -- the order an operator works in.
+Checks whose mapping marks them `supporting` rather than `direct` are
+labelled as such, so a control failing on a supporting check isn't
+mistaken for a direct violation.
+
+Control rows are keyboard-operable (`tabindex`, `role="button"`,
+Enter/Space) with a visible focus state, matching the finding rows
+elsewhere in Security Center.
+
+**README rewritten** with a new header, a capability table covering
+all six areas the platform now spans (AAA, Identity, Security Center,
+NCM, Network Operations, Operations), and an explicit note that it
+runs on one host with no cloud service, external dependency or
+telemetry.
+
+**Verified**: new endpoint's schema constructions and every
+`AuditFinding` field reference cross-checked via AST; mapping
+inversion tested against the real ISO 27002 file; compliance page
+parses with zero ID mismatches and valid scripts; branding confirmed
+rendered with no stale references; README structure checked (20
+sections, no duplicates, balanced markup); 41 templates parse; full
+project compiles; CSS balanced and `[hidden]` sweep clean.
+
+---
+
+### Added — upgrade-aware installer: re-run detection, config preservation, schema drift reporting
+
+Traced every install phase before writing anything, and the finding
+was better than expected: `setup.py` was ALREADY largely re-runnable.
+PostgreSQL provisioning checks whether the role exists and keeps its
+password; the admin phase skips creation when accounts exist and
+records a `reinstall` InstallEvent; the TLS and platform-settings
+phases both guard on file existence; and `create_all()` never touches
+existing tables or their data. AAA data, audit history, the NCM
+archive, users, policies and devices all already survived a re-run.
+
+Two real gaps closed, plus the missing signal to the operator.
+
+**1. The one genuinely destructive step, fixed.**
+`write_bootstrap_config()` called `write_text()` with no existence
+check. On a re-run that file is almost certainly NOT the bootstrap
+template any more -- it is the live configuration the compiler
+produced from the operator's own devices, users and policies
+(`config_compiler.apply_candidate` writes to the same path).
+Overwriting it would silently discard a production AAA configuration
+during what the operator asked to be an install, and the loss would
+only surface when devices stopped authenticating. Now guarded by the
+same existence check the TLS and settings phases already use, with a
+new `--force-config` flag as the explicit opt-out for genuinely
+wanting to reset a broken configuration.
+
+Verified with a real temp file across all three paths: a fresh install
+writes the template; a re-run PRESERVES a live config and warns; and
+`--force-config` resets it.
+
+**2. Schema drift reporting.** `create_all()` creates missing TABLES
+but cannot alter existing ones -- so a new column on an existing table
+(exactly like `AuditRun.batch_id`) is silently skipped on an upgrade,
+and the application then fails at runtime with an obscure
+"column does not exist" deep inside an unrelated query. The installer
+now compares every model column against `information_schema` after
+`create_all()`, names the exact tables and columns, and prints the
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` statements that would fix
+it.
+
+Deliberately REPORTS rather than APPLIES. Silently mutating a
+production schema during an install is a bigger risk than telling the
+operator plainly what needs to change, and the generated columns are
+emitted as nullable regardless of how the model declares them --
+adding a NOT NULL column to a table with existing rows fails without a
+default, and inventing a default for someone else's production data is
+not a decision an installer should make. Only additive drift is
+reported: a column in the database but no longer in the models is left
+alone, because dropping it would destroy data nobody asked to lose.
+
+**3. Mode banner.** The installer now states up front whether this is
+a "fresh install" or an "upgrade", and on an upgrade lists exactly
+what is preserved. Detection is filesystem-only (the database
+credentials file is the deciding signal) because this runs before the
+app's dependencies are guaranteed installed; database-derived detail
+is filled in later, and failure to query it is non-fatal.
+
+**Verified**: install-state detection and drift reporting tested
+directly; the `--force-config` flag traced through all seven links
+from argparse to the file write; the config guard tested against a
+simulated live configuration; full project compiles; 41 templates
+parse.
+
+**Not done, deliberately**: automatic migration execution. That is the
+piece that actually needs care, and it belongs in its own reviewed
+change rather than being bundled into an installer improvement. The
+drift report is what makes the need visible in the meantime.
+
+---
+
+### Added — Score Explanation and Manual Review breakdown (closing the last Security Center gaps)
+
+Re-checked the Security Center spec against what is actually built.
+Sections 1-14 and 17-21 were already implemented across the earlier
+phased work (gauge, KPIs, severity donut, domain chart, trend,
+heatmap, risky devices, top risks, timeline, compliance, findings
+workspace, detail drawer, device page, interface view, responsive
+grid). Two sections had genuinely never been built, and those are what
+this change adds -- rather than rebuilding what already works.
+
+**§16 Score Explanation — "Why is the score what it is?"** Attributes
+the gap between a perfect score and the actual one across domains:
+each domain's shortfall (100 − its own score) weighted by its share of
+all domains, so the parts sum to the real gap. Sorted worst-first,
+each row deep-linking into that domain's findings.
+
+Stated plainly in the panel and in code: this is an ATTRIBUTION of the
+engine's own domain scores, **not a second scoring algorithm**. It
+cannot be an exact deduction breakdown, because the engine's real
+denominator (`applicable_weight`) is not persisted per domain, so
+exact weighted deductions cannot be reconstructed from stored rows.
+The API carries `is_approximate: true` and the UI says so in the
+panel. Presenting the approximation as exact would have been the
+easier and more impressive-looking option, and the wrong one.
+
+Verified the attribution arithmetic: with real domain scores the parts
+sum to the actual gap (100 − total deduction lands within 0.05 of the
+mean domain score), all-perfect domains produce a zero deduction, and
+all-zero domains produce exactly 100.
+
+**§15 Manual Review breakdown.** A dedicated panel with the total and
+a per-domain breakdown, each row deep-linking to
+`?status=manual_review&domain=...`. Categories come from the domains
+of REAL manual-review findings, never a fixed list. The panel states
+outright that these are never counted as passing -- the spec's
+explicit requirement that manual review must not visually read as
+PASS.
+
+**A forward-reference problem caught and fixed properly.** The new
+schemas were initially appended AFTER `SecurityDashboardOut`, which
+references them. With `from __future__ import annotations` that may
+resolve at import -- but pydantic is not installed in this
+environment, so I could not prove it does. Rather than ship something
+unverifiable, the definitions were moved above their consumer, which
+is unambiguously correct either way. Confirmed by index comparison and
+a duplicate-definition check.
+
+**Verified**: both `SecurityDashboardOut` construction sites (the
+populated branch and the no-data branch) cross-checked via AST with no
+missing or unknown fields; the Findings page confirmed to already read
+both `status` and `domain` query parameters, so the new combined
+deep-link genuinely filters rather than landing unfiltered; template
+parses and renders both panels; zero ID mismatches; scripts pass Node
+syntax checks; 41 templates and the full project compile.
+
+---
+
 ### Added — NCM Configuration Compare: multi-device comparison, matrix and outlier detection
 
 A new `/ncm/compare` page plus the real backend behind it. Every value

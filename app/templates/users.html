@@ -1,6 +1,6 @@
 {% extends "app_shell.html" %}
 {% import "partials/icons.html" as icons %}
-{% block title %}Users — NetworkAAA{% endblock %}
+{% block title %}Users — NetOpsGuard{% endblock %}
 {% block breadcrumb %}TACACS+ / Users{% endblock %}
 
 {% block view_content %}
@@ -230,7 +230,7 @@
       wrap.innerHTML = `
         <div class="empty-state">
           <div class="empty-state-title">No TACACS+ users</div>
-          <p class="empty-state-desc">NetworkAAA doesn't have any TACACS+ users configured yet. Add one to start managing device login access for them.</p>
+          <p class="empty-state-desc">NetOpsGuard doesn't have any TACACS+ users configured yet. Add one to start managing device login access for them.</p>
           <button type="button" class="btn-primary btn-small" id="empty-state-add-user-btn">+ Add user</button>
         </div>
       `;

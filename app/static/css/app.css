@@ -1728,3 +1728,9 @@ a.dash-kpi:hover { border-color: var(--line-bright); background: var(--bg-panel-
 }
 .cmp-cell.is-signal { background: rgba(79, 209, 165, 0.13); color: var(--signal); }
 .cmp-cell.is-red { background: rgba(224, 97, 90, 0.14); color: var(--red); }
+
+/* Compliance control rows open a detail drawer -- give them a real
+   affordance and a keyboard focus state, since they are Tab-reachable
+   and activated by Enter/Space. */
+.cmpl-control-row { cursor: pointer; }
+.cmpl-control-row:focus-visible { outline: 2px solid var(--signal); outline-offset: -2px; }

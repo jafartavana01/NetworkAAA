@@ -84,7 +84,7 @@ id = tac_plus-ng {{
 """
 
 
-def write_bootstrap_config() -> Path:
+def write_bootstrap_config(*, force: bool = False) -> Path:
     """
     Written as root (setup.py runs under sudo), but this file must be
     WRITABLE by the unprivileged aaa-platform service at runtime --
@@ -103,6 +103,29 @@ def write_bootstrap_config() -> Path:
     import pwd
 
     GENERATED_CONF_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+    # On a re-run this file is almost certainly NOT the bootstrap
+    # template any more -- it is the live configuration the compiler
+    # produced from the operator's own devices, users and policies
+    # (app.services.config_compiler.apply_candidate writes here).
+    # Overwriting it would silently discard a production AAA
+    # configuration during what the operator asked to be an install,
+    # and the loss would only surface when devices stopped
+    # authenticating.
+    #
+    # Same guard the TLS-certificate and platform-settings phases
+    # already apply. `force=True` is the explicit opt-out, for the real
+    # case of wanting to reset a broken configuration back to the
+    # bootstrap template.
+    if GENERATED_CONF_PATH.exists() and not force:
+        utils.warn(
+            f"{GENERATED_CONF_PATH} already exists -- keeping it. "
+            "This is the live configuration produced from your devices and policies; "
+            "the installer will not overwrite it. Re-run with --force-config to reset it "
+            "to the bootstrap template."
+        )
+        return GENERATED_CONF_PATH
+
     content = BOOTSTRAP_TEMPLATE.format(log_dir=LOG_DIR, fs=ACCOUNTING_FIELD_SEPARATOR)
     GENERATED_CONF_PATH.write_text(content, encoding="utf-8")
 

@@ -1,11 +1,27 @@
-# NetworkAAA — Enterprise TACACS+ AAA Management Platform
+# NetOpsGuard — Network Operations & Security
 
-**Open-source enterprise AAA platform for network infrastructure**
-Centralized TACACS+ authentication, authorization, policy management, accounting, auditing, and privileged access governance — built around the real upstream `tac_plus-ng` daemon.
+**Open-source network operations and security platform for Cisco infrastructure.**
+
+TACACS+ authentication, authorization and accounting; device security auditing and compliance mapping; configuration backup, versioning and diff; and command automation — in one self-hosted platform built around the real upstream `tac_plus-ng` daemon.
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Ubuntu%2022.04%20%7C%2024.04%20%7C%2026.04-orange)](#requirements)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](#requirements)
+
+---
+
+## What NetOpsGuard does
+
+| Area | Capability |
+|---|---|
+| **AAA** | Full TACACS+ authentication, authorization and accounting against real `tac_plus-ng`. Users, groups, policies with a condition tree, command sets, and per-command accounting. |
+| **Identity** | Local accounts plus Active Directory / LDAP integration, with RBAC over the platform itself. |
+| **Security Center** | Device security auditing across 9 domains plus per-interface checks. Findings with evidence, remediation and proposed fixes; scoring; correlation; and compliance mapping to NIST SP 800-53, ISO/IEC 27002, CIS and DISA STIG — with per-control drill-down showing exactly which checks fail and how to fix them. |
+| **NCM** | Configuration backup, immutable SHA-256-versioned archive, unified diff, multi-device comparison with outlier detection, and scheduled daily backups. |
+| **Network Operations** | SSH command jobs against devices and device groups, reusable command templates, and assurance checks. |
+| **Operations** | Live sessions, accounting search, AAA health, diagnostics, and a safe configuration Apply workflow with versioned rollback. |
+
+Everything runs on one Ubuntu host. No cloud service, no external dependency, no telemetry.
 
 ---
 
@@ -28,7 +44,7 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full technical histor
 
 ## Table of Contents
 
-- [Why NetworkAAA Exists](#why-networkaaa-exists)
+- [Why NetOpsGuard Exists](#why-networkaaa-exists)
 - [Key Features](#key-features)
 - [Architecture Overview](#architecture-overview)
 - [Technology Stack](#technology-stack)
@@ -48,18 +64,18 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full technical histor
 
 ---
 
-## Why NetworkAAA Exists
+## Why NetOpsGuard Exists
 
 `tac_plus-ng` (from [Marc Huber's event-driven-servers](https://github.com/MarcJHuber/event-driven-servers)) is a capable, actively maintained TACACS+ daemon. However, it's traditionally configured by hand-editing a text file that uses its own domain-specific scripting language.
 
-NetworkAAA places a real **management plane** in front of it:
+NetOpsGuard places a real **management plane** in front of it:
 
 - PostgreSQL is the **single source of truth**
 - A configuration compiler turns database state into valid `tac_plus-ng` configuration
 - Changes go through a **candidate → validate → diff → apply → automatic rollback** workflow, reachable from a single **Apply Configuration** button on every page — which also surfaces, by name and reason, any policy that can't be compiled at all, so a silent exclusion is never invisible
 - Day-to-day operations — add a device, create a user, build a multi-condition access policy, discover and provision new hardware over SSH, watch live authentication activity — happen entirely through a web GUI, never by editing the config file by hand
 
-The TACACS+ engine itself is **never modified**. NetworkAAA only ever *configures* it — an unmodified, separately-built copy of the real upstream source. See [Verification Philosophy](#verification-philosophy-tac_plus-ng) for why the project keeps this boundary strict.
+The TACACS+ engine itself is **never modified**. NetOpsGuard only ever *configures* it — an unmodified, separately-built copy of the real upstream source. See [Verification Philosophy](#verification-philosophy-tac_plus-ng) for why the project keeps this boundary strict.
 
 ---
 
@@ -195,8 +211,8 @@ The original 8-phase build plan is complete through Phase 7, plus a substantial 
 ### Quick Start
 
 ```bash
-git clone https://github.com/jafartavana01/NetworkAAA.git
-cd NetworkAAA
+git clone https://github.com/jafartavana01/NetOpsGuard.git
+cd NetOpsGuard
 sudo python3 setup.py
 ```
 
@@ -500,4 +516,4 @@ This project is licensed under the **Apache License 2.0**. See the [LICENSE](LIC
 
 ---
 
-**NetworkAAA** — because managing TACACS+ shouldn't require editing configuration files by hand.
+**NetOpsGuard** — because managing TACACS+ shouldn't require editing configuration files by hand.

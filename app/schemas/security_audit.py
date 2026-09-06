@@ -285,6 +285,43 @@ class DashboardHeatmapCellOut(BaseModel):
     manual_count: int
 
 
+class ScoreContributionOut(BaseModel):
+    """One domain's contribution to the gap between a perfect score and
+    the actual one.
+
+    `points_lost` is the domain's shortfall (100 - its own score)
+    weighted by its share of all domains, so the values sum to the
+    fleet-wide gap. This is derived from the domain scores the engine
+    itself produced -- it is NOT a second scoring algorithm, and it
+    cannot be, because `applicable_weight` (the engine's real
+    denominator) is not persisted per domain. The API labels this an
+    approximate attribution for exactly that reason.
+    """
+    domain: str
+    score: float
+    points_lost: float
+    fail_count: int
+    manual_count: int
+
+
+class ScoreExplanationOut(BaseModel):
+    base_score: float
+    final_score: float | None
+    total_deduction: float
+    contributions: list[ScoreContributionOut]
+    is_approximate: bool
+
+
+class ManualReviewCategoryOut(BaseModel):
+    domain: str
+    count: int
+
+
+class ManualReviewOut(BaseModel):
+    total: int
+    categories: list[ManualReviewCategoryOut]
+
+
 class SecurityDashboardOut(BaseModel):
     """
     Everything the redesigned Security Center Overview needs, in ONE
@@ -311,6 +348,8 @@ class SecurityDashboardOut(BaseModel):
     top_risks: list[DashboardTopRiskOut]
     heatmap: list[DashboardHeatmapCellOut]
     heatmap_domains: list[str]
+    score_explanation: ScoreExplanationOut | None
+    manual_review: ManualReviewOut
 
 
 class ComplianceControlOut(BaseModel):
@@ -380,3 +419,38 @@ class BulkAuditResultOut(BaseModel):
     failed: int
     status: str
     summary: str
+
+
+
+
+class ComplianceFindingOut(BaseModel):
+    """One real audit finding contributing to a control's status.
+
+    Everything here comes from the stored AuditFinding row and the
+    framework's own mapping file -- the title, the recommendation and
+    the fix are what the audit engine itself produced for that check,
+    not remediation text written for the compliance view.
+    """
+    check_id: str
+    title: str
+    domain: str
+    status: str
+    severity: str
+    device_name: str
+    device_id: str | None
+    recommendation: str
+    fix_command: str
+    why: str
+    relationship: str  # "direct" | "supporting" -- from the mapping file
+
+
+class ComplianceControlDetailOut(BaseModel):
+    control_id: str
+    control_title: str
+    framework_key: str
+    framework_name: str
+    status: str
+    devices_passing: int
+    devices_failing: int
+    devices_manual: int
+    findings: list[ComplianceFindingOut]

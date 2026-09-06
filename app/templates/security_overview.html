@@ -1,6 +1,6 @@
 {% extends "app_shell.html" %}
 {% import "partials/icons.html" as icons %}
-{% block title %}Security Center — NetworkAAA{% endblock %}
+{% block title %}Security Center — NetOpsGuard{% endblock %}
 {% block breadcrumb %}Security Center / Overview{% endblock %}
 
 {% block view_content %}
@@ -76,6 +76,20 @@
     <div class="panel panel-wide">
       <div class="panel-head"><span class="rail rail-red"></span>Top Security Risks</div>
       <div class="panel-body" id="top-risks-body"><div class="empty-state">Loading…</div></div>
+    </div>
+  </section>
+
+  <section class="sec-grid sec-grid-risk">
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Why is the score what it is?</div>
+      <div class="panel-body" id="score-explain-body"><div class="empty-state">Loading…</div></div>
+    </div>
+    <div class="panel panel-wide">
+      <div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;">
+        <span><span class="rail rail-amber"></span>Manual Review Required</span>
+        <a href="/security/findings?status=manual_review" class="content-sub" style="text-decoration:none;">View all →</a>
+      </div>
+      <div class="panel-body" id="manual-review-body"><div class="empty-state">Loading…</div></div>
     </div>
   </section>
 
@@ -431,6 +445,52 @@
     return 'is-red';
   }
 
+  function renderScoreExplanation(data) {
+    const body = document.getElementById('score-explain-body');
+    const e = data.score_explanation;
+    if (!e || !e.contributions.length) {
+      body.innerHTML = '<div class="empty-state">No domain scores yet — run an audit to see how the score breaks down.</div>';
+      return;
+    }
+    const maxLoss = Math.max(...e.contributions.map((c) => c.points_lost), 1);
+    body.innerHTML =
+      '<div class="readout"><span class="readout-k">base score</span><span class="readout-v cell-mono">' + e.base_score + '</span></div>' +
+      '<div class="readout"><span class="readout-k">total deduction</span><span class="readout-v cell-mono" style="color:var(--red);">−' + e.total_deduction + '</span></div>' +
+      '<div class="readout"><span class="readout-k">final score</span><span class="readout-v cell-mono">' + (e.final_score != null ? e.final_score : '—') + '</span></div>' +
+      '<div style="margin-top:12px;">' +
+      e.contributions.map((c) =>
+        '<a href="/security/findings?domain=' + encodeURIComponent(c.domain) + '" class="sec-bar-row">' +
+        '<span class="sec-bar-label" title="' + escapeHtml(c.domain) + '">' + escapeHtml(c.domain) + '</span>' +
+        '<span class="sec-bar-track"><span class="sec-bar-fill" style="width:' +
+        Math.max(2, (c.points_lost / maxLoss) * 100) + '%;background:var(--red);"></span></span>' +
+        '<span class="sec-bar-value cell-mono">−' + c.points_lost + '</span></a>').join('') +
+      '</div>' +
+      // Stated plainly rather than buried: this attributes the engine's
+      // own domain scores, it does not recompute them.
+      (e.is_approximate
+        ? '<div class="content-sub" style="margin-top:10px;font-size:11px;">Attribution of the engine\u2019s own domain scores across domains \u2014 an approximate breakdown of where the score is lost, not a separate calculation.</div>'
+        : '');
+  }
+
+  function renderManualReview(data) {
+    const body = document.getElementById('manual-review-body');
+    const m = data.manual_review;
+    if (!m || !m.total) {
+      body.innerHTML = '<div class="empty-state">No checks require manual review.</div>';
+      return;
+    }
+    const maxCount = Math.max(...m.categories.map((c) => c.count), 1);
+    body.innerHTML =
+      '<div class="sec-gauge-value" style="margin-top:0;font-size:30px;color:var(--amber);">' + m.total + '</div>' +
+      '<div class="content-sub" style="margin-bottom:12px;">checks a person must verify \u2014 these are never counted as passing.</div>' +
+      m.categories.map((c) =>
+        '<a href="/security/findings?status=manual_review&domain=' + encodeURIComponent(c.domain) + '" class="sec-bar-row">' +
+        '<span class="sec-bar-label" title="' + escapeHtml(c.domain) + '">' + escapeHtml(c.domain) + '</span>' +
+        '<span class="sec-bar-track"><span class="sec-bar-fill" style="width:' +
+        Math.max(2, (c.count / maxCount) * 100) + '%;background:var(--amber);"></span></span>' +
+        '<span class="sec-bar-value cell-mono">' + c.count + '</span></a>').join('');
+  }
+
   function renderHeatmap(data) {
     const body = document.getElementById('heatmap-body');
     if (!data.heatmap.length) {
@@ -470,7 +530,8 @@
       const message = res && res.status === 403
         ? "Your role doesn't have permission to view Security Center."
         : 'Could not load the security dashboard.';
-      ['domain-scores-body', 'compliance-body', 'risky-devices-body', 'top-risks-body', 'heatmap-body', 'trend-body'].forEach((id) => {
+      ['domain-scores-body', 'compliance-body', 'risky-devices-body', 'top-risks-body', 'heatmap-body',
+       'trend-body', 'score-explain-body', 'manual-review-body'].forEach((id) => {
         document.getElementById(id).innerHTML = '<div class="empty-state">' + message + '</div>';
       });
       return;
@@ -484,6 +545,8 @@
     renderRiskyDevices(data);
     renderTopRisks(data);
     renderHeatmap(data);
+    renderScoreExplanation(data);
+    renderManualReview(data);
     await renderSeverityChart(data);
     await renderTrend(data);
   }

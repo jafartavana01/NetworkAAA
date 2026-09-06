@@ -162,6 +162,32 @@ def phase_schema_and_admin() -> None:
     init_db()
     utils.ok("Schema created.")
 
+    # create_all() creates MISSING TABLES but cannot alter existing
+    # ones, so a column added to an existing table in a newer version
+    # is silently skipped here. Report it rather than let the
+    # application fail later with an obscure "column does not exist".
+    try:
+        from installer import install_state as _install_state
+
+        drift = _install_state.check_schema_drift()
+        if drift.has_drift:
+            utils.warn("The database schema does not match the current application models:")
+            for line in drift.summary_lines():
+                utils.warn(f"  - {line}")
+            statements = _install_state.generate_migration_sql(drift)
+            if statements:
+                utils.info("Review and apply these statements to bring the schema up to date:")
+                for stmt in statements:
+                    utils.info(f"  {stmt}")
+                utils.info(
+                    "They are NOT applied automatically -- altering a live schema during an "
+                    "install should be a decision you make, not one the installer makes for you."
+                )
+        else:
+            utils.ok("Schema matches the current application models.")
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never fail the install
+        utils.warn(f"Could not verify schema against the models ({exc}). Continuing.")
+
     session_local = get_sessionmaker()
     db = session_local()
     try:
@@ -234,9 +260,9 @@ def phase_tls_and_settings() -> None:
         utils.info("Existing platform settings found -- leaving them in place.")
 
 
-def phase_bootstrap_tac_config(binary_path: str) -> None:
+def phase_bootstrap_tac_config(binary_path: str, *, force_config: bool = False) -> None:
     utils.header("Bootstrap tac_plus-ng Configuration")
-    bootstrap_config.write_bootstrap_config()
+    bootstrap_config.write_bootstrap_config(force=force_config)
     ok, output = bootstrap_config.validate_syntax(binary_path)
     if ok:
         utils.ok("Bootstrap configuration syntax check passed.")
@@ -295,8 +321,26 @@ def print_summary(build_info: dict) -> None:
     utils.info("                   installed/enabled/status per module -- the last phase.")
 
 
-def main() -> None:
+def main(force_config: bool = False) -> None:
     try:
+        # Say up front which mode this run is in. Every phase below was
+        # already re-run safe (the database, admin, TLS and settings
+        # phases each check for existing state) -- what was missing was
+        # telling the operator that, so a re-run didn't look like it
+        # might be about to wipe their data.
+        from installer import install_state as _install_state
+
+        state = _install_state.detect_install_state()
+        utils.header(f"NetworkAAA installer -- {state.mode}")
+        utils.info(state.detail)
+        if state.is_installed:
+            utils.info(
+                "Existing data is preserved: administrators, devices, users, policies, "
+                "accounting, security audit history and the configuration archive are all "
+                "left untouched. The tac_plus-ng configuration is kept as-is unless "
+                "--force-config is given."
+            )
+
         report = phase_system_detection()
         phase_dependencies()
         build_info = phase_build_tac_plus_ng(report)
@@ -304,7 +348,7 @@ def main() -> None:
         phase_application_install()
         phase_schema_and_admin()
         phase_tls_and_settings()
-        phase_bootstrap_tac_config(build_info["binary_path"])
+        phase_bootstrap_tac_config(build_info["binary_path"], force_config=force_config)
         app_install.final_ownership_sweep()
         phase_systemd(build_info["binary_path"])
         print_summary(build_info)
@@ -354,6 +398,12 @@ def parse_args(argv: list[str]):
         help="With --uninstall, skip the confirmation prompt. Ignored otherwise.",
     )
     parser.add_argument(
+        "--force-config", action="store_true",
+        help="Reset the tac_plus-ng configuration back to the bootstrap template. "
+             "By default an existing configuration is KEPT, because on a re-run it is the "
+             "live configuration compiled from your own devices and policies, not the template.",
+    )
+    parser.add_argument(
         "--keep-logs", action="store_true",
         help="With --uninstall, preserve /var/log/aaa-platform instead of deleting it. Ignored otherwise.",
     )
@@ -369,4 +419,4 @@ if __name__ == "__main__":
     if args.uninstall:
         run_uninstall(force=args.force, keep_logs=args.keep_logs)
     else:
-        main()
+        main(force_config=args.force_config)

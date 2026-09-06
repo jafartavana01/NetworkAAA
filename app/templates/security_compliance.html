@@ -1,6 +1,6 @@
 {% extends "app_shell.html" %}
 {% import "partials/icons.html" as icons %}
-{% block title %}Compliance — NetworkAAA{% endblock %}
+{% block title %}Compliance — NetOpsGuard{% endblock %}
 {% block breadcrumb %}Security Center / Compliance{% endblock %}
 
 {% block view_content %}
@@ -14,6 +14,13 @@
     <div class="empty-state">Loading…</div>
   </div>
 </main>
+
+<div class="drawer-backdrop" id="control-drawer-backdrop" hidden>
+  <aside class="drawer" style="width:min(96vw,720px);" role="dialog" aria-labelledby="control-drawer-title">
+    <button type="button" class="modal-close-btn" id="control-drawer-close" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <div id="control-drawer-body"></div>
+  </aside>
+</div>
 {% endblock %}
 
 {% block view_scripts %}
@@ -55,15 +62,18 @@
       return '<div class="empty-state">No controls recorded for this framework.</div>';
     }
     return '<table class="data-table"><thead><tr>' +
-      '<th>Control</th><th>Status</th><th>Devices Failing</th><th>Devices Passing</th><th>Manual Review</th>' +
+      '<th>Control</th><th>Status</th><th>Devices Failing</th><th>Devices Passing</th><th>Manual Review</th><th></th>' +
       '</tr></thead><tbody>' +
       fw.controls.map((c) =>
-        '<tr><td class="cell-mono">' + escapeHtml(c.control_id) + '</td>' +
+        '<tr class="cmpl-control-row" data-control="' + escapeHtml(c.control_id) +
+        '" data-framework="' + escapeHtml(fw.framework_key) + '" tabindex="0" role="button">' +
+        '<td class="cell-mono">' + escapeHtml(c.control_id) + '</td>' +
         '<td><span class="badge sec-sev-badge" style="border-color:' + statusColor(c.status) + ';color:' + statusColor(c.status) + ';">' +
         escapeHtml(statusLabel(c.status)) + '</span></td>' +
         '<td class="cell-mono">' + c.devices_failing + '</td>' +
         '<td class="cell-mono">' + c.devices_passing + '</td>' +
-        '<td class="cell-mono">' + c.devices_manual + '</td></tr>'
+        '<td class="cell-mono">' + c.devices_manual + '</td>' +
+        '<td class="cell-actions"><span class="content-sub">Details</span></td></tr>'
       ).join('') +
       '</tbody></table>';
   }
@@ -106,6 +116,113 @@
     if (expanded.has(fw.framework_key)) expanded.delete(fw.framework_key);
     else expanded.add(fw.framework_key);
     render();
+  });
+
+  const STATUS_TEXT = { fail: 'Failing', pass: 'Passing', manual_review: 'Manual Review', na: 'Not Applicable', warn: 'Partial' };
+
+  function severityColor(sev) {
+    const map = { critical: '--red', high: '--orange', medium: '--amber', low: '--text-dim', info: '--text-faint' };
+    return cssVar(map[sev] || '--text-faint') || '#57616c';
+  }
+
+  async function openControl(frameworkKey, controlId) {
+    const body = document.getElementById('control-drawer-body');
+    body.innerHTML = '<div class="empty-state">Loading control detail…</div>';
+    document.getElementById('control-drawer-backdrop').hidden = false;
+
+    let res;
+    try {
+      res = await AAAPlatform.authedFetch(
+        '/api/security/compliance/' + encodeURIComponent(frameworkKey) + '/' + encodeURIComponent(controlId));
+    } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      const b = res ? await res.json().catch(() => ({})) : {};
+      body.innerHTML = '<div class="empty-state">' +
+        escapeHtml((b.detail && typeof b.detail === 'string') ? b.detail : 'Could not load this control.') + '</div>';
+      return;
+    }
+    const d = await res.json();
+
+    const failing = d.findings.filter((f) => f.status === 'fail');
+    const manual = d.findings.filter((f) => f.status === 'manual_review');
+    const passing = d.findings.filter((f) => f.status === 'pass');
+
+    // Remediation shown here is the audit engine's OWN recommendation
+    // and fix for each failing check -- not advice written for this
+    // view. Where a check has no recommendation, nothing is invented.
+    const findingBlock = (f) =>
+      '<div class="drawer-section">' +
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">' +
+      '<span class="badge sec-sev-badge" style="border-color:' + severityColor(f.severity) +
+      ';color:' + severityColor(f.severity) + ';">' + escapeHtml(f.severity) + '</span>' +
+      '<span class="content-sub">' + escapeHtml(f.device_name) + '</span>' +
+      '<span class="cell-mono content-sub">' + escapeHtml(f.check_id) + '</span>' +
+      (f.relationship === 'supporting'
+        ? '<span class="content-sub" title="This check supports the control rather than directly satisfying it.">supporting</span>'
+        : '') +
+      '</div>' +
+      '<div style="font-size:13px;color:var(--text-primary);margin-bottom:4px;">' + escapeHtml(f.title) + '</div>' +
+      (f.why ? '<p class="drawer-text">' + escapeHtml(f.why) + '</p>' : '') +
+      (f.recommendation
+        ? '<div class="drawer-section-title" style="margin-top:8px;">How to resolve</div>' +
+          '<p class="drawer-text">' + escapeHtml(f.recommendation) + '</p>'
+        : '') +
+      (f.fix_command
+        ? '<div class="drawer-section-title" style="margin-top:8px;">Suggested configuration</div>' +
+          '<div class="diff-view">' + escapeHtml(f.fix_command) + '</div>'
+        : '') +
+      '</div>';
+
+    body.innerHTML =
+      '<div class="drawer-head">' +
+      '<span class="badge sec-sev-badge" style="border-color:' + statusColor(d.status) +
+      ';color:' + statusColor(d.status) + ';">' + escapeHtml(STATUS_TEXT[d.status] || d.status) + '</span>' +
+      '<h2 id="control-drawer-title" style="margin:8px 0 0;font-size:17px;">' +
+      escapeHtml(d.control_id) + ' — ' + escapeHtml(d.control_title) + '</h2>' +
+      '<div class="content-sub" style="margin-top:4px;">' + escapeHtml(d.framework_name) + '</div></div>' +
+      '<div class="drawer-meta">' +
+      '<div class="readout"><span class="readout-k">devices failing</span><span class="readout-v cell-mono">' + d.devices_failing + '</span></div>' +
+      '<div class="readout"><span class="readout-k">devices passing</span><span class="readout-v cell-mono">' + d.devices_passing + '</span></div>' +
+      '<div class="readout"><span class="readout-k">manual review</span><span class="readout-v cell-mono">' + d.devices_manual + '</span></div>' +
+      '<div class="readout"><span class="readout-k">checks mapped</span><span class="readout-v cell-mono">' + d.findings.length + '</span></div>' +
+      '</div>' +
+      (failing.length
+        ? '<div class="drawer-section-title" style="margin-top:14px;">What is failing (' + failing.length + ')</div>' +
+          failing.map(findingBlock).join('')
+        : '') +
+      (manual.length
+        ? '<div class="drawer-section-title" style="margin-top:14px;">Needs manual verification (' + manual.length + ')</div>' +
+          manual.map(findingBlock).join('')
+        : '') +
+      (passing.length
+        ? '<div class="drawer-section-title" style="margin-top:14px;">Passing (' + passing.length + ')</div>' +
+          '<div class="content-sub">' +
+          escapeHtml([...new Set(passing.map((f) => f.check_id))].join(', ')) + '</div>'
+        : '') +
+      (!d.findings.length
+        ? '<div class="empty-state">No audit findings are mapped to this control yet — run an audit to populate it.</div>'
+        : '');
+  }
+
+  const closeControlDrawer = () => { document.getElementById('control-drawer-backdrop').hidden = true; };
+  document.getElementById('control-drawer-close').addEventListener('click', closeControlDrawer);
+  document.getElementById('control-drawer-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'control-drawer-backdrop') closeControlDrawer();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.getElementById('control-drawer-backdrop').hidden) closeControlDrawer();
+  });
+
+  document.getElementById('compliance-body').addEventListener('click', (e) => {
+    const row = e.target.closest('.cmpl-control-row');
+    if (row) openControl(row.dataset.framework, row.dataset.control);
+  });
+  document.getElementById('compliance-body').addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const row = e.target.closest('.cmpl-control-row');
+    if (!row) return;
+    e.preventDefault();
+    openControl(row.dataset.framework, row.dataset.control);
   });
 
   async function load() {
