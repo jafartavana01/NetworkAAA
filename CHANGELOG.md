@@ -12,6 +12,211 @@ it was built alongside.
 
 ## 2026-09-03
 
+### Added — Module Management page; corrected the installer's stale "next steps" message
+
+Prompted by a question about the installer's closing line, which said:
+
+    Next steps : Phase 8 (Module Management) adds a GUI page showing
+                 installed/enabled/status per module -- the last phase.
+
+Investigated rather than assuming it was just stale text, and it was
+**half stale and half a real gap**. The module BACKEND was fully
+wired: `ModuleState` rows are seeded at startup, and `app.main` only
+mounts a module's router when `module.mandatory or key in enabled`. So
+disabling a module already worked -- there was simply no way to see or
+change it.
+
+**New Module Management page** (`/platform/modules`), superadmin-gated
+at both the API and the page route. Lists every registered module with
+its description, route count, navigation paths, and an enable toggle.
+
+Details that matter:
+* A **mandatory** module reports enabled regardless of any stored row,
+  because that is what `app.main` actually does when mounting.
+  Reporting a stored `false` for a module the platform mounts anyway
+  would be a lie the UI then repeats.
+* Disabling is stated as **reversible and non-destructive**: routes
+  are not mounted on the next boot, data is untouched. An admin should
+  not have to guess whether they are about to lose anything.
+* The page says plainly that **a restart is required** rather than
+  implying the change is live.
+* A rejected toggle is **reverted in the UI**, so the switch never
+  shows a state the server refused.
+
+**Installer message corrected.** It now lists what an operator should
+actually do after installing -- change the initial password, add
+devices, review modules, apply the configuration -- instead of
+advertising an internal development phase. A post-install summary is
+for the operator, not for the project's own roadmap.
+
+**Verified**: 44 templates parse; the new page renders with zero ID
+mismatches and valid scripts; `registry.get_module` confirmed to exist
+before use; the API router is mounted in `core_module`; full project
+compiles; the authorization regression suite still passes.
+
+---
+
+### Added — NCM Phases 6-9 backend: candidates, approval workflow, deployment, rollback
+
+This is the first NCM feature that WRITES to devices, and it is built
+around that fact rather than treating it as another CRUD surface.
+
+**Reuses the existing proven push path.** Commands go through
+`ssh_provision.apply_aaa_config`, which already runs an interactive
+shell and returns the device's own transcript. No second SSH
+implementation, exactly as with backup.
+
+**Safety ordering, enforced in the service:**
+1. Only an `approved` candidate is deployable.
+2. A fresh backup is taken IMMEDIATELY BEFORE the change -- that
+   snapshot, not the last scheduled one, is the rollback point.
+   Rolling back to a stale backup would restore a state the device was
+   never in at the moment of the change.
+3. **If the pre-backup fails, the deployment aborts without touching
+   the device.** Changing a device you cannot roll back is the one
+   outcome worth refusing outright.
+4. Commands are wrapped in `configure terminal` / `end` /
+   `write memory`, so the sequence is balanced regardless of what the
+   operator wrote.
+5. A verification backup is taken after, and "did it change" is
+   derived from comparing real archived snapshots -- never assumed
+   from the commands having been accepted. A deployment that changed
+   nothing says so.
+
+**Dangerous commands are refused** (`reload`, `no aaa new-model`,
+`no ip ssh`, `no username`, `no line vty`, `no interface`, `erase`,
+`format`, `delete`) -- the ones that sever the platform's own access
+or reboot the box. Documented as a backstop against a typo in a
+reviewed change, NOT a security boundary: an operator with deploy
+rights can still do harm, and the audit trail is what covers that.
+Refused commands are surfaced on the candidate at READ time, so a
+reviewer sees the problem before approving rather than at deployment.
+
+**Self-approval is refused, superadmins included.** The point of a
+separate `ncm:approve` permission is a second pair of eyes; letting
+the author sign off their own change would make approval a formality
+that records a name without adding review. An exemption is exactly the
+path a rushed change would take.
+
+**Transcripts are sanitised before storage.** A device echoes what it
+is sent, so a candidate containing a key or password would otherwise
+land in the database in clear text via the transcript -- the one path
+by which this feature could leak a secret it was never given.
+
+**Two limits stated plainly rather than implied:**
+* A candidate stores the CHANGE (lines to apply), not a target
+  configuration. Computing the command sequence that transforms one
+  full Cisco config into another requires modelling negation, sub-mode
+  context and per-platform ordering, which this platform cannot do
+  safely.
+* Rollback REPLAYS the pre-deployment configuration. That reliably
+  restores settings a change MODIFIED, but does NOT remove lines it
+  ADDED -- undoing an addition needs the `no` form. So rollback
+  verifies against the pre-deployment snapshot and reports honestly
+  whether the device byte-matches, instead of declaring success
+  because commands were accepted.
+
+**New**: `NcmCandidate` and `NcmDeployment` models, three permissions
+(`ncm:propose` / `ncm:approve` / `ncm:deploy`, split so
+separation-of-duty is possible at all), `app/services/ncm_deploy.py`,
+and seven endpoints. Lifecycle transitions live in one
+`ALLOWED_TRANSITIONS` table so the rules are inspectable and cannot
+diverge across the API.
+
+**Verified by execution**: dangerous-command matching across nine
+cases including the near-misses that must NOT be blocked
+(`no shutdown`, `interface Gi0/1`); comment and blank lines never
+reaching a device; eight lifecycle transitions including
+`draft -> approved` correctly refused; and transcript redaction of
+keys and passwords. Both serializers cross-checked against real model
+fields via AST; 43 templates parse; the authorization suite still
+passes; full project compiles.
+
+**No GUI yet.** The backend is complete and callable, but change
+control deserves a properly designed review screen rather than a form
+bolted on at the end of a long session -- the diff a reviewer sees
+before approving is the whole safety mechanism.
+
+---
+
+### Added — NCM Phase 4: configuration baselines and drift detection
+
+The architecture built in Phases 1-3 was designed to carry this without
+alteration, and it did: `NcmBaseline` attaches to the existing
+immutable snapshots by foreign key, and drift reuses the existing diff
+engine. No Phase 1-3 code changed.
+
+**A baseline is a POINTER to an archived snapshot, not a copy of its
+text.** The snapshot is already immutable and SHA-256 hashed, so a
+baseline can never silently disagree with the archive, and drift is a
+comparison between two artifacts the platform actually holds -- rather
+than between a device and a hand-maintained document that could itself
+be wrong.
+
+**Five drift statuses, deliberately not a boolean:**
+
+    in_sync        latest snapshot is byte-identical to the baseline
+    drifted        latest snapshot differs from the baseline
+    no_baseline    has snapshots, none designated golden
+    no_snapshot    never backed up
+    baseline_gone  the designated snapshot was deleted from the archive
+
+The last three are gaps in COVERAGE, not misbehaving devices.
+Collapsing them into "drifted" would raise false alarms; collapsing
+them into "in_sync" would hide real blind spots. They are counted and
+displayed separately, so a fleet with no baselines set can never read
+as healthy.
+
+**Nothing contacts a device.** Drift describes what has been ARCHIVED.
+A device that changed but has not been backed up since shows its real
+coverage state rather than "in sync", which would be a false
+all-clear.
+
+**Correctness details worth naming:**
+* Comparison is by SHA-256 first; line counts are computed only when
+  hashes differ, so an in-sync fleet is not diffed line-by-line to
+  prove it is unchanged.
+* A snapshot belonging to a DIFFERENT device is rejected as a
+  baseline. Accepting it would make every future comparison for that
+  device meaningless.
+* `ondelete="SET NULL"` on the baseline's snapshot reference: if the
+  golden config is deleted from the archive the baseline becomes
+  `baseline_gone` -- visible and fixable -- rather than silently
+  vanishing along with the operator's intent.
+* Clearing a baseline removes the designation only; the archived
+  snapshot is untouched. Changing what counts as "correct" must never
+  delete configuration history.
+* Setting a baseline is gated on `ncm:schedule`, not `ncm:view`:
+  declaring what "correct" means is a configuration-management
+  decision, not a read.
+* Fleet drift uses three queries total, not three per device.
+
+**New**: `NcmBaseline` model, `app/services/ncm_drift.py`, four
+endpoints (`GET /api/ncm/drift`, `GET /api/ncm/baselines`,
+`PUT|DELETE /api/ncm/devices/{id}/baseline`), and a Drift Detection
+page with per-status filtering, a baseline-designation modal driven by
+the device's real archive history, and a direct link into the existing
+diff view.
+
+Thanks to the additive column migration added earlier this session,
+the new table and columns are created automatically on upgrade -- the
+exact failure that broke logins after the RADIUS change cannot recur
+here.
+
+**Verified**: drift status rules tested directly across all five
+outcomes plus the summary split between drift and coverage gaps;
+schema constructions and every `NcmBaseline` attribute reference
+cross-checked via AST; 43 templates parse; the new page renders with
+zero ID mismatches and valid scripts; the authorization regression
+suite still passes; full project compiles.
+
+**Phase 5+ (candidate config, deployment, approval, rollback) remains
+unbuilt** -- deliberately. Those write TO devices, which is a
+materially different risk class from reading and comparing, and they
+deserve their own design pass rather than being appended here.
+
+---
+
 ### Fixed — stale session cookie caused a silent login loop; RADIUS PAP delegation added
 
 **The login loop, diagnosed from a real report.** A session cookie

@@ -68,6 +68,14 @@ def ncm_archive_page(
     return _render(request, session_token, "ncm_archive.html")
 
 
+@router.get("/ncm/drift", response_class=HTMLResponse)
+def ncm_drift_page(
+    request: Request,
+    session_token: str | None = Cookie(default=None, alias=security.SESSION_COOKIE_NAME),
+):
+    return _render(request, session_token, "ncm_drift.html")
+
+
 @router.get("/ncm/jobs", response_class=HTMLResponse)
 def ncm_jobs_page(
     request: Request,

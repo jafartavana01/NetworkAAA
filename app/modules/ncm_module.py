@@ -40,6 +40,7 @@ def _build_module() -> Module:
                     NavEntry(label="Configuration Compare", path="/ncm/compare"),
                     NavEntry(label="Configuration Archive", path="/ncm/archive"),
                     NavEntry(label="Configuration Diff", path="/ncm/diff"),
+                    NavEntry(label="Drift Detection", path="/ncm/drift"),
                     NavEntry(label="Backup Jobs", path="/ncm/jobs"),
                     NavEntry(label="Backup Schedules", path="/ncm/schedules"),
                 ],

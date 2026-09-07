@@ -1,0 +1,246 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Drift Detection — NetOpsGuard{% endblock %}
+{% block breadcrumb %}NCM / Drift Detection{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Drift Detection</h1>
+    <p class="content-sub">Each device's latest archived configuration compared against the version you designated as its baseline. This reflects what has been backed up — a device that changed but hasn't been backed up since shows as a coverage gap, not as in sync.</p>
+  </div>
+
+  <div class="status-card-grid" id="drift-kpis" style="margin-bottom:16px;"></div>
+
+  <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+    <label class="field" style="min-width:180px;">
+      <span class="field-label">Status</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('list-checks', 14) }}</span>
+        <select id="filter-status">
+          <option value="">All devices</option>
+          <option value="drifted">Drifted</option>
+          <option value="in_sync">In sync</option>
+          <option value="gaps">Coverage gaps</option>
+        </select>
+      </div>
+    </label>
+    <label class="field" style="min-width:200px;flex:1;">
+      <span class="field-label">Search</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+        <input type="text" id="filter-search" placeholder="Device name…">
+      </div>
+    </label>
+  </div>
+
+  <div id="drift-table-wrap"><div class="empty-state">Loading…</div></div>
+</main>
+
+<div class="modal-backdrop" id="baseline-modal-backdrop" hidden>
+  <div class="modal" style="max-width:min(94vw,640px);max-height:90vh;overflow-y:auto;">
+    <button type="button" class="modal-close-btn" id="baseline-modal-close" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2 id="baseline-modal-title">Set Baseline</h2>
+    <p class="content-sub" id="baseline-modal-sub" style="margin-bottom:14px;"></p>
+
+    <label class="field">
+      <span class="field-label">Baseline version</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('history', 14) }}</span>
+        <select id="baseline-version"></select>
+      </div>
+    </label>
+    <label class="field">
+      <span class="field-label">Notes (optional)</span>
+      <textarea id="baseline-notes" rows="2" placeholder="Why is this the approved configuration?"></textarea>
+    </label>
+
+    <div id="baseline-error" class="form-error" role="alert" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="baseline-cancel">Cancel</button>
+      <button type="button" class="btn-primary btn-with-icon" id="baseline-save" style="width:auto;">{{ icons.icon('check', 16) }}Set Baseline</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_HISTORY = '{{ icons.icon("history", 16) }}';
+  const esc = AAAPlatform.escapeHtml;
+
+  let devices = [];
+  let currentDeviceId = null;
+
+  // Every status has its own label and colour. Collapsing the coverage
+  // gaps into "drifted" would raise false alarms; collapsing them into
+  // "in sync" would hide real blind spots.
+  const STATUS = {
+    in_sync:       { label: 'In sync',        cls: 'is-signal' },
+    drifted:       { label: 'Drifted',        cls: 'is-red' },
+    no_baseline:   { label: 'No baseline',    cls: 'is-amber' },
+    no_snapshot:   { label: 'Never backed up', cls: 'is-amber' },
+    baseline_gone: { label: 'Baseline missing', cls: 'is-amber' },
+  };
+
+  function visible() {
+    const status = document.getElementById('filter-status').value;
+    const q = document.getElementById('filter-search').value.trim().toLowerCase();
+    return devices.filter((d) => {
+      if (q && !d.device_name.toLowerCase().includes(q)) return false;
+      if (status === 'gaps') return ['no_baseline', 'no_snapshot', 'baseline_gone'].includes(d.status);
+      if (status && d.status !== status) return false;
+      return true;
+    });
+  }
+
+  function renderTable() {
+    const wrap = document.getElementById('drift-table-wrap');
+    const rows = visible();
+    if (!devices.length) {
+      wrap.innerHTML = '<div class="empty-state"><div class="empty-state-title">No devices to check</div>' +
+        '<p class="empty-state-desc">Add devices and back them up from NCM Overview first.</p></div>';
+      return;
+    }
+    if (!rows.length) { wrap.innerHTML = '<div class="empty-state">No devices match this filter.</div>'; return; }
+
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>Device</th><th>Status</th><th>Baseline</th>' +
+      '<th>Current</th><th>Change</th><th>Last Backup</th><th></th></tr></thead><tbody>' +
+      rows.map((d) => {
+        const s = STATUS[d.status] || { label: d.status, cls: '' };
+        const change = d.status === 'drifted'
+          ? '<span style="color:var(--signal);">+' + d.lines_added + '</span> ' +
+            '<span style="color:var(--red);">\u2212' + d.lines_removed + '</span>'
+          : '<span class="content-sub">\u2014</span>';
+        const actions =
+          (d.status === 'drifted' && d.baseline_configuration_id && d.latest_configuration_id
+            ? '<a class="btn-secondary btn-small" href="/ncm/diff?device_id=' + d.device_id + '">View Diff</a>'
+            : '') +
+          (d.latest_configuration_id
+            ? '<button type="button" class="btn-secondary btn-small" data-set-baseline="' + d.device_id +
+              '" data-name="' + esc(d.device_name) + '">' +
+              (d.status === 'no_baseline' ? 'Set Baseline' : 'Change Baseline') + '</button>'
+            : '');
+        return '<tr><td>' + esc(d.device_name) + '</td>' +
+          '<td><span class="badge sec-sev-badge ' + s.cls + '">' + esc(s.label) + '</span></td>' +
+          '<td class="cell-mono">' + (d.baseline_version != null ? '#' + d.baseline_version : '\u2014') + '</td>' +
+          '<td class="cell-mono">' + (d.latest_version != null ? '#' + d.latest_version : '\u2014') + '</td>' +
+          '<td class="cell-mono">' + change + '</td>' +
+          '<td class="content-sub">' + (d.last_backup_at ? new Date(d.last_backup_at).toLocaleString() : 'never') + '</td>' +
+          '<td class="cell-actions">' + (actions || '<span class="content-sub">\u2014</span>') + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  function renderKpis(d) {
+    document.getElementById('drift-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_SERVER, label: 'Devices Checked', value: d.total }),
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'In Sync', value: d.in_sync, state: 'is-signal' }),
+      AAAPlatform.kpiCard({ icon: ICON_ALERT, label: 'Drifted', value: d.drifted,
+                            state: d.drifted ? 'is-red' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_HISTORY, label: 'Coverage Gaps', value: d.coverage_gaps,
+                            state: d.coverage_gaps ? 'is-amber' : '',
+                            sub: d.coverage_gaps ? 'not comparable yet' : null }),
+    ].join('');
+  }
+
+  // ---- Baseline modal ----
+  async function openBaselineModal(deviceId, deviceName) {
+    currentDeviceId = deviceId;
+    document.getElementById('baseline-error').hidden = true;
+    document.getElementById('baseline-notes').value = '';
+    document.getElementById('baseline-modal-sub').textContent =
+      'Choose the archived version of ' + deviceName + ' that represents its approved configuration.';
+    const sel = document.getElementById('baseline-version');
+    sel.innerHTML = '<option value="">Loading…</option>';
+    document.getElementById('baseline-modal-backdrop').hidden = false;
+
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/ncm/devices/' + deviceId + '/history'); } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      sel.innerHTML = '';
+      document.getElementById('baseline-error').textContent = 'Could not load this device\u2019s history.';
+      document.getElementById('baseline-error').hidden = false;
+      return;
+    }
+    const history = await res.json();
+    if (!history.length) {
+      sel.innerHTML = '';
+      document.getElementById('baseline-error').textContent =
+        'This device has no archived configurations yet \u2014 back it up first.';
+      document.getElementById('baseline-error').hidden = false;
+      return;
+    }
+    sel.innerHTML = history.map((c) =>
+      '<option value="' + c.id + '">#' + c.version_number + ' \u2014 ' + esc(c.configuration_type) +
+      ' \u2014 ' + new Date(c.created_at).toLocaleString() + '</option>').join('');
+  }
+
+  const closeBaseline = () => { document.getElementById('baseline-modal-backdrop').hidden = true; };
+  document.getElementById('baseline-cancel').addEventListener('click', closeBaseline);
+  document.getElementById('baseline-modal-close').addEventListener('click', closeBaseline);
+  document.getElementById('baseline-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'baseline-modal-backdrop') closeBaseline();
+  });
+
+  document.getElementById('baseline-save').addEventListener('click', async () => {
+    const errorBox = document.getElementById('baseline-error');
+    errorBox.hidden = true;
+    const configId = document.getElementById('baseline-version').value;
+    if (!configId) {
+      errorBox.textContent = 'Select a version to designate as the baseline.';
+      errorBox.hidden = false;
+      return;
+    }
+    const res = await AAAPlatform.authedFetch('/api/ncm/devices/' + currentDeviceId + '/baseline', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        configuration_id: configId,
+        notes: document.getElementById('baseline-notes').value.trim() || null,
+      }),
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      errorBox.textContent = res.status === 403
+        ? 'Your role doesn\u2019t have permission to set baselines.'
+        : ((b.detail && typeof b.detail === 'string') ? b.detail : 'Could not set the baseline.');
+      errorBox.hidden = false;
+      return;
+    }
+    closeBaseline();
+    AAAPlatform.toast('Baseline set.');
+    load();
+  });
+
+  document.getElementById('drift-table-wrap').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-set-baseline]');
+    if (btn) openBaselineModal(btn.dataset.setBaseline, btn.dataset.name);
+  });
+  document.getElementById('filter-status').addEventListener('change', renderTable);
+  document.getElementById('filter-search').addEventListener('input', renderTable);
+
+  async function load() {
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/ncm/drift'); } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      document.getElementById('drift-table-wrap').innerHTML =
+        '<div class="empty-state">' + (res && res.status === 403
+          ? 'Your role doesn\u2019t have permission to view Configuration Management.'
+          : 'Could not load drift status.') + '</div>';
+      document.getElementById('drift-kpis').innerHTML = '';
+      return;
+    }
+    const data = await res.json();
+    devices = data.devices;
+    renderKpis(data);
+    renderTable();
+  }
+
+  load();
+})();
+</script>
+{% endblock %}

@@ -210,3 +210,153 @@ class NcmBackupJobTarget(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class NcmBaseline(Base):
+    """
+    A device's designated "golden" configuration -- Phase 4.
+
+    A baseline is a POINTER to an existing NcmConfiguration snapshot,
+    not a copy of its text. That matters: the snapshot is already
+    immutable and SHA-256 hashed, so pointing at it means a baseline
+    can never silently disagree with the archive, and drift is a
+    comparison between two real archived artifacts rather than between
+    a device and a hand-maintained document.
+
+    One baseline per device per configuration_type. Re-designating
+    updates the existing row rather than accumulating history: "which
+    config is golden right now" is the question this answers, and
+    every previous baseline is still in the archive by version number
+    if it is needed.
+    """
+
+    __tablename__ = "ncm_baselines"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    device_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    configuration_type: Mapped[str] = mapped_column(String(32), nullable=False, default="running", index=True)
+
+    # SET NULL rather than CASCADE: if the golden snapshot is deleted
+    # from the archive, the baseline should become "no longer has a
+    # snapshot" -- a visible, fixable state -- rather than silently
+    # vanishing along with the operator's intent.
+    configuration_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ncm_configurations.id", ondelete="SET NULL"), nullable=True
+    )
+    # Denormalised so the baseline still reports which version was
+    # designated even if that snapshot is later removed.
+    version_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    set_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    set_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class NcmCandidate(Base):
+    """
+    A proposed configuration change awaiting approval and deployment --
+    NCM Phases 6-9.
+
+    Stores the CHANGE (configuration lines to send), not a whole target
+    configuration. That is a deliberate limit: this platform cannot
+    safely compute the command sequence that transforms one full Cisco
+    configuration into another -- doing so requires modelling negation
+    (`no ...`), sub-mode context and ordering rules per platform. An
+    operator writes the lines they want applied, exactly as they would
+    type them, and the platform handles safety, review and rollback
+    around that.
+
+    Lifecycle, enforced in the service layer:
+
+        draft -> pending_approval -> approved -> deployed
+                                  \\-> rejected
+                        (any state) -> cancelled
+
+    A candidate that has been deployed is never reused: redeploying
+    means creating a new candidate, so the record of what was approved
+    and what was sent can never drift apart.
+    """
+
+    __tablename__ = "ncm_candidates"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    display_number: Mapped[int] = mapped_column(Integer, nullable=False, unique=True, index=True)
+
+    device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    device_name: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: The configuration lines to send, one per line, as typed.
+    configuration_lines: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # draft | pending_approval | approved | rejected | deployed | cancelled | failed
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="draft", index=True)
+
+    created_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+    # Approval is recorded separately from creation so "who signed off"
+    # is always answerable, and so the service layer can refuse
+    # self-approval when the platform is configured to require it.
+    approved_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class NcmDeployment(Base):
+    """
+    One attempt to push a candidate to a device -- Phases 7 and 9.
+
+    `pre_configuration_id` is the rollback point: a fresh backup taken
+    IMMEDIATELY BEFORE the change, not the last scheduled one. Using a
+    stale snapshot as a rollback target would restore a state the
+    device was never actually in at the moment of the change.
+
+    `post_configuration_id` is the verification backup taken after, so
+    what actually changed on the device is a real archived diff rather
+    than an assumption that the commands did what they said.
+    """
+
+    __tablename__ = "ncm_deployments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    display_number: Mapped[int] = mapped_column(Integer, nullable=False, unique=True, index=True)
+
+    candidate_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ncm_candidates.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    device_name: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # running | succeeded | failed | rolled_back | rollback_failed
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="running", index=True)
+    #: True when the post-deployment backup differs from the pre one --
+    #: i.e. the device really changed, rather than the commands being
+    #: accepted with no effect.
+    verified_changed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    pre_configuration_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ncm_configurations.id", ondelete="SET NULL"), nullable=True
+    )
+    post_configuration_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ncm_configurations.id", ondelete="SET NULL"), nullable=True
+    )
+
+    #: Full device transcript. Sanitised before storage -- see
+    #: ncm_deploy._sanitise_transcript.
+    transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    started_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

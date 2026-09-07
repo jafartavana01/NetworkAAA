@@ -73,3 +73,13 @@ def platform_settings_page(
     session_token: str | None = Cookie(default=None, alias=security.SESSION_COOKIE_NAME),
 ):
     return _render(request, session_token, "platform_settings.html", require_superadmin=True)
+
+
+@router.get("/platform/modules", response_class=HTMLResponse)
+def modules_page(
+    request: Request,
+    session_token: str | None = Cookie(default=None, alias=security.SESSION_COOKIE_NAME),
+):
+    # Superadmin-only, matching the API: toggling a module changes
+    # which routers the application mounts at startup.
+    return _render(request, session_token, "modules.html", require_superadmin=True)

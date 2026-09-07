@@ -1,0 +1,123 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Modules — NetOpsGuard{% endblock %}
+{% block breadcrumb %}System / Modules{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Modules</h1>
+    <p class="content-sub">Which subsystems are installed and enabled on this platform.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;border-color:var(--amber);">
+    <div class="panel-body" style="font-size:12px;color:var(--amber);">
+      ⚠ Disabling a module stops its pages and API from being mounted the next time the service restarts — its data is left completely untouched, so the change is reversible. A restart is required for a change to take effect.
+    </div>
+  </div>
+
+  <div class="status-card-grid" id="modules-kpis" style="margin-bottom:16px;"></div>
+
+  <div id="modules-wrap"><div class="empty-state">Loading…</div></div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_GRID = '{{ icons.icon("layout-dashboard", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_LOCK = '{{ icons.icon("lock", 16) }}';
+  const esc = AAAPlatform.escapeHtml;
+
+  let modules = [];
+
+  function renderKpis() {
+    const enabled = modules.filter((m) => m.enabled).length;
+    const mandatory = modules.filter((m) => m.mandatory).length;
+    document.getElementById('modules-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_GRID, label: 'Installed Modules', value: modules.length }),
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'Enabled', value: enabled, state: 'is-signal' }),
+      AAAPlatform.kpiCard({ icon: ICON_LOCK, label: 'Required', value: mandatory,
+                            sub: 'cannot be disabled' }),
+    ].join('');
+  }
+
+  function render() {
+    const wrap = document.getElementById('modules-wrap');
+    if (!modules.length) { wrap.innerHTML = '<div class="empty-state">No modules registered.</div>'; return; }
+
+    wrap.innerHTML = modules.map((m) =>
+      '<div class="panel panel-wide" style="margin-bottom:10px;">' +
+      '<div class="panel-body" style="display:flex;gap:16px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;">' +
+      '<div style="flex:1;min-width:240px;">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">' +
+      '<span style="font-size:14px;color:var(--text-primary);">' + esc(m.name) + '</span>' +
+      '<span class="badge sec-sev-badge ' + (m.enabled ? 'is-signal' : '') + '">' +
+      (m.enabled ? 'Enabled' : 'Disabled') + '</span>' +
+      (m.mandatory ? '<span class="badge sec-sev-badge">Required</span>' : '') +
+      '</div>' +
+      '<div class="content-sub" style="margin-bottom:8px;">' + esc(m.description) + '</div>' +
+      '<div class="content-sub" style="font-size:11px;">' +
+      m.route_count + ' routes' +
+      (m.nav_paths.length ? ' · ' + esc(m.nav_paths.slice(0, 6).join(', ')) : ' · no navigation entries') +
+      '</div></div>' +
+      '<label class="toggle-field" style="flex-shrink:0;">' +
+      '<span class="toggle-switch">' +
+      '<input type="checkbox" class="module-toggle" data-key="' + esc(m.key) + '" ' +
+      (m.enabled ? 'checked' : '') + (m.mandatory ? ' disabled' : '') +
+      ' aria-label="Enable ' + esc(m.name) + '">' +
+      '<span class="toggle-switch-slider"></span></span></label>' +
+      '</div></div>').join('');
+  }
+
+  document.getElementById('modules-wrap').addEventListener('change', async (e) => {
+    const box = e.target.closest('.module-toggle');
+    if (!box) return;
+    const key = box.dataset.key;
+    const wanted = box.checked;
+
+    const res = await AAAPlatform.authedFetch('/api/modules/' + encodeURIComponent(key), {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: wanted }),
+    });
+    if (!res.ok) {
+      // Put the switch back where it was: leaving it showing a state
+      // the server rejected would misrepresent what is actually
+      // configured.
+      box.checked = !wanted;
+      const b = await res.json().catch(() => ({}));
+      AAAPlatform.toast(
+        (b.detail && typeof b.detail === 'string') ? b.detail : 'Could not change that module.',
+        'error');
+      return;
+    }
+    const updated = await res.json();
+    modules = modules.map((m) => (m.key === updated.key ? updated : m));
+    renderKpis();
+    render();
+    AAAPlatform.toast(
+      (updated.enabled ? 'Enabled ' : 'Disabled ') + updated.name +
+      ' — restart the service for this to take effect.');
+  });
+
+  async function load() {
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/modules'); } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      document.getElementById('modules-wrap').innerHTML =
+        '<div class="empty-state">' + (res && res.status === 403
+          ? 'Module management is restricted to superadministrators.'
+          : 'Could not load modules.') + '</div>';
+      document.getElementById('modules-kpis').innerHTML = '';
+      return;
+    }
+    modules = await res.json();
+    renderKpis();
+    render();
+  }
+
+  load();
+})();
+</script>
+{% endblock %}

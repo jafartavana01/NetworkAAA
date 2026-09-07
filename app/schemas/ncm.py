@@ -228,3 +228,110 @@ class CompareResultOut(BaseModel):
     outlier_device_id: str | None
     outlier_difference_count: int
     baseline_device_id: str | None
+
+
+class DeviceDriftOut(BaseModel):
+    device_id: str
+    device_name: str
+    configuration_type: str
+    #: in_sync | drifted | no_baseline | no_snapshot | baseline_gone
+    status: str
+    baseline_version: int | None
+    latest_version: int | None
+    baseline_configuration_id: str | None
+    latest_configuration_id: str | None
+    lines_added: int
+    lines_removed: int
+    last_backup_at: datetime | None
+    baseline_set_at: datetime | None
+
+
+class DriftOverviewOut(BaseModel):
+    configuration_type: str
+    total: int
+    in_sync: int
+    drifted: int
+    no_baseline: int
+    no_snapshot: int
+    baseline_gone: int
+    #: no_baseline + no_snapshot + baseline_gone. Reported separately so
+    #: a fleet with no baselines set never reads as healthy.
+    coverage_gaps: int
+    devices: list[DeviceDriftOut]
+
+
+class SetBaselineRequest(BaseModel):
+    configuration_id: str
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class BaselineOut(BaseModel):
+    id: str
+    device_id: str
+    device_name: str
+    configuration_type: str
+    configuration_id: str | None
+    version_number: int | None
+    sha256: str | None
+    notes: str | None
+    set_by: str | None
+    set_at: datetime
+
+
+class CandidateCreateRequest(BaseModel):
+    device_id: str
+    title: str = Field(min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=4000)
+    configuration_lines: str = Field(min_length=1, max_length=100000)
+
+
+class CandidateReviewRequest(BaseModel):
+    #: approve | reject
+    decision: str
+    note: str | None = Field(default=None, max_length=2000)
+
+
+class CandidateOut(BaseModel):
+    id: str
+    display_number: int
+    device_id: str
+    device_name: str
+    title: str
+    description: str | None
+    configuration_lines: str
+    status: str
+    created_by: str | None
+    created_at: datetime
+    approved_by: str | None
+    approved_at: datetime | None
+    review_note: str | None
+    #: Names of commands the deployer would refuse. Surfaced at read
+    #: time so a reviewer sees the problem before approving, not at
+    #: deployment when it is too late to be useful.
+    blocked_commands: list[str]
+
+
+class DeploymentOut(BaseModel):
+    id: str
+    display_number: int
+    candidate_id: str | None
+    device_id: str | None
+    device_name: str
+    status: str
+    verified_changed: bool
+    pre_configuration_id: str | None
+    post_configuration_id: str | None
+    transcript: str | None
+    error_message: str | None
+    started_by: str | None
+    started_at: datetime
+    completed_at: datetime | None
+
+
+class DeployResultOut(BaseModel):
+    ok: bool
+    status: str
+    deployment_number: int
+    verified_changed: bool
+    message: str
+    blocked_commands: list[str]

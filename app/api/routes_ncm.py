@@ -27,14 +27,20 @@ from ..models.admin import AdminUser
 from ..models.audit_schedule_settings import AuditScheduleSettings
 from ..models.device import NetworkDevice
 from ..models.device_group import DeviceGroup
-from ..models.ncm import NcmBackupJob, NcmBackupJobTarget, NcmBackupSchedule, NcmConfiguration
+from ..models.ncm import (
+    NcmBackupJob, NcmBackupJobTarget, NcmBackupSchedule, NcmBaseline, NcmCandidate,
+    NcmConfiguration, NcmDeployment,
+)
 from ..schemas.ncm import (
-    CompareCategoryOut, CompareCellOut, CompareDeviceOut, CompareRequest, CompareResultOut,
+    BaselineOut, CandidateCreateRequest, CandidateOut, CandidateReviewRequest,
+    CompareCategoryOut, CompareCellOut, CompareDeviceOut, CompareRequest,
+    CompareResultOut, DeployResultOut, DeploymentOut, DeviceDriftOut, DriftOverviewOut,
+    SetBaselineRequest,
     NcmBackupRequest, NcmBackupResultOut, NcmConfigurationDetailOut, NcmConfigurationSummaryOut,
     NcmDeviceStatusOut, NcmDiffLineOut, NcmDiffOut, NcmDiffRequest, NcmJobDetailOut, NcmJobSummaryOut,
     NcmJobTargetOut, NcmOverviewOut, NcmRecentChangeOut, NcmScheduleOut, NcmScheduleRequest,
 )
-from ..services import ncm_archive, ncm_backup, ncm_compare
+from ..services import ncm_archive, ncm_backup, ncm_compare, ncm_deploy, ncm_drift
 from .deps import require_permission, verify_csrf
 
 router = APIRouter(prefix="/api/ncm", tags=["ncm"])
@@ -606,4 +612,351 @@ def compare_configurations(
         outlier_device_id=result.outlier_device_id,
         outlier_difference_count=result.outlier_difference_count,
         baseline_device_id=result.baseline_device_id,
+    )
+
+
+# --------------------------------------------------- baselines / drift
+
+@router.get("/drift", response_model=DriftOverviewOut)
+def get_drift(
+    configuration_type: str = "running",
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("ncm:view")),
+):
+    """
+    Fleet drift: every enabled device's latest snapshot against its
+    designated baseline.
+
+    Nothing is retrieved from a device here -- drift describes what has
+    been ARCHIVED. A device that changed but has not been backed up
+    since shows as its real coverage state rather than as "in sync",
+    which would be a false all-clear.
+    """
+    drifts = ncm_drift.compute_fleet_drift(db, configuration_type)
+    counts = ncm_drift.summarize(drifts)
+    return DriftOverviewOut(
+        configuration_type=configuration_type,
+        total=counts["total"], in_sync=counts[ncm_drift.STATUS_IN_SYNC],
+        drifted=counts[ncm_drift.STATUS_DRIFTED],
+        no_baseline=counts[ncm_drift.STATUS_NO_BASELINE],
+        no_snapshot=counts[ncm_drift.STATUS_NO_SNAPSHOT],
+        baseline_gone=counts[ncm_drift.STATUS_BASELINE_GONE],
+        coverage_gaps=counts["coverage_gaps"],
+        devices=[
+            DeviceDriftOut(
+                device_id=d.device_id, device_name=d.device_name,
+                configuration_type=d.configuration_type, status=d.status,
+                baseline_version=d.baseline_version, latest_version=d.latest_version,
+                baseline_configuration_id=d.baseline_configuration_id,
+                latest_configuration_id=d.latest_configuration_id,
+                lines_added=d.lines_added, lines_removed=d.lines_removed,
+                last_backup_at=d.last_backup_at, baseline_set_at=d.baseline_set_at,
+            )
+            for d in drifts
+        ],
+    )
+
+
+@router.get("/baselines", response_model=list[BaselineOut])
+def list_baselines(
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("ncm:view")),
+):
+    rows = db.query(NcmBaseline).order_by(NcmBaseline.device_name.asc()).all()
+    return [
+        BaselineOut(
+            id=str(b.id), device_id=str(b.device_id), device_name=b.device_name,
+            configuration_type=b.configuration_type,
+            configuration_id=str(b.configuration_id) if b.configuration_id else None,
+            version_number=b.version_number, sha256=b.sha256, notes=b.notes,
+            set_by=b.set_by, set_at=b.set_at,
+        )
+        for b in rows
+    ]
+
+
+@router.put("/devices/{device_id}/baseline", response_model=BaselineOut,
+            dependencies=[Depends(verify_csrf)])
+def set_baseline(
+    device_id: str,
+    payload: SetBaselineRequest,
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(require_permission("ncm:schedule")),
+):
+    """
+    Designates an archived snapshot as this device's baseline.
+
+    Gated on `ncm:schedule` rather than `ncm:view`: declaring what
+    "correct" means for a device is a configuration-management
+    decision, not a read.
+
+    The snapshot must belong to THIS device -- designating another
+    device's configuration as the baseline would make every future
+    drift comparison meaningless, so it is rejected rather than
+    trusted.
+    """
+    device_uuid = _parse_uuids([device_id], "device ids")[0]
+    config_uuid = _parse_uuids([payload.configuration_id], "configuration ids")[0]
+
+    device = db.query(NetworkDevice).filter(NetworkDevice.id == device_uuid).first()
+    if not device:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found.")
+
+    config = db.query(NcmConfiguration).filter(NcmConfiguration.id == config_uuid).first()
+    if not config:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Configuration not found.")
+    if config.device_id != device_uuid:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="That configuration belongs to a different device.",
+        )
+
+    baseline = (
+        db.query(NcmBaseline)
+        .filter(
+            NcmBaseline.device_id == device_uuid,
+            NcmBaseline.configuration_type == config.configuration_type,
+        )
+        .first()
+    )
+    if baseline is None:
+        baseline = NcmBaseline(device_id=device_uuid, configuration_type=config.configuration_type)
+        db.add(baseline)
+
+    baseline.device_name = device.name
+    baseline.configuration_id = config.id
+    baseline.version_number = config.version_number
+    baseline.sha256 = config.sha256
+    baseline.notes = payload.notes
+    baseline.set_by = admin.username
+    db.commit()
+    db.refresh(baseline)
+
+    return BaselineOut(
+        id=str(baseline.id), device_id=str(baseline.device_id), device_name=baseline.device_name,
+        configuration_type=baseline.configuration_type,
+        configuration_id=str(baseline.configuration_id) if baseline.configuration_id else None,
+        version_number=baseline.version_number, sha256=baseline.sha256,
+        notes=baseline.notes, set_by=baseline.set_by, set_at=baseline.set_at,
+    )
+
+
+@router.delete("/devices/{device_id}/baseline", status_code=status.HTTP_204_NO_CONTENT,
+               dependencies=[Depends(verify_csrf)])
+def clear_baseline(
+    device_id: str,
+    configuration_type: str = "running",
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("ncm:schedule")),
+):
+    """Removes the baseline designation only. The archived snapshot it
+    pointed at is untouched -- clearing what counts as 'correct' must
+    never delete configuration history."""
+    device_uuid = _parse_uuids([device_id], "device ids")[0]
+    baseline = (
+        db.query(NcmBaseline)
+        .filter(
+            NcmBaseline.device_id == device_uuid,
+            NcmBaseline.configuration_type == configuration_type,
+        )
+        .first()
+    )
+    if baseline is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No baseline set for that device.")
+    db.delete(baseline)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# ------------------------------------------- candidates / deployments
+
+def _candidate_out(c: NcmCandidate) -> CandidateOut:
+    return CandidateOut(
+        id=str(c.id), display_number=c.display_number, device_id=str(c.device_id),
+        device_name=c.device_name, title=c.title, description=c.description,
+        configuration_lines=c.configuration_lines, status=c.status,
+        created_by=c.created_by, created_at=c.created_at,
+        approved_by=c.approved_by, approved_at=c.approved_at, review_note=c.review_note,
+        blocked_commands=ncm_deploy.check_dangerous_commands(
+            ncm_deploy.parse_configuration_lines(c.configuration_lines)
+        ),
+    )
+
+
+def _deployment_out(d: NcmDeployment) -> DeploymentOut:
+    return DeploymentOut(
+        id=str(d.id), display_number=d.display_number,
+        candidate_id=str(d.candidate_id) if d.candidate_id else None,
+        device_id=str(d.device_id) if d.device_id else None,
+        device_name=d.device_name, status=d.status, verified_changed=d.verified_changed,
+        pre_configuration_id=str(d.pre_configuration_id) if d.pre_configuration_id else None,
+        post_configuration_id=str(d.post_configuration_id) if d.post_configuration_id else None,
+        transcript=d.transcript, error_message=d.error_message,
+        started_by=d.started_by, started_at=d.started_at, completed_at=d.completed_at,
+    )
+
+
+@router.get("/candidates", response_model=list[CandidateOut])
+def list_candidates(
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("ncm:view")),
+):
+    rows = db.query(NcmCandidate).order_by(NcmCandidate.created_at.desc()).limit(200).all()
+    return [_candidate_out(c) for c in rows]
+
+
+@router.post("/candidates", response_model=CandidateOut, dependencies=[Depends(verify_csrf)])
+def create_candidate(
+    payload: CandidateCreateRequest,
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(require_permission("ncm:propose")),
+):
+    device_uuid = _parse_uuids([payload.device_id], "device ids")[0]
+    device = db.query(NetworkDevice).filter(NetworkDevice.id == device_uuid).first()
+    if not device:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found.")
+
+    if not ncm_deploy.parse_configuration_lines(payload.configuration_lines):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="The change contains no commands (only blank or comment lines).",
+        )
+
+    from sqlalchemy import func as _func
+    number = (db.query(_func.max(NcmCandidate.display_number)).scalar() or 0) + 1
+
+    candidate = NcmCandidate(
+        display_number=number, device_id=device.id, device_name=device.name,
+        title=payload.title, description=payload.description,
+        configuration_lines=payload.configuration_lines,
+        status=ncm_deploy.STATUS_DRAFT, created_by=admin.username,
+    )
+    db.add(candidate)
+    db.commit()
+    db.refresh(candidate)
+    return _candidate_out(candidate)
+
+
+@router.post("/candidates/{candidate_id}/submit", response_model=CandidateOut,
+             dependencies=[Depends(verify_csrf)])
+def submit_candidate(
+    candidate_id: str,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("ncm:propose")),
+):
+    c = db.query(NcmCandidate).filter(
+        NcmCandidate.id == _parse_uuids([candidate_id], "candidate ids")[0]
+    ).first()
+    if not c:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Candidate not found.")
+    if not ncm_deploy.can_transition(c.status, ncm_deploy.STATUS_PENDING):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"A candidate in '{c.status}' cannot be submitted for approval.",
+        )
+    c.status = ncm_deploy.STATUS_PENDING
+    db.commit()
+    db.refresh(c)
+    return _candidate_out(c)
+
+
+@router.post("/candidates/{candidate_id}/review", response_model=CandidateOut,
+             dependencies=[Depends(verify_csrf)])
+def review_candidate(
+    candidate_id: str,
+    payload: CandidateReviewRequest,
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(require_permission("ncm:approve")),
+):
+    """
+    Approve or reject a submitted candidate.
+
+    **Self-approval is refused.** The whole point of a separate
+    `ncm:approve` permission is that a change gets a second pair of
+    eyes; letting the author sign off their own work would make the
+    approval step a formality that records a name without adding any
+    review. A superadmin is not exempted -- an exemption is exactly the
+    path a rushed change would take.
+    """
+    c = db.query(NcmCandidate).filter(
+        NcmCandidate.id == _parse_uuids([candidate_id], "candidate ids")[0]
+    ).first()
+    if not c:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Candidate not found.")
+
+    decision = (payload.decision or "").strip().lower()
+    if decision not in ("approve", "reject"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Decision must be 'approve' or 'reject'.")
+
+    target = ncm_deploy.STATUS_APPROVED if decision == "approve" else ncm_deploy.STATUS_REJECTED
+    if not ncm_deploy.can_transition(c.status, target):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=f"A candidate in '{c.status}' cannot be {decision}d.",
+        )
+
+    if decision == "approve" and c.created_by and c.created_by == admin.username:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail="You cannot approve a change you created. Ask another administrator to review it.",
+        )
+
+    c.status = target
+    c.review_note = payload.note
+    if decision == "approve":
+        c.approved_by = admin.username
+        c.approved_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(c)
+    return _candidate_out(c)
+
+
+@router.post("/candidates/{candidate_id}/deploy", response_model=DeployResultOut,
+             dependencies=[Depends(verify_csrf)])
+def deploy_candidate_endpoint(
+    candidate_id: str,
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(require_permission("ncm:deploy")),
+):
+    c = db.query(NcmCandidate).filter(
+        NcmCandidate.id == _parse_uuids([candidate_id], "candidate ids")[0]
+    ).first()
+    if not c:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Candidate not found.")
+
+    outcome = ncm_deploy.deploy_candidate(db, c, actor=admin.username)
+    return DeployResultOut(
+        ok=outcome.ok, status=outcome.status, deployment_number=outcome.deployment_number,
+        verified_changed=outcome.verified_changed, message=outcome.message,
+        blocked_commands=outcome.blocked_commands,
+    )
+
+
+@router.get("/deployments", response_model=list[DeploymentOut])
+def list_deployments(
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("ncm:view")),
+):
+    rows = db.query(NcmDeployment).order_by(NcmDeployment.started_at.desc()).limit(100).all()
+    return [_deployment_out(d) for d in rows]
+
+
+@router.post("/deployments/{deployment_id}/rollback", response_model=DeployResultOut,
+             dependencies=[Depends(verify_csrf)])
+def rollback_deployment_endpoint(
+    deployment_id: str,
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(require_permission("ncm:deploy")),
+):
+    d = db.query(NcmDeployment).filter(
+        NcmDeployment.id == _parse_uuids([deployment_id], "deployment ids")[0]
+    ).first()
+    if not d:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Deployment not found.")
+
+    outcome = ncm_deploy.rollback_deployment(db, d, actor=admin.username)
+    return DeployResultOut(
+        ok=outcome.ok, status=outcome.status, deployment_number=outcome.deployment_number,
+        verified_changed=outcome.verified_changed, message=outcome.message,
+        blocked_commands=outcome.blocked_commands,
     )

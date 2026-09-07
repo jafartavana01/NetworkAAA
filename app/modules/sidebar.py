@@ -104,12 +104,14 @@ _SECTION_BY_PATH: dict[str, tuple[str, list[str]]] = {
     "/ncm/archive": ("ncm", ["archive", "config archive", "configuration archive", "versions", "snapshots"]),
     "/ncm/compare": ("ncm", ["compare", "configuration compare", "multi device compare", "consistency", "outlier"]),
     "/ncm/diff": ("ncm", ["diff", "raw diff", "configuration diff", "two versions"]),
+    "/ncm/drift": ("ncm", ["drift", "drift detection", "baseline", "golden config", "out of sync"]),
     "/ncm/jobs": ("ncm", ["backup jobs", "ncm jobs", "config backup jobs"]),
     "/ncm/schedules": ("ncm", ["backup schedules", "scheduled backup", "recurring backup"]),
 
     # ---- System ----
     "/tacacs/config": ("system", ["configuration", "config", "tac_plus", "compile"]),
     "/platform/settings": ("system", ["settings", "network settings", "tls", "https", "certificate"]),
+    "/platform/modules": ("system", ["modules", "module management", "enable module", "disable module", "subsystems"]),
 }
 
 

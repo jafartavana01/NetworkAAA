@@ -317,8 +317,14 @@ def print_summary(build_info: dict) -> None:
     utils.ok(f"Build profile   : {build_info.get('build_profile', 'unknown')}")
     utils.info("Full build record: /etc/aaa-platform/build_info.json")
     utils.info("Install log      : /tmp/aaa-platform-install.log")
-    utils.info("Next steps       : Phase 8 (Module Management) adds a GUI page showing")
-    utils.info("                   installed/enabled/status per module -- the last phase.")
+    # This line used to advertise an unbuilt development phase. It now
+    # describes what an operator should actually do after installing,
+    # which is what a post-install summary is for.
+    utils.info("Next steps       : 1. Log in and change the initial administrator password.")
+    utils.info("                   2. Add your devices under TACACS+ / RADIUS -> Devices.")
+    utils.info("                   3. Review System -> Modules to see what is enabled.")
+    utils.info("                   4. Apply the configuration from TACACS+ -> Configuration")
+    utils.info("                      to push your policies to tac_plus-ng.")
 
 
 def main(force_config: bool = False) -> None:

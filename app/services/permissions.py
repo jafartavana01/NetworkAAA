@@ -71,6 +71,13 @@ PERMISSION_CATALOG: list[Permission] = [
     Permission("ncm:diff", "Compare Configurations", "Compare two archived configuration versions."),
     Permission("ncm:schedule", "Manage Backup Schedules", "Create, edit, enable, disable, and delete recurring backup schedules."),
     Permission("ncm:delete", "Delete Configurations", "Permanently delete archived configuration snapshots."),
+    # Change-control permissions. Split three ways on purpose: proposing
+    # a change, signing it off, and pushing it to a device are different
+    # levels of trust, and keeping them separate is what makes
+    # "approved by someone other than the author" possible at all.
+    Permission("ncm:propose", "Propose Configuration Changes", "Create candidate configuration changes and submit them for approval."),
+    Permission("ncm:approve", "Approve Configuration Changes", "Approve or reject candidate configuration changes."),
+    Permission("ncm:deploy", "Deploy Configuration Changes", "Push an approved configuration change to a device, and roll it back."),
 ]
 
 PERMISSION_KEYS = {p.key for p in PERMISSION_CATALOG}
