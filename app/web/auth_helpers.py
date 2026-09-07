@@ -17,6 +17,28 @@ from ..database import get_sessionmaker
 from ..models.admin import AdminUser
 
 
+def redirect_to_login(session_token: str | None = None):
+    """
+    Bounce to the login page, CLEARING a session cookie that exists but
+    no longer validates.
+
+    Without this, a cookie signed with a previous session secret (an
+    upgrade, a restored install, a rebuilt server) leaves the browser
+    in a silent loop: it keeps sending a token the server keeps
+    rejecting, so correct credentials appear to "do nothing" while
+    wrong ones correctly show an error -- which points the user at
+    their password rather than at the stale cookie. Deleting the bad
+    cookie on the way out breaks the loop on the first bounce.
+    """
+    from fastapi.responses import RedirectResponse
+
+    response = RedirectResponse(url="/login", status_code=302)
+    if session_token:
+        response.delete_cookie(security.SESSION_COOKIE_NAME)
+        response.delete_cookie(security.CSRF_COOKIE_NAME)
+    return response
+
+
 def current_admin_or_none(session_token: str | None) -> AdminUser | None:
     if not session_token:
         return None

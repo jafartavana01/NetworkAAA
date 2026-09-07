@@ -84,6 +84,7 @@ _SECTION_BY_PATH: dict[str, tuple[str, list[str]]] = {
     "/tacacs/sessions": ("tacacs", ["session", "sessions", "active sessions"]),
     "/tacacs/accounting": ("tacacs", ["accounting", "logs", "aaa accounting", "audit log"]),
     "/tacacs/aaa-health": ("tacacs", ["aaa health", "health"]),
+    "/tacacs/radius": ("tacacs", ["radius", "radius settings", "1812", "1813", "radsec", "pap", "chap"]),
     "/tacacs/diagnostics": ("tacacs", ["diagnostics", "diagnose", "troubleshoot"]),
 
     # ---- Network Operations ----

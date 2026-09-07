@@ -26,6 +26,7 @@ from ..api.routes_device_access_grants import router as device_access_grants_rou
 from ..api.routes_device_groups import router as device_groups_router
 from ..api.routes_aaa_template import router as aaa_template_router
 from ..api.routes_devices import router as devices_router
+from ..api.routes_radius import router as radius_router
 from ..api.routes_monitoring import router as monitoring_router
 from ..api.routes_network_scan import router as network_scan_router
 from ..api.routes_diagnostics import router as diagnostics_router
@@ -41,6 +42,7 @@ from .registry import Module, NavEntry, register, get_module
 
 _tacacs_api_router = APIRouter()
 _tacacs_api_router.include_router(devices_router)
+_tacacs_api_router.include_router(radius_router)
 _tacacs_api_router.include_router(monitoring_router)
 _tacacs_api_router.include_router(network_scan_router)
 _tacacs_api_router.include_router(aaa_template_router)
@@ -90,6 +92,7 @@ def _build_module() -> Module:
                     NavEntry(label="Accounting", path="/tacacs/accounting"),
                     NavEntry(label="Sessions", path="/tacacs/sessions"),
                     NavEntry(label="AAA Health", path="/tacacs/aaa-health"),
+                    NavEntry(label="RADIUS Settings", path="/tacacs/radius", requires_superadmin=True),
                     NavEntry(label="Diagnostics", path="/tacacs/diagnostics"),
                     NavEntry(label="Configuration", path="/tacacs/config"),
                 ],

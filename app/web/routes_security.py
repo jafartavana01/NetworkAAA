@@ -22,7 +22,7 @@ from fastapi.templating import Jinja2Templates
 from .. import security
 from ..modules.registry import all_modules
 from ..modules.sidebar import build_sidebar_sections
-from .auth_helpers import current_admin_or_none
+from .auth_helpers import current_admin_or_none, redirect_to_login
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -33,7 +33,9 @@ router = APIRouter()
 def _render(request: Request, session_token: str | None, template_name: str, *, require_superadmin: bool = False):
     admin = current_admin_or_none(session_token)
     if not admin:
-        return RedirectResponse(url="/login", status_code=302)
+        # Clears a stale/invalid session cookie so the browser can't
+        # loop on a token the server will never accept.
+        return redirect_to_login(session_token)
     if require_superadmin and not admin.is_superadmin:
         return RedirectResponse(url="/dashboard", status_code=302)
 

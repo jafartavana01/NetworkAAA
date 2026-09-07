@@ -12,6 +12,438 @@ it was built alongside.
 
 ## 2026-09-03
 
+### Fixed — stale session cookie caused a silent login loop; RADIUS PAP delegation added
+
+**The login loop, diagnosed from a real report.** A session cookie
+signed with a PREVIOUS session secret (an upgrade, a restored install,
+a rebuilt server) fails signature verification, so the page route
+bounced to `/login` while leaving the bad cookie in place. The browser
+then re-sent the same rejected token on every attempt: correct
+credentials appeared to do nothing, while wrong ones correctly showed
+an error — which points the user at their password rather than at the
+cookie. The user found it themselves by clearing cookies manually,
+which is not a diagnosis anyone should have to make.
+
+New `web.auth_helpers.redirect_to_login()` deletes the session and
+CSRF cookies on the way out whenever a token was present but did not
+validate, so the loop breaks on the first bounce. Applied at all six
+page-route modules; the root-path redirect for a genuinely logged-out
+visitor is deliberately left alone, since there is no bad cookie to
+clear there.
+
+**RADIUS PAP delegation.** `password pap = login` is now emitted for
+every user when RADIUS is enabled platform-wide, matching the upstream
+sample where each RADIUS user carries both `password login = ...` and
+`password pap = login`. That directive means "use the same credential
+as the login password", so this adds a delegation and never a second
+stored secret — no password is duplicated, re-encoded or weakened.
+
+Emitted only when RADIUS is actually enabled: on a TACACS+-only
+install the generated configuration stays byte-identical. Verified by
+test in both states, including that the login password appears exactly
+once.
+
+**Documented rather than half-built:** profile `aaa.protocol == radius`
+branching. The upstream sample sets vendor attributes like
+`radius[Cisco:Cisco-AVPair] = "shell:priv-lvl=15"`, but this project's
+profiles are generated from Policies and Command Sets, which model
+COMMANDS — there is no field in the policy model that maps to a RADIUS
+AV-pair. Doing it properly means extending the policy model, not just
+the compiler. The practical consequence is recorded in
+`docs/RADIUS_FINDINGS.md`: RADIUS authentication works and devices get
+their `radius.key`, but priv-lvl for a RADIUS session comes from the
+device default rather than a NetOpsGuard policy.
+
+**Verified**: full project compiles; 42 templates parse; the
+authorization regression suite still passes; every consumer of the new
+helper confirmed to import it; no unconverted login bounce remains
+except the intended one.
+
+---
+
+### Fixed — TWO bugs: schema drift broke logins after upgrade; only_show denied shell authorization
+
+**Bug 1 — logins broken after the RADIUS update. My regression.**
+
+The RADIUS work added `radius_enabled` and `radius_secret_encrypted`
+to the EXISTING `network_devices` table. `create_all()` creates missing
+tables but cannot alter existing ones, so on an upgraded install those
+columns were never created and every query selecting a device failed
+with "column does not exist".
+
+This is precisely the drift the installer's own
+`check_schema_drift` was built to report two changes earlier -- and
+reporting it was not enough, because the columns still had to be added
+by hand before the application would run.
+
+Fixed properly, in `app/database.py`: `init_db()` now runs
+`_apply_additive_column_migrations()`, which compares model columns
+against the live schema and adds what is missing. Scope is deliberately
+narrow, because this runs unattended at startup against production
+data:
+* **ADD COLUMN only.** Never drops, never alters a type, never
+  renames. A column in the database but no longer in the models is
+  left exactly where it is -- removing it would destroy data nobody
+  asked to lose.
+* A NOT NULL column is added with its model default
+  (`... NOT NULL DEFAULT false`). With no scalar default it is added
+  NULLABLE and a warning logged, rather than failing: adding NOT NULL
+  to a populated table without a default is an error that would take
+  startup down.
+* Every statement is `IF NOT EXISTS`, so re-running is a no-op.
+* String defaults are quote-escaped.
+* Any failure is logged, never raised -- a migration problem must not
+  make the application unbootable.
+
+**Bug 2 — `only_show` denied the initial shell authorization.**
+
+Root cause exactly as diagnosed: `_policy_block` emitted
+
+    if (cmd == "") { set priv-lvl = 15 }
+
+with no `permit`. Setting a privilege level is not a decision, so the
+empty `cmd` used for initial EXEC authorization matched none of the
+`cmd =~` rules and fell through to the policy's `default_action` --
+`deny` for any deny-by-default policy. Hence
+`only_show deny shell` and "% Authorization failed." Reproduced
+against the real generator before changing anything.
+
+Fixed at the source (`app/services/config_compiler.py`), one line:
+`permit` now closes the empty-cmd block. Emitted for EVERY policy
+regardless of `default_action`, because denying the shell itself is
+not something a command policy is meant to express -- a policy that
+should not grant login is expressed by not applying it to that user,
+not by silently failing their EXEC authorization.
+
+**New `tests/test_policy_block_authorization.py`** -- the project had
+no test suite at all. Written as a runnable script rather than pytest,
+since neither pytest nor a suite exists here and a test that cannot be
+run is worth nothing. It includes a small interpreter of the script
+subset this compiler emits, so the tests assert on generated
+BEHAVIOUR; string matching would pass just as happily on a config that
+denies every login.
+
+24 checks, all passing: initial EXEC permits with priv-lvl 15; six
+allowed commands; eight forbidden commands; three prefix-confusion
+cases (`showevil`, `exitnow`, `sshd_config` all denied); the
+permit-inside-empty-block assertion; a permit-by-default policy; and
+`service=ppp` not silently permitted.
+
+**The test was verified to actually catch the bug** by reverting the
+fix and re-running -- it reports `('deny', 15)` on initial EXEC,
+reproducing the router's failure exactly.
+
+**A bug in the TEST caught during the run**: the first interpreter
+treated the `permit` inside the empty-cmd block as the trailing
+default action -- they are textually identical lines -- and wrongly
+permitted every forbidden command. Fixed by tracking brace depth. Worth
+recording because a harness that permits everything would have
+"passed" while proving nothing.
+
+**Investigated, no change needed:** AD group names containing spaces.
+Internal group names are already validated against
+`^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$`, so a space cannot reach
+`member == <group>` unquoted, and `ad_group_name` (which may contain
+spaces) is never emitted into the configuration at all -- it is
+resolved to an internal group before compilation. `ad_directory.py`
+was correctly left untouched.
+
+---
+
+### Added — RADIUS GUI: device secrets and platform settings page
+
+Completes the RADIUS feature end to end. Everything is driven by the
+model and compiler built against the confirmed upstream sample; this
+pass adds the surfaces to configure it.
+
+**Device modal** gains a RADIUS section: a toggle and a secret field
+that only appears when the toggle is on, so the form never implies it
+will save something it won't. The secret field states plainly that it
+is separate from the TACACS+ secret and never reused from it. On edit
+it shows whether a secret is already stored without ever returning the
+value -- the same treatment the TACACS+ secret already gets.
+
+**Device API** carries `radius_enabled` and `radius_secret`.
+`DeviceOut` exposes `has_radius_secret` as a boolean only; the secret
+itself is never returned. Turning RADIUS off for a device CLEARS the
+stored secret rather than leaving it encrypted at rest for a protocol
+no longer in use.
+
+**New RADIUS Settings page** (`/tacacs/radius`), superadmin-gated at
+both the API and the page route -- enabling RADIUS opens daemon
+listeners that did not previously exist, which is a platform change
+rather than device administration. Verified that the nav entry is
+hidden for a non-superadmin and shown for a superadmin.
+
+It carries three things worth calling out:
+* A **live preview** of the exact directives that will be added to the
+  compiled configuration, mirroring `_radius_blocks` -- so an admin
+  sees the real syntax before applying it, rather than trusting a
+  checkbox.
+* An explicit warning that **nothing changes on the daemon until the
+  configuration is compiled and applied**, using the existing Apply
+  workflow. The settings page does not pretend to open ports itself.
+* A **"devices with RADIUS" count** that turns amber when RADIUS is
+  enabled but no device uses it -- open listeners serving nothing is
+  worth flagging rather than leaving to be discovered.
+
+**Transport is UDP only**, and the page says why in plain terms:
+upstream documents TCP, DTLS and TLS (RadSec), but their listener
+syntax was not in the sample this was built against, so it is not
+offered rather than guessed. Emitting a directive the daemon rejects
+would take TACACS+ down with it.
+
+Port validation rejects anything below 1025 (the daemon should not
+need privileges it can do without) and rejects auth and accounting
+sharing a port.
+
+**Also added**: `require_superadmin` support to
+`app.web.routes_tacacs._render`, which did not have it -- matching the
+pattern already used in `routes_platform` and `routes_security`.
+Sidebar search keywords for the new page.
+
+**Verified**: 42 templates parse; both changed pages render with zero
+ID mismatches; every extracted script passes Node syntax checks; nav
+gating confirmed for both superadmin and standard admin; full project
+compiles.
+
+**Still deferred, unchanged**: RADIUS accounting parsing. The upstream
+sample declares `log rad-acctlog` with no explicit `accounting
+format`, so the default line layout remains unconfirmed and it gets
+the same treatment as the TACACS+ authorization log -- not parsed
+until the format is known from a real log.
+
+---
+
+### Added — RADIUS: real config generation (model + compiler), built against the confirmed sample
+
+The full `tac_plus-ng-radius.cfg` sample from the real installation
+answered every open question. Implemented against that syntax
+verbatim, not inference.
+
+**The key finding: `radius.key` lives in the SAME `host { }` block as
+the TACACS+ `key`.**
+
+    host world {
+            address = 0.0.0.0/0
+            key = demo
+            radius.key = demo
+    }
+
+So one host block serves both protocols. No second device record, no
+parallel host block, no separate realm -- which is why this needed
+only two new columns on the existing device model rather than a new
+device concept.
+
+**Device model**: `radius_enabled` and `radius_secret_encrypted`
+(nullable, reusing the existing Fernet mechanism). The RADIUS secret
+is deliberately SEPARATE from the TACACS+ one: they are independent on
+real equipment, and a device with RADIUS enabled but no secret stored
+emits no `radius.key` at all rather than silently reusing the TACACS+
+key -- that would put an existing secret on the wire over a protocol
+the operator never chose for it.
+
+**New `RadiusSettings` model** (singleton, matching AdSettings),
+registered in `init_db()` in the same edit that created it. Disabled
+by default: enabling opens listeners the operator did not previously
+have, so it must be an explicit choice, never something an update
+switches on.
+
+**Compiler** now emits, all verbatim from the sample:
+
+    listen = { port = 1812 protocol = UDP }
+    listen = { port = 1813 protocol = UDP flag = accounting }
+    log rad-accesslog { destination = ... }
+    log rad-acctlog   { destination = ... }
+    radius.access log = rad-accesslog
+    radius.accounting log = rad-acctlog
+    include = "$CONFDIR/radius-dict.cfg"
+
+`flag = accounting` on the 1813 listener is in the sample and easy to
+miss; without it the daemon cannot distinguish the accounting listener
+from the auth one. Only `protocol = UDP` is offered -- upstream
+documents TCP/DTLS/TLS, but their listen syntax was not in the sample
+that was read, so it is left out under the same rule already applied
+to IPv6 host addresses.
+
+**When RADIUS is disabled every fragment is EMPTY**, so the generated
+file is byte-identical to what this compiler produced before RADIUS
+existed. An operator who never enables it sees no change whatsoever --
+verified by test, not assumed.
+
+**Verified by execution, asserted against the real sample syntax**:
+disabled and no-settings-row both produce entirely empty output;
+enabled produces every confirmed directive including
+`flag = accounting`; dictionaries can be turned off; custom ports are
+honoured; a TACACS+-only device is unchanged; a dual-protocol device
+gets both keys in ONE host block; and a RADIUS-enabled device with no
+stored secret correctly emits no `radius.key` rather than falling back
+to the TACACS+ key.
+
+**Also resolved and recorded** in `docs/RADIUS_FINDINGS.md`: one
+daemon instance serves both protocols; existing users and profiles
+apply unchanged, branching on `aaa.protocol == radius`; RADIUS PAP
+needs `password pap = login` on the user.
+
+**Still to build**: the per-device and settings GUI, `password pap`
+emission, and profile `aaa.protocol` branches. **RADIUS accounting
+parsing remains deferred** -- the sample declares `log rad-acctlog`
+with no explicit `accounting format`, so the default line layout is
+still unconfirmed, and it gets the same treatment as the TACACS+
+authorization log: not parsed until the format is known.
+
+---
+
+### Confirmed — RADIUS capability verified on a real installation; findings recorded
+
+The detector was run on a real server and returned confirmed evidence:
+RADIUS is genuinely implemented (`config_radius.c`, `config_radius.h`,
+`protocol_radius.h`), four daemon-side sample configurations ship with
+the distribution, and real syntax was extracted verbatim.
+
+**Confirmed syntax** now recorded in `docs/RADIUS_FINDINGS.md`:
+RADIUS listeners (`listen { port = 1812 protocol = UDP }` and 1813 for
+accounting), dedicated log targets (`radius.access log` /
+`radius.accounting log`, distinct from the TACACS+ ones this project
+already emits), and vendor dictionaries included via
+`include = "$CONFDIR/radius-dict.cfg"` with `radius.dictionary`
+blocks for Cisco, Fortinet, PaloAlto, Juniper, Microsoft, APC and
+MikroTik.
+
+**One finding worth flagging, because acting on it would have broken
+things.** The keyword scan also returned `radius server radius-udp`,
+`aaa group server radius radius-udp` and `server name radius-udp`.
+Those are **Cisco IOS device-side configuration** -- what you put on a
+switch to point it at this daemon -- not tac_plus-ng syntax. The
+sample directory legitimately contains both. Emitting them into the
+daemon's own config would produce a file it rejects, taking working
+TACACS+ down. The sample-file list used for generation is therefore
+restricted to the four daemon-side files by name, and the distinction
+is documented rather than left as a trap.
+
+**Still blocked on one thing, and it is the important one:** the
+per-device RADIUS shared-secret directive. TACACS+ device blocks in
+this project emit `key = ...`; the RADIUS equivalent inside a `device`
+block was not in the extracted lines. Since this platform's entire
+device model is built around per-device secrets, generation cannot
+proceed correctly without it -- and inferring it from the TACACS+ form
+is exactly the guess that has been avoided throughout.
+
+Added `--dump` mode, which prints the four daemon-side sample
+configurations in full. Isolated keyword lines proved capability but
+cannot show block structure or distinguish daemon from device config;
+reading the files whole settles all four remaining open questions at
+once.
+
+`docs/RADIUS_FINDINGS.md` records what is proven, what is explicitly
+NOT daemon syntax, and the four open questions -- so the eventual
+implementation is written against evidence rather than inference.
+
+---
+
+### Improved — RADIUS syntax discovery now reads the shipped docs and sample configs
+
+The upstream README (supplied directly, since every relevant host --
+github.com, raw.githubusercontent.com, projects.pro-bono-publico.de and
+www.pro-bono-publico.de -- is blocked by this environment's egress
+allowlist) confirms two things that change what is possible here:
+
+1. tac_plus-ng really does implement RADIUS (UDP, TCP, DTLS, TLS) with
+   PAP/CHAP/MSCHAPv1/MSCHAPv2 and downloadable ACLs.
+2. **The distribution ships its own documentation in the top-level
+   `doc/` directory, and sample configurations under
+   `tac_plus-ng/sample/`.**
+
+The second point is the useful one: the installer already clones that
+repository to `/opt/aaa-platform/upstream/event-driven-servers` and
+keeps it, so the authoritative RADIUS syntax is sitting on the
+operator's disk. It never needed to come over the network.
+
+`installer/radius_support.py` now reads those locations in priority
+order -- shipped samples first, then `doc/` -- and QUOTES THE MATCHING
+CONFIGURATION LINES VERBATIM rather than summarising them. A sample
+config line is working syntax; a paraphrase of it is not, and would
+reintroduce exactly the guesswork this module exists to avoid.
+
+**Evidence is now graded, not pooled.** C-source string literals are
+still searched, but only as a fallback, and a keyword found only there
+sets `keywords_from_source_only`, which forces `syntax_confirmed` to
+stay False. An internal C token is not proof of user-facing config
+syntax, and treating the two as equivalent is how a plausible-looking
+wrong directive would end up in a generated config.
+
+Added a runnable entrypoint -- `sudo python3 -m installer.radius_support`
+-- so the report can be produced on a real server in one command.
+
+**Verified against a simulated checkout** containing a realistic
+sample config, an HTML doc page and a C file: real syntax
+(`radius.key = ...`, `protocol = radius-udp`,
+`attr set RADIUS:Service-Type`) is extracted verbatim and
+`syntax_confirmed` is True. And against a C-literals-only checkout:
+support is correctly reported while `syntax_confirmed` stays False and
+the weaker evidence is labelled as a lead to verify.
+
+**Still not implemented**: config generation, per-device RADIUS
+secrets, RADIUS accounting parsing and GUI. The gate has not moved --
+it now just resolves itself the moment the report runs against a real
+checkout.
+
+---
+
+### Added — RADIUS capability discovery (groundwork only; config generation deliberately NOT implemented)
+
+Asked to implement RADIUS by reading the upstream repository's
+documentation. **Network egress is blocked in this environment** --
+both `github.com` and `raw.githubusercontent.com` return
+"Host not in allowlist" -- so I could not read that documentation, and
+therefore do not know tac_plus-ng's real RADIUS configuration syntax.
+
+That matters more here than it would in most features. This project
+generates a SINGLE configuration file that the running daemon loads.
+Emitting invented RADIUS directives into it would not merely fail to
+enable RADIUS: it would make the whole file unparseable and take
+working TACACS+ authentication down with it. A guess here is a
+production outage, not a cosmetic defect.
+
+It is also against this codebase's own established practice.
+`upstream_build` discovers build flags by running `./configure --help`
+against the real checkout rather than hard-coding them, and
+`config_compiler`'s comments record that the `host NAME { }` convention
+was confirmed against real upstream examples before being emitted. I
+applied the same rule rather than making an exception for a feature I
+was asked for.
+
+**What was built: `installer/radius_support.py`.** The installer
+already clones the real upstream source to
+`/opt/aaa-platform/upstream/event-driven-servers` and keeps it, so
+capability can be established from the actual code on the operator's
+machine instead of from assumption. It inspects, in order of
+authority: `./configure --help` for real RADIUS build flags; the built
+binary; RADIUS-related source files; and config-parser/documentation
+keywords.
+
+Two deliberate distinctions in the result:
+* `supported` requires real RADIUS source files or parser keywords. A
+  configure flag ALONE does not set it -- a flag can exist for a
+  feature that is absent or partial in a given checkout.
+* `syntax_confirmed` requires actual configuration keywords to have
+  been extracted, and is the gate on emitting anything. Without it the
+  correct report is "RADIUS present, syntax unconfirmed", not a
+  generated config.
+
+Verified across four cases including the two that matter: a configure
+flag alone correctly does NOT report support, and real source files
+correctly report support while still withholding
+`syntax_confirmed`.
+
+**Not implemented, and not stubbed:** RADIUS config generation,
+per-device RADIUS secrets, RADIUS accounting parsing, and any GUI. All
+of them depend on the syntax I cannot currently verify. Building the
+data model and UI first would produce a feature that looks finished
+and cannot work.
+
+---
+
 ### Added — browser icon (favicon)
 
 The app had no favicon at all, which is why Chrome showed a blank page

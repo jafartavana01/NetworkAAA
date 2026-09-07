@@ -59,6 +59,20 @@ class NetworkDevice(Base):
 
     shared_secret_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
 
+    # RADIUS, for devices that don't speak TACACS+. Confirmed against
+    # the upstream sample `tac_plus-ng-radius.cfg`, which emits BOTH
+    # secrets inside the SAME host block:
+    #     host world { address = ...; key = demo; radius.key = demo }
+    # so no separate device record or host block is needed -- a device
+    # can serve both protocols at once.
+    #
+    # Nullable and separate from shared_secret_encrypted on purpose:
+    # RADIUS and TACACS+ secrets are independent on real equipment, and
+    # silently reusing the TACACS+ secret would put a secret on the
+    # wire over a protocol the operator never chose to enable.
+    radius_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    radius_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

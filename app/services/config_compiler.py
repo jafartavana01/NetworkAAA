@@ -65,6 +65,7 @@ STATIC_PREAMBLE = """\
 id = spawnd {{
     background = no
     listen = {{ port = {tacacs_port} }}
+{radius_listen_block}\
     spawn = {{
         instances min = 1
         instances max = 10
@@ -78,10 +79,12 @@ id = tac_plus-ng {{
         destination = {log_dir}/tac_plus-ng-accounting.log
         accounting format = "${{nas}}{fs}${{user}}{fs}${{port}}{fs}${{nac}}{fs}${{accttype}}{fs}${{result}}{fs}${{service}}{fs}${{cmd}}"
     }}
-
+{radius_log_block}\
     access log = accesslog
     authorization log = authorlog
     accounting log = acctlog
+{radius_log_directives}\
+{radius_include_block}\
 
 {mavis_block}\
 {host_blocks}\
@@ -229,6 +232,66 @@ def _mavis_block(settings: AdSettings | None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _radius_blocks(settings) -> dict:
+    """
+    Builds the four RADIUS fragments injected into STATIC_PREAMBLE.
+
+    Every directive here is verbatim from the upstream sample
+    `tac_plus-ng/sample/tac_plus-ng-radius.cfg` read on a real
+    installation (see docs/RADIUS_FINDINGS.md):
+
+        listen { port = 1812 protocol = UDP }
+        listen { port = 1813 protocol = UDP flag = accounting }
+        log rad-accesslog { destination = ... }
+        log rad-acctlog   { destination = ... }
+        radius.access log = rad-accesslog
+        radius.accounting log = rad-acctlog
+        include = "$CONFDIR/radius-dict.cfg"
+
+    Note `flag = accounting` on the 1813 listener -- present in the
+    sample and easy to miss; without it the daemon has no way to tell
+    the accounting listener from the auth one.
+
+    When RADIUS is disabled every fragment is EMPTY, so the generated
+    file is byte-identical to what this compiler produced before RADIUS
+    existed. An operator who never enables it sees no change at all.
+    """
+    empty = {
+        "radius_listen_block": "",
+        "radius_log_block": "",
+        "radius_log_directives": "",
+        "radius_include_block": "",
+    }
+    if not settings or not settings.enabled:
+        return empty
+
+    protocol = settings.protocol or "UDP"
+    listen = (
+        f"    listen = {{ port = {settings.auth_port} protocol = {protocol} }}\n"
+        f"    listen = {{ port = {settings.acct_port} protocol = {protocol} flag = accounting }}\n"
+    )
+    logs = (
+        f"    log rad-accesslog {{ destination = {LOG_DIR}/tac_plus-ng-radius-access.log }}\n"
+        f"    log rad-acctlog {{ destination = {LOG_DIR}/tac_plus-ng-radius-accounting.log }}\n"
+    )
+    directives = (
+        "    radius.access log = rad-accesslog\n"
+        "    radius.accounting log = rad-acctlog\n"
+    )
+    # $CONFDIR is resolved by the daemon itself; the dictionaries ship
+    # with the distribution, so they are referenced rather than copied.
+    include = (
+        '    include = "$CONFDIR/radius-dict.cfg"\n'
+        if settings.include_dictionaries else ""
+    )
+    return {
+        "radius_listen_block": listen,
+        "radius_log_block": logs,
+        "radius_log_directives": directives,
+        "radius_include_block": include,
+    }
+
+
 def _host_block(device: NetworkDevice) -> str:
     secret = security.decrypt_secret(device.shared_secret_encrypted)
     lines = [f"    host {device.name} {{"]
@@ -244,6 +307,23 @@ def _host_block(device: NetworkDevice) -> str:
         # the generated file, pending confirmation of real syntax.
         lines.append(f"        # ipv6_address on file (not yet emitted, syntax unconfirmed): {device.ipv6_address}")
     lines.append(f"        key = {_quote(secret)}")
+
+    # RADIUS shared secret, in the SAME host block as the TACACS+ key.
+    # Confirmed verbatim from the upstream sample
+    # tac_plus-ng/sample/tac_plus-ng-radius.cfg:
+    #     host world { address = ...; key = demo; radius.key = demo }
+    # One host block therefore serves both protocols; no second block,
+    # device record or realm is needed.
+    #
+    # Emitted only when the device has RADIUS enabled AND a secret
+    # stored. A device flagged for RADIUS with no secret is skipped
+    # rather than given the TACACS+ key -- silently reusing a secret
+    # across protocols would expose it over a protocol the operator
+    # never configured for it.
+    if getattr(device, "radius_enabled", False) and getattr(device, "radius_secret_encrypted", None):
+        radius_secret = security.decrypt_secret(device.radius_secret_encrypted)
+        lines.append(f"        radius.key = {_quote(radius_secret)}")
+
     lines.append("    }")
     return "\n".join(lines) + "\n"
 
@@ -283,7 +363,7 @@ def _monitoring_host_block(placeholder_key: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _user_block(user: TacacsUser, group_name: str | None) -> str:
+def _user_block(user: TacacsUser, group_name: str | None, *, radius_enabled: bool = False) -> str:
     """
     Syntax confirmed against a real, working tac_plus-ng configuration
     (not legacy tac_plus, which uses different, incompatible
@@ -313,6 +393,22 @@ def _user_block(user: TacacsUser, group_name: str | None) -> str:
     """
     lines = [f"    user {user.username} {{"]
     lines.append(f"        password login = crypt {user.password_hash}")
+
+    # RADIUS PAP. Confirmed from the upstream sample
+    # tac_plus-ng/sample/tac_plus-ng-radius.cfg, where every user that
+    # authenticates over RADIUS carries:
+    #     password login = clear demo
+    #     password pap = login
+    # `password pap = login` means "use the same credential as the
+    # login password", so this adds a delegation, never a second stored
+    # secret -- no password is duplicated, re-encoded, or weakened.
+    #
+    # Emitted only when RADIUS is actually enabled platform-wide: on a
+    # TACACS+-only install it would be a directive with nothing to
+    # serve, and the generated config stays byte-identical to before.
+    if radius_enabled:
+        lines.append("        password pap = login")
+
     if group_name:
         lines.append(f"        member = {group_name}")
     lines.append("    }")
@@ -366,8 +462,21 @@ def _policy_block(policy: Policy, ordered_rules: list) -> str:
     lines = [f"    profile {policy.name} {{"]
     lines.append("        script {")
     lines.append("            if (service == shell) {")
+    # The initial EXEC (shell login) authorization arrives with an EMPTY
+    # cmd. Setting priv-lvl alone is NOT a decision -- without an
+    # explicit `permit` the empty command matches none of the `cmd =~`
+    # rules below and falls through to the policy's default_action,
+    # which for any deny-by-default policy means the user is refused
+    # login entirely with "% Authorization failed."
+    #
+    # This is emitted for EVERY policy regardless of default_action:
+    # denying the shell itself is not something a command policy is
+    # meant to express. A policy that should not grant login at all is
+    # expressed by not applying it to that user in the ruleset, not by
+    # silently failing their EXEC authorization.
     lines.append("                if (cmd == \"\") {")
     lines.append(f"                    set priv-lvl = {policy.default_priv_lvl}")
+    lines.append("                    permit")
     lines.append("                }")
 
     for rule in ordered_rules:
@@ -882,7 +991,16 @@ def compile_candidate(db: Session) -> str:
         # host-matching precedence.
         host_blocks += _monitoring_host_block(monitoring_settings.placeholder_key)
     group_blocks = "".join(_group_block(g) for g in groups)
-    user_blocks = "".join(_user_block(u, group_names_by_id.get(u.group_id)) for u in users)
+
+    # One query, reused for every user block: RADIUS PAP delegation is
+    # a platform-level setting, not a per-user one.
+    from ..models.radius_settings import RadiusSettings
+    _radius_settings = db.query(RadiusSettings).first()
+    _radius_on = bool(_radius_settings and _radius_settings.enabled)
+
+    user_blocks = "".join(
+        _user_block(u, group_names_by_id.get(u.group_id), radius_enabled=_radius_on) for u in users
+    )
     device_override_profile = _device_override_profile_block() if override_rule_texts else ""
     policy_blocks = device_override_profile + "".join(
         _policy_block(p, policy_engine.get_ordered_rules_for_policy(db, p)) for p, _ in compilable_policies
@@ -894,10 +1012,14 @@ def compile_candidate(db: Session) -> str:
     from ..platform_settings import load_settings
     tacacs_port = load_settings()["tacacs_port"]
 
+    from ..models.radius_settings import RadiusSettings
+    radius = _radius_blocks(db.query(RadiusSettings).first())
+
     return STATIC_PREAMBLE.format(
         log_dir=LOG_DIR,
         fs=ACCOUNTING_FIELD_SEPARATOR,
         tacacs_port=tacacs_port,
+        **radius,
         mavis_block=mavis_block,
         host_blocks=host_blocks,
         group_blocks=group_blocks,

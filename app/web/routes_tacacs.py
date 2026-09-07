@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 from .. import security
 from ..modules.registry import all_modules
 from ..modules.sidebar import build_sidebar_sections
-from .auth_helpers import current_admin_or_none
+from .auth_helpers import current_admin_or_none, redirect_to_login
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -28,10 +28,15 @@ def _require_admin(session_token: str | None):
     return current_admin_or_none(session_token)
 
 
-def _render(request: Request, session_token: str | None, template_name: str):
+def _render(request: Request, session_token: str | None, template_name: str, *, require_superadmin: bool = False):
     admin = _require_admin(session_token)
     if not admin:
-        return RedirectResponse(url="/login", status_code=302)
+        return redirect_to_login(session_token)
+    if require_superadmin and not admin.is_superadmin:
+        # Same pattern as app.web.routes_platform / routes_security:
+        # redirect rather than 403, so a standard admin who follows a
+        # bookmarked link lands somewhere useful.
+        return RedirectResponse(url="/dashboard", status_code=302)
 
     dashboard_item, nav_sections = build_sidebar_sections(all_modules(), is_superadmin=admin.is_superadmin)
     return templates.TemplateResponse(
@@ -135,6 +140,16 @@ def aaa_health_page(
     session_token: str | None = Cookie(default=None, alias=security.SESSION_COOKIE_NAME),
 ):
     return _render(request, session_token, "aaa_health.html")
+
+
+@router.get("/tacacs/radius", response_class=HTMLResponse)
+def radius_settings_page(
+    request: Request,
+    session_token: str | None = Cookie(default=None, alias=security.SESSION_COOKIE_NAME),
+):
+    # Superadmin-only, matching the API behind it: enabling RADIUS
+    # opens daemon listeners that did not previously exist.
+    return _render(request, session_token, "radius_settings.html", require_superadmin=True)
 
 
 @router.get("/tacacs/diagnostics", response_class=HTMLResponse)

@@ -85,7 +85,104 @@ def init_db() -> None:
         policy_command_set, policy_version, policy_condition_group, policy_condition,
         device_access_grant, ad_settings, monitoring_settings, aaa_template_settings,
         command_template, command_job, network_ops_check, network_ops_audit, audit_run,
-        audit_schedule_settings, audit_batch, ncm,
+        audit_schedule_settings, audit_batch, ncm, radius_settings,
     )
 
     Base.metadata.create_all(bind=get_engine())
+    _apply_additive_column_migrations()
+
+
+def _apply_additive_column_migrations() -> None:
+    """
+    Adds columns that exist in the models but not yet in the database.
+
+    `create_all()` creates missing TABLES but never alters existing
+    ones, so a column added to an existing table in a newer version is
+    silently skipped -- and the application then fails at runtime with
+    "column ... does not exist" deep inside an unrelated query. That is
+    exactly what happened when `radius_enabled` and
+    `radius_secret_encrypted` were added to `network_devices`: a clean
+    install worked, an upgrade broke every device query.
+
+    Scope is deliberately narrow, because this runs unattended at
+    startup against production data:
+
+      * ADD COLUMN only. Never drop, never alter a type, never rename.
+        A column in the database that is no longer in the models is
+        left exactly where it is -- removing it would destroy data
+        nobody asked to lose.
+      * A NOT NULL column is only added when the model supplies a
+        scalar default, since adding NOT NULL to a table with existing
+        rows fails without one. Without a default the column is added
+        as NULLABLE and a warning is logged, rather than the migration
+        failing and taking startup down with it.
+      * Every statement is `IF NOT EXISTS`, so re-running is a no-op.
+
+    Anything this cannot do safely is reported, not guessed at --
+    `installer.install_state.check_schema_drift` remains the full
+    report for an operator.
+    """
+    import logging
+
+    from sqlalchemy import inspect, text
+
+    logger = logging.getLogger(__name__)
+    engine = get_engine()
+
+    try:
+        inspector = inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+    except Exception as exc:  # noqa: BLE001 - never block startup on introspection
+        logger.warning("Could not inspect the database schema (%s); skipping column migration.", exc)
+        return
+
+    for table_name, table in Base.metadata.tables.items():
+        if table_name not in existing_tables:
+            continue  # create_all just made it; nothing to add
+        try:
+            actual = {c["name"] for c in inspector.get_columns(table_name)}
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not read columns of %s (%s); skipping.", table_name, exc)
+            continue
+
+        for column in table.columns:
+            if column.name in actual:
+                continue
+            try:
+                type_sql = column.type.compile(dialect=engine.dialect)
+            except Exception:
+                logger.warning(
+                    "Cannot render a SQL type for %s.%s; add it manually.", table_name, column.name
+                )
+                continue
+
+            clause = f"ADD COLUMN IF NOT EXISTS {column.name} {type_sql}"
+            default = getattr(column, "default", None)
+            default_value = getattr(default, "arg", None) if default is not None else None
+
+            if not column.nullable:
+                if isinstance(default_value, bool):
+                    clause += f" NOT NULL DEFAULT {'true' if default_value else 'false'}"
+                elif isinstance(default_value, (int, float)):
+                    clause += f" NOT NULL DEFAULT {default_value}"
+                elif isinstance(default_value, str):
+                    escaped = default_value.replace("'", "''")
+                    clause += f" NOT NULL DEFAULT '{escaped}'"
+                else:
+                    # No usable default: adding NOT NULL would fail on a
+                    # populated table. Add it nullable and say so, rather
+                    # than aborting startup.
+                    logger.warning(
+                        "Adding %s.%s as NULLABLE: the model declares it NOT NULL but supplies "
+                        "no scalar default, and a NOT NULL column cannot be added to a table "
+                        "with existing rows without one.",
+                        table_name, column.name,
+                    )
+
+            statement = f"ALTER TABLE {table_name} {clause}"
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(statement))
+                logger.info("Schema migration: added %s.%s", table_name, column.name)
+            except Exception as exc:  # noqa: BLE001
+                logger.error("Schema migration failed for %s.%s (%s).", table_name, column.name, exc)

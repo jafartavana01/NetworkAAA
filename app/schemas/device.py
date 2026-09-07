@@ -73,12 +73,19 @@ class DeviceBase(BaseModel):
 
 class DeviceCreate(DeviceBase):
     shared_secret: str = Field(min_length=1, max_length=256)
+    # RADIUS is opt-in per device. The secret is separate from the
+    # TACACS+ one because they are independent on real equipment --
+    # see NetworkDevice's own comment on why reusing it would be wrong.
+    radius_enabled: bool = False
+    radius_secret: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class DeviceUpdate(DeviceBase):
     # Leave shared_secret unset (None) to keep the existing secret --
     # the GUI never round-trips the real value back to the client.
     shared_secret: str | None = Field(default=None, min_length=1, max_length=256)
+    radius_enabled: bool = False
+    radius_secret: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 class DeviceOut(DeviceBase):
@@ -88,6 +95,10 @@ class DeviceOut(DeviceBase):
     has_secret: bool
     secret_suffix: str | None = None
     device_group_name: str | None = None
+    radius_enabled: bool = False
+    # Presence only -- the RADIUS secret is never returned to the
+    # client, same as the TACACS+ one.
+    has_radius_secret: bool = False
 
 
 class DeviceAaaPreviewRequest(BaseModel):

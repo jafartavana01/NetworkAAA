@@ -135,6 +135,8 @@ def _to_out(device: NetworkDevice, group_name: str | None = None) -> DeviceOut:
         enabled=device.enabled,
         has_secret=bool(device.shared_secret_encrypted),
         secret_suffix=_secret_suffix(device),
+        radius_enabled=bool(getattr(device, "radius_enabled", False)),
+        has_radius_secret=bool(getattr(device, "radius_secret_encrypted", None)),
     )
 
 
@@ -166,6 +168,10 @@ def create_device(
         device_group_id=group.id if group else None,
         enabled=payload.enabled,
         shared_secret_encrypted=security.encrypt_secret(payload.shared_secret),
+        radius_enabled=payload.radius_enabled,
+        radius_secret_encrypted=(
+            security.encrypt_secret(payload.radius_secret) if payload.radius_secret else None
+        ),
     )
     db.add(device)
     try:
@@ -220,6 +226,14 @@ def update_device(
     device.enabled = payload.enabled
     if payload.shared_secret:
         device.shared_secret_encrypted = security.encrypt_secret(payload.shared_secret)
+
+    device.radius_enabled = payload.radius_enabled
+    if payload.radius_secret:
+        device.radius_secret_encrypted = security.encrypt_secret(payload.radius_secret)
+    elif not payload.radius_enabled:
+        # Turning RADIUS off clears the stored secret rather than
+        # leaving it encrypted at rest for a protocol no longer in use.
+        device.radius_secret_encrypted = None
 
     try:
         db.commit()

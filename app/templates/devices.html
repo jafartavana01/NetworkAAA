@@ -423,6 +423,28 @@
         <div class="field-hint" id="secret-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new devices. Never displayed once saved — leave blank when editing to keep the current secret.</div>
       </div>
 
+      <div class="form-section">
+        <div class="form-section-title">RADIUS</div>
+        <label class="toggle-field field" style="margin-bottom:12px;">
+          <span class="toggle-switch">
+            <input type="checkbox" id="device-radius-enabled">
+            <span class="toggle-switch-slider"></span>
+          </span>
+          <span>This device uses RADIUS</span>
+        </label>
+        <div id="device-radius-fields" hidden>
+          <label class="field">
+            <span class="field-label">RADIUS secret <span class="badge badge-on cell-mono" id="radius-secret-badge" hidden style="margin-left:6px;"></span></span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('lock', 14) }}</span>
+              <input type="password" id="device-radius-secret" placeholder="" autocomplete="new-password">
+            </div>
+          </label>
+          <div class="field-hint" id="radius-secret-hint" style="margin-top:-10px;">Separate from the TACACS+ secret — they're independent on real equipment, so this is never reused from above. Leave blank when editing to keep the current one.</div>
+          <div class="field-hint" style="margin-top:8px;">Emitted as <span class="cell-mono">radius.key</span> in this device's host block. RADIUS listeners must also be enabled under <a href="/tacacs/radius">RADIUS Settings</a>.</div>
+        </div>
+      </div>
+
       <div id="device-form-error" class="form-error" role="alert" hidden></div>
 
       <div class="modal-actions">
@@ -577,18 +599,39 @@
       } else {
         secretBadge.hidden = true;
       }
+      document.getElementById('device-radius-enabled').checked = !!device.radius_enabled;
+      const radBadge = document.getElementById('radius-secret-badge');
+      radBadge.hidden = !device.has_radius_secret;
+      if (device.has_radius_secret) radBadge.textContent = 'configured';
+      document.getElementById('radius-secret-hint').textContent = device.has_radius_secret
+        ? 'A RADIUS secret is already saved. Leave blank to keep it, or enter a new one to replace it.'
+        : 'No RADIUS secret saved yet. Separate from the TACACS+ secret above — never reused from it.';
     } else {
       document.getElementById('device-modal-title').textContent = 'Add device';
       document.getElementById('device-id').value = '';
       document.getElementById('secret-hint').textContent = 'Required for new devices.';
       document.getElementById('secret-configured-badge').hidden = true;
+      document.getElementById('device-radius-enabled').checked = false;
+      document.getElementById('radius-secret-badge').hidden = true;
+      document.getElementById('radius-secret-hint').textContent =
+        'Separate from the TACACS+ secret above — never reused from it.';
     }
+    document.getElementById('device-radius-secret').value = '';
+    toggleRadiusFields();
     document.getElementById('device-modal-backdrop').hidden = false;
   }
 
   function closeModal() {
     document.getElementById('device-modal-backdrop').hidden = true;
   }
+
+  function toggleRadiusFields() {
+    // The secret input is only meaningful when RADIUS is on for this
+    // device; hiding it keeps the form honest about what will be saved.
+    document.getElementById('device-radius-fields').hidden =
+      !document.getElementById('device-radius-enabled').checked;
+  }
+  document.getElementById('device-radius-enabled').addEventListener('change', toggleRadiusFields);
 
   document.getElementById('add-device-btn').addEventListener('click', () => openModal(null));
   document.getElementById('device-cancel-btn').addEventListener('click', closeModal);
@@ -616,6 +659,10 @@
       enabled: document.getElementById('device-enabled').checked,
     };
     if (secret) payload.shared_secret = secret;
+
+    payload.radius_enabled = document.getElementById('device-radius-enabled').checked;
+    const radiusSecret = document.getElementById('device-radius-secret').value;
+    if (radiusSecret) payload.radius_secret = radiusSecret;
     if (!id && !secret) {
       errorBox.textContent = 'A shared secret is required for new devices.';
       errorBox.hidden = false;

@@ -1,0 +1,194 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}RADIUS Settings — NetOpsGuard{% endblock %}
+{% block breadcrumb %}TACACS+ / RADIUS Settings{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>RADIUS Settings</h1>
+    <p class="content-sub">RADIUS listeners for devices that don't speak TACACS+. The same daemon, users, groups and policies serve both protocols.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;border-color:var(--amber);">
+    <div class="panel-body" style="font-size:12px;color:var(--amber);">
+      ⚠ Enabling RADIUS opens new UDP listeners on this server. Nothing changes on the daemon until you compile and apply the configuration from <a href="/tacacs/config">Configuration</a> — the same workflow every other change uses.
+    </div>
+  </div>
+
+  <div class="status-card-grid" id="radius-kpis" style="margin-bottom:16px;"></div>
+
+  <form id="radius-form">
+    <label class="toggle-field field" style="margin-bottom:16px;">
+      <span class="toggle-switch">
+        <input type="checkbox" id="radius-enabled">
+        <span class="toggle-switch-slider"></span>
+      </span>
+      <span>Enable RADIUS listeners</span>
+    </label>
+
+    <div class="field-row">
+      <label class="field">
+        <span class="field-label">Authentication port</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('network', 14) }}</span>
+          <input type="number" id="radius-auth-port" min="1025" max="65535" value="1812">
+        </div>
+      </label>
+      <label class="field">
+        <span class="field-label">Accounting port</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('network', 14) }}</span>
+          <input type="number" id="radius-acct-port" min="1025" max="65535" value="1813">
+        </div>
+      </label>
+    </div>
+    <div class="field-hint" style="margin-top:-6px;margin-bottom:14px;">1812 and 1813 are the standard RADIUS ports. Ports below 1025 aren't offered — the daemon shouldn't need privileges it can do without.</div>
+
+    <label class="toggle-field field" style="margin-bottom:8px;">
+      <span class="toggle-switch">
+        <input type="checkbox" id="radius-dictionaries" checked>
+        <span class="toggle-switch-slider"></span>
+      </span>
+      <span>Include vendor dictionaries</span>
+    </label>
+    <div class="field-hint" style="margin-bottom:16px;">Pulls in the dictionaries shipped with tac_plus-ng (Cisco, Cisco-ASA, Fortinet, PaloAlto, Juniper, Microsoft, APC, MikroTik) by reference rather than copying them.</div>
+
+    <div class="form-section">
+      <div class="form-section-title">Transport</div>
+      <div class="content-sub" style="font-size:12px;">
+        UDP only. tac_plus-ng also documents TCP, DTLS and TLS (RadSec), but their listener syntax wasn't present in the sample configuration this was built against — so it isn't offered rather than guessed. Emitting a directive the daemon rejects would take TACACS+ down with it.
+      </div>
+    </div>
+
+    <div id="radius-error" class="form-error" role="alert" hidden></div>
+
+    <div style="display:flex;gap:10px;margin-top:16px;">
+      <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save Settings</button>
+      <a href="/tacacs/devices" class="btn-secondary btn-small" style="align-self:center;">Manage device RADIUS secrets</a>
+    </div>
+  </form>
+
+  <div class="content-head" style="margin-top:28px;"><h2>Generated Configuration</h2>
+    <p class="content-sub">What these settings add to the compiled tac_plus-ng configuration.</p>
+  </div>
+  <div class="panel panel-wide">
+    <div class="panel-body" id="radius-preview"></div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_NET = '{{ icons.icon("network", 16) }}';
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const esc = AAAPlatform.escapeHtml;
+
+  function renderPreview(s) {
+    const body = document.getElementById('radius-preview');
+    if (!s.enabled) {
+      body.innerHTML = '<div class="empty-state">RADIUS is disabled — the generated configuration is unchanged.</div>';
+      return;
+    }
+    // Mirrors exactly what config_compiler._radius_blocks emits, so an
+    // admin can see the real directives before applying them.
+    const lines = [
+      'id = spawnd {',
+      '    listen = { port = ' + s.auth_port + ' protocol = ' + s.protocol + ' }',
+      '    listen = { port = ' + s.acct_port + ' protocol = ' + s.protocol + ' flag = accounting }',
+      '}',
+      '',
+      'id = tac_plus-ng {',
+      '    log rad-accesslog { destination = .../tac_plus-ng-radius-access.log }',
+      '    log rad-acctlog { destination = .../tac_plus-ng-radius-accounting.log }',
+      '    radius.access log = rad-accesslog',
+      '    radius.accounting log = rad-acctlog',
+    ];
+    if (s.include_dictionaries) lines.push('    include = "$CONFDIR/radius-dict.cfg"');
+    lines.push('    host <device> { key = ...  radius.key = ... }');
+    lines.push('}');
+    body.innerHTML = '<div class="diff-view">' + esc(lines.join('\n')) + '</div>';
+  }
+
+  function apply(s) {
+    document.getElementById('radius-enabled').checked = s.enabled;
+    document.getElementById('radius-auth-port').value = s.auth_port;
+    document.getElementById('radius-acct-port').value = s.acct_port;
+    document.getElementById('radius-dictionaries').checked = s.include_dictionaries;
+
+    document.getElementById('radius-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'RADIUS', value: s.enabled ? 'Enabled' : 'Disabled',
+                            state: s.enabled ? 'is-signal' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_NET, label: 'Ports', value: s.auth_port + ' / ' + s.acct_port,
+                            sub: s.protocol }),
+      AAAPlatform.kpiCard({ icon: ICON_SERVER, label: 'Devices With RADIUS', value: s.devices_with_radius,
+                            state: (s.enabled && !s.devices_with_radius) ? 'is-amber' : '',
+                            sub: (s.enabled && !s.devices_with_radius)
+                              ? 'listeners open but no device uses them' : null }),
+    ].join('');
+    renderPreview(s);
+  }
+
+  async function load() {
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/radius/settings'); } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      document.getElementById('radius-preview').innerHTML =
+        '<div class="empty-state">' + (res && res.status === 403
+          ? 'RADIUS settings are restricted to superadministrators.'
+          : 'Could not load RADIUS settings.') + '</div>';
+      return;
+    }
+    apply(await res.json());
+  }
+
+  ['radius-enabled', 'radius-auth-port', 'radius-acct-port', 'radius-dictionaries'].forEach((id) => {
+    document.getElementById(id).addEventListener('input', () => {
+      // Live preview from the form, so the effect of a change is visible
+      // before saving.
+      renderPreview({
+        enabled: document.getElementById('radius-enabled').checked,
+        auth_port: document.getElementById('radius-auth-port').value || 1812,
+        acct_port: document.getElementById('radius-acct-port').value || 1813,
+        protocol: 'UDP',
+        include_dictionaries: document.getElementById('radius-dictionaries').checked,
+      });
+    });
+  });
+
+  document.getElementById('radius-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('radius-error');
+    errorBox.hidden = true;
+
+    const payload = {
+      enabled: document.getElementById('radius-enabled').checked,
+      auth_port: Number(document.getElementById('radius-auth-port').value) || 1812,
+      acct_port: Number(document.getElementById('radius-acct-port').value) || 1813,
+      include_dictionaries: document.getElementById('radius-dictionaries').checked,
+    };
+    if (payload.auth_port === payload.acct_port) {
+      errorBox.textContent = 'Authentication and accounting must use different ports.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const res = await AAAPlatform.authedFetch('/api/radius/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      errorBox.textContent = (b.detail && typeof b.detail === 'string') ? b.detail : 'Could not save RADIUS settings.';
+      errorBox.hidden = false;
+      return;
+    }
+    apply(await res.json());
+    AAAPlatform.toast('RADIUS settings saved — apply the configuration to activate them.');
+  });
+
+  load();
+})();
+</script>
+{% endblock %}
