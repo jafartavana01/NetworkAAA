@@ -21,6 +21,7 @@ from .database import get_sessionmaker
 from .modules import registry
 from .modules.core_module import register_core_module
 from .modules.ncm_module import register_ncm_module
+from .modules.radius_module import register_radius_module
 from .modules.network_ops_module import register_network_ops_module
 from .modules.security_module import register_security_module
 from .modules.tacacs_module import register_tacacs_module
@@ -146,6 +147,7 @@ def create_app() -> FastAPI:
     register_network_ops_module()
     register_security_module()
     register_ncm_module()
+    register_radius_module()
 
     @app.on_event("startup")
     def _on_startup() -> None:

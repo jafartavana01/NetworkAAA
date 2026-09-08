@@ -27,10 +27,25 @@
   </div>
 
   <form id="ad-form">
-    <label class="checkbox-field field" style="margin-bottom:16px;">
-      <input type="checkbox" id="ad-enabled">
-      <span>Enable Active Directory authentication</span>
-    </label>
+    <div class="feature-gate" id="ad-gate">
+      <span class="feature-gate-icon">{{ icons.icon('users', 20) }}</span>
+      <div class="feature-gate-body">
+        <div class="feature-gate-title">Active Directory Integration</div>
+        <div class="feature-gate-desc">Authenticate TACACS+ users against Microsoft Active Directory instead of, or alongside, local passwords.</div>
+        <div class="feature-gate-state" id="ad-gate-state">Disabled — enable it to configure domain settings.</div>
+      </div>
+      <div class="feature-gate-control">
+        <label class="toggle-field">
+          <span class="toggle-switch">
+            <input type="checkbox" id="ad-enabled">
+            <span class="toggle-switch-slider"></span>
+          </span>
+          <span id="ad-gate-label">Off</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="gated-config" id="ad-config" hidden>
 
     <label class="field">
       <span class="field-label">Domain name</span>
@@ -112,8 +127,16 @@
       <div class="panel-body" id="ad-test-result-body"></div>
     </div>
 
-    <div class="modal-actions" style="justify-content:flex-start;">
-      <button type="button" class="btn-secondary" id="ad-test-btn" style="width:auto;">Test Connection</button>
+      <div class="modal-actions" style="justify-content:flex-start;">
+        <button type="button" class="btn-secondary" id="ad-test-btn" style="width:auto;">Test Connection</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save Settings</button>
+      </div>
+    </div>
+
+    <!-- Saving while disabled is still allowed: turning AD OFF and
+         saving is a legitimate action, and hiding the only Save button
+         would make it impossible. -->
+    <div class="modal-actions" id="ad-disabled-actions" style="justify-content:flex-start;">
       <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save Settings</button>
     </div>
   </form>
@@ -139,6 +162,30 @@
   }
 
   // ---------- Domain-derived defaults ----------
+  // ---- Feature gate ------------------------------------------------
+  // The configuration below is meaningless until AD is enabled, so it
+  // is hidden rather than shown as twenty inert fields. The connection
+  // status panel is hidden too: reporting "Not configured" for a
+  // feature the admin has deliberately turned off is noise, not
+  // information.
+  function syncGate() {
+    const on = document.getElementById('ad-enabled').checked;
+    document.getElementById('ad-config').hidden = !on;
+    document.getElementById('ad-disabled-actions').hidden = on;
+    document.getElementById('ad-gate').classList.toggle('is-on', on);
+    document.getElementById('ad-gate-label').textContent = on ? 'On' : 'Off';
+    document.getElementById('ad-gate-state').textContent = on
+      ? 'Enabled — configure the domain and service account below.'
+      : 'Disabled — enable it to configure domain settings.';
+
+    const summary = document.getElementById('ad-status-summary');
+    if (summary) summary.hidden = !on;
+    const health = document.getElementById('ad-health-panel');
+    if (health) health.hidden = !on;
+  }
+  document.getElementById('ad-enabled').addEventListener('change', syncGate);
+  syncGate();
+
   // Keeps the Advanced fields in sync with Domain/Username as long as
   // the admin hasn't manually overridden them -- tracked by comparing
   // the current field value against what auto-derivation would have
@@ -200,6 +247,7 @@
     const s = await res.json();
 
     document.getElementById('ad-enabled').checked = s.enabled;
+    syncGate();
     document.getElementById('ad-host').value = s.host || '';
     document.getElementById('ad-port').value = s.port || 636;
     document.getElementById('ad-encryption-mode').value = s.use_starttls ? 'starttls' : (s.use_tls ? 'ldaps' : 'none');

@@ -845,9 +845,16 @@ table.data-table tr:hover td { background: var(--bg-panel-raised); }
   border-radius: 14px;
   box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
   width: fit-content;
-  min-width: 400px;
+  min-width: min(400px, 92vw);
+  /* Default is the SMALL size. Every dialog used to inherit a 480px cap
+     with always-on scrolling, which is why 19 of 22 templates worked
+     around it with one-off inline widths -- the exact one-off styling a
+     design system should remove. Width now comes from a size class
+     (.modal-sm / -md / -lg / -xl) chosen for the content. */
   max-width: min(92vw, 480px);
-  max-height: min(90vh, 100%);
+  /* Scroll only when the content genuinely exceeds the viewport: with a
+     max-height set, `auto` produces no scrollbar until it is reached. */
+  max-height: min(88vh, 100%);
   padding: 26px 26px 0 26px;
   overflow-y: auto;
   animation: modal-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -887,6 +894,9 @@ table.data-table tr:hover td { background: var(--bg-panel-raised); }
   background: var(--bg-panel);
   padding: 16px 0 24px 0;
 }
+/* Needed because the rule above sets display: a bare [hidden] would
+   otherwise have no effect. Same class of bug this project sweeps for. */
+.modal-actions[hidden] { display: none; }
 .field-hint { font-size: 11px; color: var(--text-faint); margin-top: 4px; }
 .field-row { display: flex; gap: 12px; }
 .field-row[hidden] { display: none; }
@@ -1734,3 +1744,82 @@ a.dash-kpi:hover { border-color: var(--line-bright); background: var(--bg-panel-
    and activated by Enter/Space. */
 .cmpl-control-row { cursor: pointer; }
 .cmpl-control-row:focus-visible { outline: 2px solid var(--signal); outline-offset: -2px; }
+
+
+/* ---------- modal sizing (design system) ----------
+   Four sizes, chosen by content rather than one width for everything:
+     sm  confirmations, delete prompts, one or two fields
+     md  ordinary forms -- device, user, credential editing
+     lg  multi-section forms, pickers, side-by-side content
+     xl  workspaces: scan results, large tables, execution output
+   Wider dialogs with two-column rows beat narrow dialogs that scroll,
+   which is the whole point of the scale. */
+.modal-sm { max-width: min(92vw, 460px); }
+.modal-md { max-width: min(94vw, 760px); }
+.modal-lg { max-width: min(95vw, 1040px); }
+.modal-xl { max-width: min(96vw, 1320px); }
+
+/* Two-column form rows collapse to one column when there is genuinely
+   not room, instead of squeezing two inputs into 150px each. */
+@media (max-width: 700px) {
+  .field-row { flex-direction: column; gap: 0; }
+}
+
+/* A form grid for wider dialogs: fields flow into as many columns as
+   fit, so a 10-field form fills a wide modal instead of becoming a tall
+   narrow column with a scrollbar. */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0 16px;
+}
+.form-grid .field-full { grid-column: 1 / -1; }
+
+/* ---------- feature gate (progressive disclosure) ----------
+   For a page whose entire configuration is meaningless until the
+   feature is switched on: Active Directory, RADIUS, monitoring.
+   Showing twenty inert fields to someone who has not enabled the
+   feature is the pattern this replaces.
+
+   Reusable rather than per-page: the same markup shape works for any
+   on/off-gated configuration screen, which is the point of having a
+   design system at all. */
+.feature-gate {
+  border: 1px solid var(--line-bright);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  padding: 22px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.feature-gate-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  background: var(--bg-panel-raised);
+  border: 1px solid var(--line);
+  color: var(--text-faint);
+}
+.feature-gate.is-on .feature-gate-icon { color: var(--signal); border-color: var(--signal); }
+.feature-gate-body { flex: 1; min-width: 220px; }
+.feature-gate-title { font-size: 15px; color: var(--text-primary); margin-bottom: 4px; }
+.feature-gate-desc { font-size: 12.5px; color: var(--text-dim); line-height: 1.5; }
+.feature-gate-state {
+  font-size: 12px;
+  margin-top: 8px;
+  color: var(--text-faint);
+}
+.feature-gate.is-on .feature-gate-state { color: var(--signal); }
+.feature-gate-control { flex-shrink: 0; display: flex; align-items: center; gap: 10px; }
+
+/* The configuration this gate controls. Hidden until the feature is on
+   -- `[hidden]` needs the override because the base rule sets display. */
+.gated-config { display: block; }
+.gated-config[hidden] { display: none; }

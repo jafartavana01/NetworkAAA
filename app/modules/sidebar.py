@@ -58,6 +58,7 @@ _SECTION_ORDER: list[tuple[str, str, str]] = [
     ("tacacs", "TACACS+ / RADIUS", "shield"),
     ("network_ops", "Network Operations", "terminal"),
     ("security", "Security Center", "shield-check"),
+    ("radius", "RADIUS", "shield"),
     ("ncm", "Config Management", "database"),
     ("system", "System", "settings"),
 ]
@@ -84,7 +85,12 @@ _SECTION_BY_PATH: dict[str, tuple[str, list[str]]] = {
     "/tacacs/sessions": ("tacacs", ["session", "sessions", "active sessions"]),
     "/tacacs/accounting": ("tacacs", ["accounting", "logs", "aaa accounting", "audit log"]),
     "/tacacs/aaa-health": ("tacacs", ["aaa health", "health"]),
-    "/tacacs/radius": ("tacacs", ["radius", "radius settings", "1812", "1813", "radsec", "pap", "chap"]),
+    "/radius/overview": ("radius", ["radius", "radius overview"]),
+    "/radius/server": ("radius", ["radius server", "1812", "1813", "listener"]),
+    "/radius/clients": ("radius", ["radius clients", "nas", "network access server"]),
+    "/radius/policies": ("radius", ["radius policies", "access-accept", "access-reject"]),
+    "/radius/attributes": ("radius", ["radius attributes", "dictionary", "av-pair", "service-type"]),
+    "/radius/accounting": ("radius", ["radius accounting", "acct", "sessions"]),
     "/tacacs/diagnostics": ("tacacs", ["diagnostics", "diagnose", "troubleshoot"]),
 
     # ---- Network Operations ----

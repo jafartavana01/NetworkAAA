@@ -1,0 +1,160 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}RADIUS Attributes — NetOpsGuard{% endblock %}
+{% block breadcrumb %}RADIUS / Attributes{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>RADIUS Attributes</h1>
+    <p class="content-sub">The attribute dictionary tac_plus-ng itself loads. These are the attributes you can use in RADIUS policies — read directly from the daemon's own dictionary, so what you can pick here is exactly what it will accept.</p>
+  </div>
+
+  <div class="status-card-grid" id="attr-kpis" style="margin-bottom:16px;"></div>
+
+  <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+    <label class="field" style="min-width:180px;">
+      <span class="field-label">Vendor</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+        <select id="filter-vendor"><option value="">All</option><option value="__std">Standard (RFC)</option></select>
+      </div>
+    </label>
+    <label class="field" style="min-width:160px;">
+      <span class="field-label">Type</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('folder', 14) }}</span>
+        <select id="filter-type"><option value="">All types</option></select>
+      </div>
+    </label>
+    <label class="field" style="min-width:200px;flex:1;">
+      <span class="field-label">Search</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+        <input type="text" id="filter-search" placeholder="Attribute name…">
+      </div>
+    </label>
+  </div>
+
+  <div id="attr-note" class="content-sub" style="margin-bottom:10px;"></div>
+  <div id="attr-wrap"><div class="empty-state">Loading…</div></div>
+  <div class="toolbar" style="margin-top:12px;">
+    <span class="content-sub" id="attr-page-info"></span>
+    <div style="display:flex;gap:8px;">
+      <button type="button" class="btn-ghost btn-small" id="attr-prev">Previous</button>
+      <button type="button" class="btn-ghost btn-small" id="attr-next">Next</button>
+    </div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_LIST = '{{ icons.icon("clipboard-list", 16) }}';
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const esc = AAAPlatform.escapeHtml;
+
+  const PAGE_SIZE = 25;
+  let attributes = [];
+  let page = 0;
+
+  function visible() {
+    const vendor = document.getElementById('filter-vendor').value;
+    const type = document.getElementById('filter-type').value;
+    const q = document.getElementById('filter-search').value.trim().toLowerCase();
+    return attributes.filter((a) => {
+      if (vendor === '__std' && a.vendor) return false;
+      if (vendor && vendor !== '__std' && a.vendor !== vendor) return false;
+      if (type && a.value_type !== type) return false;
+      if (q && !a.name.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }
+
+  function render() {
+    const rows = visible();
+    const maxPage = Math.max(0, Math.ceil(rows.length / PAGE_SIZE) - 1);
+    if (page > maxPage) page = maxPage;
+    const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+    const wrap = document.getElementById('attr-wrap');
+
+    if (!rows.length) {
+      wrap.innerHTML = attributes.length
+        ? '<div class="empty-state">No attributes match these filters.</div>'
+        : '<div class="empty-state"><div class="empty-state-title">No dictionary available</div>' +
+          '<p class="empty-state-desc">See the note above. No attribute list is shown rather than an invented one.</p></div>';
+      document.getElementById('attr-page-info').textContent = '';
+      return;
+    }
+
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>Attribute</th><th>Code</th><th>Type</th>' +
+      '<th>Vendor</th><th>Values</th><th>Policy reference</th></tr></thead><tbody>' +
+      slice.map((a) =>
+        '<tr><td>' + esc(a.name) + '</td>' +
+        '<td class="cell-mono">' + a.code + '</td>' +
+        '<td class="content-sub">' + esc(a.value_type) + '</td>' +
+        '<td class="content-sub">' + (a.vendor ? esc(a.vendor) + ' (' + a.vendor_id + ')' : 'standard') + '</td>' +
+        '<td class="content-sub">' +
+        (Object.keys(a.values).length
+          ? esc(Object.keys(a.values).slice(0, 4).join(', ')) +
+            (Object.keys(a.values).length > 4 ? ' +' + (Object.keys(a.values).length - 4) + ' more' : '')
+          : '\u2014') + '</td>' +
+        // The exact token an operator would use in a policy, so they
+        // never have to guess the vendor-qualified form.
+        '<td class="cell-mono content-sub">radius[' + esc(a.qualified_name) + ']</td></tr>').join('') +
+      '</tbody></table>';
+
+    document.getElementById('attr-page-info').textContent =
+      'Showing ' + (page * PAGE_SIZE + 1) + '\u2013' + Math.min((page + 1) * PAGE_SIZE, rows.length) +
+      ' of ' + rows.length;
+    document.getElementById('attr-prev').disabled = page === 0;
+    document.getElementById('attr-next').disabled = page >= maxPage;
+  }
+
+  document.getElementById('attr-prev').addEventListener('click', () => { if (page > 0) { page--; render(); } });
+  document.getElementById('attr-next').addEventListener('click', () => { page++; render(); });
+  ['filter-vendor', 'filter-type'].forEach((id) =>
+    document.getElementById(id).addEventListener('change', () => { page = 0; render(); }));
+  document.getElementById('filter-search').addEventListener('input', () => { page = 0; render(); });
+
+  async function load() {
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/radius/attributes'); } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      document.getElementById('attr-wrap').innerHTML =
+        '<div class="empty-state">Could not load the RADIUS attribute dictionary.</div>';
+      return;
+    }
+    const data = await res.json();
+    attributes = data.attributes;
+
+    document.getElementById('attr-note').innerHTML =
+      esc(data.note) + (data.source_path ? ' <span class="cell-mono">' + esc(data.source_path) + '</span>' : '');
+
+    const std = attributes.filter((a) => !a.vendor).length;
+    document.getElementById('attr-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_LIST, label: 'Attributes', value: attributes.length,
+                            state: data.available ? '' : 'is-amber' }),
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'Standard (RFC)', value: std }),
+      AAAPlatform.kpiCard({ icon: ICON_SERVER, label: 'Vendors', value: data.vendors.length,
+                            sub: data.vendors.slice(0, 4).join(', ') || null }),
+    ].join('');
+
+    document.getElementById('filter-vendor').innerHTML =
+      '<option value="">All</option><option value="__std">Standard (RFC)</option>' +
+      data.vendors.map((v) => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('');
+    const types = [...new Set(attributes.map((a) => a.value_type))].sort();
+    document.getElementById('filter-type').innerHTML =
+      '<option value="">All types</option>' +
+      types.map((t) => '<option value="' + esc(t) + '">' + esc(t) + '</option>').join('');
+
+    render();
+  }
+
+  load();
+})();
+</script>
+{% endblock %}

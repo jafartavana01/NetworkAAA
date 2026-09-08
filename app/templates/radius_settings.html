@@ -19,13 +19,27 @@
   <div class="status-card-grid" id="radius-kpis" style="margin-bottom:16px;"></div>
 
   <form id="radius-form">
-    <label class="toggle-field field" style="margin-bottom:16px;">
-      <span class="toggle-switch">
-        <input type="checkbox" id="radius-enabled">
-        <span class="toggle-switch-slider"></span>
-      </span>
-      <span>Enable RADIUS listeners</span>
-    </label>
+    <!-- Same feature-gate component as Active Directory: ports and
+         dictionary options are meaningless until RADIUS is on. -->
+    <div class="feature-gate" id="radius-gate">
+      <span class="feature-gate-icon">{{ icons.icon('shield', 20) }}</span>
+      <div class="feature-gate-body">
+        <div class="feature-gate-title">RADIUS Listeners</div>
+        <div class="feature-gate-desc">Serve RADIUS authentication and accounting for devices that don't speak TACACS+, from the same daemon and the same users, groups and devices.</div>
+        <div class="feature-gate-state" id="radius-gate-state">Disabled — no RADIUS ports are opened.</div>
+      </div>
+      <div class="feature-gate-control">
+        <label class="toggle-field">
+          <span class="toggle-switch">
+            <input type="checkbox" id="radius-enabled">
+            <span class="toggle-switch-slider"></span>
+          </span>
+          <span id="radius-gate-label">Off</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="gated-config" id="radius-config" hidden>
 
     <div class="field-row">
       <label class="field">
@@ -59,6 +73,8 @@
       <div class="content-sub" style="font-size:12px;">
         UDP only. tac_plus-ng also documents TCP, DTLS and TLS (RadSec), but their listener syntax wasn't present in the sample configuration this was built against — so it isn't offered rather than guessed. Emitting a directive the daemon rejects would take TACACS+ down with it.
       </div>
+    </div>
+
     </div>
 
     <div id="radius-error" class="form-error" role="alert" hidden></div>
@@ -112,11 +128,23 @@
     body.innerHTML = '<div class="diff-view">' + esc(lines.join('\n')) + '</div>';
   }
 
+  function syncGate() {
+    const on = document.getElementById('radius-enabled').checked;
+    document.getElementById('radius-config').hidden = !on;
+    document.getElementById('radius-gate').classList.toggle('is-on', on);
+    document.getElementById('radius-gate-label').textContent = on ? 'On' : 'Off';
+    document.getElementById('radius-gate-state').textContent = on
+      ? 'Enabled — apply the configuration to open the listeners.'
+      : 'Disabled — no RADIUS ports are opened.';
+  }
+  document.getElementById('radius-enabled').addEventListener('change', syncGate);
+
   function apply(s) {
     document.getElementById('radius-enabled').checked = s.enabled;
     document.getElementById('radius-auth-port').value = s.auth_port;
     document.getElementById('radius-acct-port').value = s.acct_port;
     document.getElementById('radius-dictionaries').checked = s.include_dictionaries;
+    syncGate();
 
     document.getElementById('radius-kpis').innerHTML = [
       AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'RADIUS', value: s.enabled ? 'Enabled' : 'Disabled',

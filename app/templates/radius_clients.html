@@ -1,0 +1,148 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}RADIUS Clients — NetOpsGuard{% endblock %}
+{% block breadcrumb %}RADIUS / Clients{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>RADIUS Clients</h1>
+    <p class="content-sub">Devices that send RADIUS requests to this platform. These are your existing devices — a NAS is a device NetOpsGuard already knows, so there is no separate client inventory to keep in step.</p>
+  </div>
+
+  <div class="status-card-grid" id="client-kpis" style="margin-bottom:16px;"></div>
+
+  <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+    <label class="field" style="min-width:180px;">
+      <span class="field-label">Show</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('list-checks', 14) }}</span>
+        <select id="filter-scope">
+          <option value="clients">RADIUS clients only</option>
+          <option value="all">All devices</option>
+          <option value="missing">RADIUS on, secret missing</option>
+        </select>
+      </div>
+    </label>
+    <label class="field" style="min-width:200px;flex:1;">
+      <span class="field-label">Search</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+        <input type="text" id="filter-search" placeholder="Name or IP…">
+      </div>
+    </label>
+    <a href="/tacacs/devices" class="btn-secondary btn-small" style="align-self:flex-end;">Manage devices</a>
+  </div>
+
+  <div id="clients-wrap"><div class="empty-state">Loading…</div></div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const esc = AAAPlatform.escapeHtml;
+
+  let devices = [];
+  let radiusServerEnabled = null;
+
+  function visible() {
+    const scope = document.getElementById('filter-scope').value;
+    const q = document.getElementById('filter-search').value.trim().toLowerCase();
+    return devices.filter((d) => {
+      if (scope === 'clients' && !d.radius_enabled) return false;
+      if (scope === 'missing' && !(d.radius_enabled && !d.has_secret)) return false;
+      if (q && !(d.device_name.toLowerCase().includes(q) || d.ip_address.toLowerCase().includes(q))) return false;
+      return true;
+    });
+  }
+
+  function render() {
+    const wrap = document.getElementById('clients-wrap');
+    const rows = visible();
+
+    if (!devices.length) {
+      wrap.innerHTML = '<div class="empty-state"><div class="empty-state-title">No devices yet</div>' +
+        '<p class="empty-state-desc">Add devices under TACACS+ / RADIUS \u2192 Devices, then enable RADIUS on the ones that need it.</p></div>';
+      return;
+    }
+    if (!rows.length) {
+      wrap.innerHTML = '<div class="empty-state"><div class="empty-state-title">No RADIUS clients</div>' +
+        '<p class="empty-state-desc">Switch "Show" to All devices, then enable RADIUS on a device to make it a client.</p></div>';
+      return;
+    }
+
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>Device</th><th>IP Address</th><th>Vendor</th>' +
+      '<th>Group</th><th>RADIUS</th><th>Shared Secret</th><th>Device</th><th></th></tr></thead><tbody>' +
+      rows.map((d) => {
+        // A client that is enabled but has no secret cannot
+        // authenticate anything -- called out rather than shown as a
+        // working client.
+        const secretCell = d.radius_enabled
+          ? (d.has_secret
+              ? '<span class="badge sec-sev-badge is-signal">configured</span>'
+              : '<span class="badge sec-sev-badge is-red">missing</span>')
+          : '<span class="content-sub">\u2014</span>';
+        return '<tr><td>' + esc(d.device_name) + '</td>' +
+          '<td class="cell-mono">' + esc(d.ip_address) + '</td>' +
+          '<td class="content-sub">' + esc(d.vendor || '\u2014') + '</td>' +
+          '<td class="content-sub">' + esc(d.device_group_name || '\u2014') + '</td>' +
+          '<td><span class="badge sec-sev-badge ' + (d.radius_enabled ? 'is-signal' : '') + '">' +
+          (d.radius_enabled ? 'Enabled' : 'Off') + '</span></td>' +
+          '<td>' + secretCell + '</td>' +
+          '<td><span class="badge sec-sev-badge ' + (d.enabled ? '' : 'is-amber') + '">' +
+          (d.enabled ? 'Active' : 'Disabled') + '</span></td>' +
+          '<td class="cell-actions"><a class="btn-secondary btn-small" href="/tacacs/devices">Edit</a></td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  function renderKpis() {
+    const clients = devices.filter((d) => d.radius_enabled);
+    const missing = clients.filter((d) => !d.has_secret).length;
+    const inactive = clients.filter((d) => !d.enabled).length;
+    document.getElementById('client-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_SERVER, label: 'RADIUS Clients', value: clients.length,
+                            sub: 'of ' + devices.length + ' devices' }),
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'Ready', value: clients.length - missing - inactive,
+                            state: 'is-signal', sub: 'enabled with a secret' }),
+      AAAPlatform.kpiCard({ icon: ICON_ALERT, label: 'Missing Secret', value: missing,
+                            state: missing ? 'is-red' : '',
+                            sub: missing ? 'cannot authenticate' : null }),
+      AAAPlatform.kpiCard({ icon: ICON_ALERT, label: 'Server', 
+                            value: radiusServerEnabled === null ? '\u2014' : (radiusServerEnabled ? 'Enabled' : 'Disabled'),
+                            state: radiusServerEnabled ? 'is-signal' : 'is-amber',
+                            sub: radiusServerEnabled === false ? 'clients will not be served' : null }),
+    ].join('');
+  }
+
+  ['filter-scope'].forEach((id) => document.getElementById(id).addEventListener('change', render));
+  document.getElementById('filter-search').addEventListener('input', render);
+
+  async function load() {
+    let res, srvRes;
+    try {
+      res = await AAAPlatform.authedFetch('/api/radius/clients?include_all=true');
+      srvRes = await AAAPlatform.authedFetch('/api/radius/settings');
+    } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      document.getElementById('clients-wrap').innerHTML =
+        '<div class="empty-state">Could not load devices.</div>';
+      return;
+    }
+    devices = await res.json();
+    // The server setting is superadmin-only; a standard admin gets 403
+    // here, which is a permission outcome and not an error -- the card
+    // shows a dash rather than claiming the server is off.
+    radiusServerEnabled = srvRes && srvRes.ok ? (await srvRes.json()).enabled : null;
+    renderKpis();
+    render();
+  }
+
+  load();
+})();
+</script>
+{% endblock %}

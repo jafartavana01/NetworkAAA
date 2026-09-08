@@ -204,44 +204,60 @@ def should_run_now(daily_run_time: str, last_run_at: datetime | None, now: datet
     return True
 
 
-async def scheduler_loop() -> None:
+def _poll_once() -> None:
     """
-    Runs for the lifetime of the process (started once, from
-    app.main's own startup event -- see that module for why this is a
-    SEPARATE startup handler, not folded into the existing sync one).
-    Sleeps between checks; the actual audit (blocking network I/O,
-    potentially one device at a time across a whole fleet) always runs
-    via asyncio.to_thread, never directly in this coroutine, so a slow
-    or hanging device can never block the web server itself from
-    handling ordinary requests while a scheduled run is in progress.
+    One scheduler tick, executed ENTIRELY inside a worker thread.
+
+    Opening a session, querying, running the audit and committing are
+    all blocking. Previously the queries and the commit ran directly in
+    the coroutine and only the audit was offloaded -- which meant a
+    slow query blocked the event loop, and an exhausted connection pool
+    blocked it indefinitely, leaving the process alive but serving
+    nothing.
+
+    It also passed a Session created on the event-loop thread into
+    `asyncio.to_thread`. SQLAlchemy sessions are not thread-safe. The
+    session is now created, used and closed on a single thread.
     """
     session_local = get_sessionmaker()
+    db: Session = session_local()
+    try:
+        settings = db.query(AuditScheduleSettings).first()
+        if settings and settings.enabled and settings.ssh_username and settings.ssh_password_encrypted:
+            now = datetime.now(timezone.utc)
+            if should_run_now(settings.daily_run_time, settings.last_run_at, now):
+                logger.info("Scheduled Security Center audit starting for all enabled devices.")
+                result = run_scheduled_audit(
+                    db,
+                    ssh_username=settings.ssh_username,
+                    ssh_password_encrypted=settings.ssh_password_encrypted,
+                )
+                settings.last_run_at = datetime.now(timezone.utc)
+                settings.last_run_status = result.status
+                settings.last_run_summary = result.summary
+                db.commit()
+                logger.info("Scheduled Security Center audit finished: %s", result.summary)
+    finally:
+        db.close()
+
+
+async def scheduler_loop() -> None:
+    """
+    Runs for the lifetime of the process (started once, from app.main's
+    own startup event -- see that module for why this is a SEPARATE
+    startup handler).
+
+    The coroutine does nothing blocking itself: the whole tick is
+    handed to a thread, so neither a slow database nor a hanging device
+    can stop the web server from answering ordinary requests.
+    """
     while True:
         try:
-            db: Session = session_local()
-            try:
-                settings = db.query(AuditScheduleSettings).first()
-                if settings and settings.enabled and settings.ssh_username and settings.ssh_password_encrypted:
-                    now = datetime.now(timezone.utc)
-                    if should_run_now(settings.daily_run_time, settings.last_run_at, now):
-                        logger.info("Scheduled Security Center audit starting for all enabled devices.")
-                        result = await asyncio.to_thread(
-                            run_scheduled_audit, db,
-                            ssh_username=settings.ssh_username,
-                            ssh_password_encrypted=settings.ssh_password_encrypted,
-                        )
-                        settings.last_run_at = datetime.now(timezone.utc)
-                        settings.last_run_status = result.status
-                        settings.last_run_summary = result.summary
-                        db.commit()
-                        logger.info("Scheduled Security Center audit finished: %s", result.summary)
-            finally:
-                db.close()
+            await asyncio.to_thread(_poll_once)
         except Exception:
             # A failure in the scheduler's OWN bookkeeping (e.g. a
-            # transient database hiccup) must never kill the loop --
-            # an unattended daily job that silently stops running
-            # after one bad poll is worse than one that logs an error
-            # and tries again next cycle.
+            # transient database hiccup) must never kill the loop -- an
+            # unattended daily job that silently stops after one bad
+            # poll is worse than one that logs and retries.
             logger.exception("Scheduled audit poll failed; will retry next cycle.")
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)

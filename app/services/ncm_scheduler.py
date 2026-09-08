@@ -102,42 +102,67 @@ def run_due_schedule(db: Session, schedule: NcmBackupSchedule, *, ssh_username: 
         db.commit()
 
 
-async def scheduler_loop() -> None:
+def _poll_once() -> None:
     """
-    Runs for the process lifetime, started once from app.main. The
-    backup itself always runs via asyncio.to_thread -- it is blocking
-    SSH work across potentially many devices, and running it directly
-    in this coroutine would stall the web server for the duration of a
-    fleet backup.
+    One scheduler tick, executed ENTIRELY inside a worker thread.
+
+    Everything here is blocking: opening a session, querying, and the
+    SSH backups themselves. None of it may touch the event loop.
+
+    Two bugs this shape fixes, both of which took the web server down
+    while leaving the process alive:
+
+      * The DB queries used to run directly in the coroutine. A
+        synchronous query blocks the event loop for its duration, and
+        if the connection pool is exhausted `session_local()` blocks
+        FOREVER -- the process keeps running and answering nothing,
+        which is exactly the "service up, pages dead" symptom.
+      * A Session created on the event-loop thread was passed into
+        `asyncio.to_thread`. SQLAlchemy sessions are not thread-safe;
+        the same mistake ncm_backup deliberately avoids by having its
+        worker threads return plain dicts.
+
+    The session is now created, used and closed on one thread.
     """
     session_local = get_sessionmaker()
+    db: Session = session_local()
+    try:
+        settings = db.query(AuditScheduleSettings).first()
+        have_credentials = bool(settings and settings.ssh_username and settings.ssh_password_encrypted)
+
+        schedules = db.query(NcmBackupSchedule).filter(NcmBackupSchedule.enabled.is_(True)).all()
+        now = datetime.now(timezone.utc)
+        due = [s for s in schedules if should_run_now(s.daily_run_time, s.last_run_at, now)]
+
+        if due and not have_credentials:
+            # Never silently skip: an admin who configured a schedule
+            # but no service account needs to know why nothing is
+            # being backed up.
+            logger.warning(
+                "%s NCM schedule(s) are due but no backup service account is configured; skipping.", len(due)
+            )
+        elif due:
+            password = security.decrypt_secret(settings.ssh_password_encrypted)
+            for schedule in due:
+                run_due_schedule(
+                    db, schedule,
+                    ssh_username=settings.ssh_username, ssh_password=password,
+                )
+    finally:
+        db.close()
+
+
+async def scheduler_loop() -> None:
+    """
+    Runs for the process lifetime, started once from app.main.
+
+    The coroutine itself does nothing blocking: the entire tick is
+    handed to a thread, so neither a slow query nor a fleet-wide backup
+    can stall the web server.
+    """
     while True:
         try:
-            db: Session = session_local()
-            try:
-                settings = db.query(AuditScheduleSettings).first()
-                have_credentials = bool(settings and settings.ssh_username and settings.ssh_password_encrypted)
-
-                schedules = db.query(NcmBackupSchedule).filter(NcmBackupSchedule.enabled.is_(True)).all()
-                now = datetime.now(timezone.utc)
-                due = [s for s in schedules if should_run_now(s.daily_run_time, s.last_run_at, now)]
-
-                if due and not have_credentials:
-                    # Never silently skip: an admin who configured a
-                    # schedule but no service account needs to know why
-                    # nothing is being backed up.
-                    logger.warning(
-                        "%s NCM schedule(s) are due but no backup service account is configured; skipping.", len(due)
-                    )
-                elif due:
-                    password = security.decrypt_secret(settings.ssh_password_encrypted)
-                    for schedule in due:
-                        await asyncio.to_thread(
-                            run_due_schedule, db, schedule,
-                            ssh_username=settings.ssh_username, ssh_password=password,
-                        )
-            finally:
-                db.close()
+            await asyncio.to_thread(_poll_once)
         except Exception:
             # A failure in the loop's own bookkeeping must never kill
             # it -- a scheduler that silently stops after one bad poll

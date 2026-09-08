@@ -16,6 +16,7 @@ response says so rather than implying the ports are already live.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -24,7 +25,8 @@ from ..models.admin import AdminUser
 from ..models.device import NetworkDevice
 from ..models.radius_settings import RadiusSettings
 from ..schemas.radius import RadiusSettingsOut, RadiusSettingsUpdate
-from .deps import get_current_superadmin, verify_csrf
+from ..services import radius_dictionary
+from .deps import get_current_admin, get_current_superadmin, verify_csrf
 
 router = APIRouter(prefix="/api/radius", tags=["radius"])
 
@@ -77,3 +79,106 @@ def update_radius_settings(
     db.commit()
     db.refresh(s)
     return _out(db, s)
+
+
+# ------------------------------------------------------- attributes
+
+class RadiusAttributeOut(BaseModel):
+    name: str
+    code: int
+    value_type: str
+    vendor: str | None
+    vendor_id: int | None
+    qualified_name: str
+    #: Enumerated values when the dictionary defines them, so the GUI
+    #: can offer a dropdown instead of a free-text box.
+    values: dict
+
+
+class RadiusAttributesOut(BaseModel):
+    available: bool
+    source_path: str | None
+    note: str
+    attributes: list[RadiusAttributeOut]
+    vendors: list[str]
+
+
+@router.get("/attributes", response_model=RadiusAttributesOut)
+def list_radius_attributes(
+    _admin: AdminUser = Depends(get_current_admin),
+):
+    """
+    The RADIUS attribute dictionary tac_plus-ng itself loads.
+
+    Read from the shipped `radius-dict.cfg` rather than a list
+    maintained here, so what an operator can pick is exactly what the
+    daemon accepts. When the file is missing the response is honestly
+    empty with an explanatory note -- never an invented list.
+
+    Read-only: the dictionary belongs to the daemon distribution, and
+    editing it from the GUI would put the platform's idea of valid
+    attributes out of step with the daemon's on the next upgrade.
+    """
+    result = radius_dictionary.load_dictionary()
+    return RadiusAttributesOut(
+        available=result.available, source_path=result.source_path, note=result.note,
+        attributes=[
+            RadiusAttributeOut(
+                name=a.name, code=a.code, value_type=a.value_type,
+                vendor=a.vendor, vendor_id=a.vendor_id,
+                qualified_name=a.qualified_name, values=a.values,
+            )
+            for a in result.attributes
+        ],
+        vendors=sorted({a.vendor for a in result.attributes if a.vendor}),
+    )
+
+
+# ---------------------------------------------------------- clients
+
+class RadiusClientOut(BaseModel):
+    """A RADIUS client is an EXISTING device with RADIUS enabled -- not
+    a separate inventory. `has_secret` is a presence flag; the secret
+    itself is never returned."""
+    device_id: str
+    device_name: str
+    ip_address: str
+    vendor: str | None
+    device_group_name: str | None
+    enabled: bool
+    radius_enabled: bool
+    has_secret: bool
+
+
+@router.get("/clients", response_model=list[RadiusClientOut])
+def list_radius_clients(
+    include_all: bool = False,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(get_current_admin),
+):
+    """
+    Devices acting as RADIUS clients.
+
+    `include_all=true` returns every device, so the GUI can offer
+    existing inventory to enable rather than making an admin retype a
+    device that already exists. This is why there is no separate RADIUS
+    client table: a NAS is a device this platform already knows.
+    """
+    from ..models.device_group import DeviceGroup
+
+    q = db.query(NetworkDevice)
+    if not include_all:
+        q = q.filter(NetworkDevice.radius_enabled.is_(True))
+    devices = q.order_by(NetworkDevice.name.asc()).all()
+    groups = {g.id: g.name for g in db.query(DeviceGroup).all()}
+
+    return [
+        RadiusClientOut(
+            device_id=str(d.id), device_name=d.name, ip_address=d.ip_address,
+            vendor=getattr(d, "vendor", None),
+            device_group_name=groups.get(d.device_group_id),
+            enabled=bool(d.enabled), radius_enabled=bool(d.radius_enabled),
+            has_secret=bool(d.radius_secret_encrypted),
+        )
+        for d in devices
+    ]

@@ -153,3 +153,63 @@ sudo python3 -m installer.radius_support --dump
 
 This prints the four daemon-side sample configurations in full, which
 answers all four questions above from real, working syntax.
+
+
+---
+
+# RADIUS GUI redesign — capability audit
+
+Before building the requested seven-page RADIUS section, each page was
+checked against what tac_plus-ng can actually be made to do, using the
+confirmed sample configuration. Recorded here so the split between
+"built" and "not built" is evidence-based.
+
+## Supported — confirmed syntax exists
+
+| Page | Backing syntax | Status |
+|---|---|---|
+| Server | `listen { port = N protocol = UDP }`, `radius.access log`, `radius.accounting log` | Already built; needs expanding |
+| Clients | `host NAME { address = ... key = ... radius.key = ... }` | Device model already carries `radius_enabled` + `radius_secret_encrypted` |
+| Attributes | `radius.dictionary` / `radius.dictionary <Vendor> <id>` | Parser built, reads the real shipped file |
+| Policies | `if (aaa.protocol == radius) { if (radius[Attr] == V) { set radius[Vendor:Attr] = "..." permit } }` | Syntax confirmed in the sample; not yet generated |
+
+## NOT supported by the current engine — evidence
+
+**CoA / Disconnect-Request (page 7).** No evidence of any kind was
+found: not in the upstream README (which lists RADIUS transports and
+auth methods but never CoA), not in the confirmed sample
+configurations, and not in the RADIUS source-file names the capability
+detector reported (`config_radius.c`, `config_radius.h`,
+`protocol_radius.h`).
+
+CoA additionally requires the server to act as a CLIENT — originating
+UDP to port 3799 on the NAS — which is a different role from anything
+tac_plus-ng does elsewhere in this platform.
+
+**A CoA page will therefore not be built on assumption.** Building
+"View sessions / Disconnect" controls that cannot work is exactly the
+fake functionality the brief rules out. To settle it, on the server:
+
+```
+grep -ril "3799\|disconnect-request\|coa" \
+  /opt/aaa-platform/upstream/event-driven-servers/tac_plus-ng/
+```
+
+If that returns real hits, CoA becomes implementable and this entry
+should be revisited.
+
+**Authentication statistics and accounting events (pages 1 and 6).**
+`radius.access log` and `radius.accounting log` produce real log files,
+so the data exists. What is NOT yet confirmed is their LINE FORMAT: the
+sample declares both with a `destination` only and no explicit
+`accounting format`, so the default layout is unknown.
+
+The TACACS+ accounting log is parseable in this platform precisely
+because this project *defines* its format string. The same approach is
+likely to work for RADIUS, but whether `accounting format = "..."` is
+accepted inside a `radius.accounting log` block has not been confirmed
+against upstream, and a rejected directive would break the whole
+generated configuration.
+
+Statistics and accounting pages are therefore blocked on that single
+question, not on effort.

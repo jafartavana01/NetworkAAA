@@ -12,6 +12,274 @@ it was built alongside.
 
 ## 2026-09-03
 
+### Fixed — three RADIUS routes pointed at templates that do not exist
+
+Caught during verification, before it shipped. The previous pass moved
+RADIUS into its own nav section and intended to drop the routes for
+pages not yet built. The removal used a regex that silently matched
+nothing, so `/radius/overview`, `/radius/policies` and
+`/radius/accounting` remained registered with no template behind them
+-- all three would have returned a 500.
+
+Removed properly, and a check added to the verification pass: every
+`_render(...)` template argument is now confirmed to exist on disk,
+and every RADIUS nav entry is confirmed to resolve to a registered
+route. A "the regex ran without error" result is not evidence the edit
+happened.
+
+### Fixed — web server stopped answering after ~10 minutes while the process stayed alive
+
+Reported symptom: the service ran, the server was reachable, but no
+page loaded. The journal was the clue -- it showed the app STILL making
+its periodic `systemctl` status calls, so the process was alive and
+working. A crash looks nothing like that. A blocked event loop looks
+exactly like that.
+
+**Two bugs, both mine, both in the scheduler loops.**
+
+1. **Blocking database work ran directly on the event loop.** Both
+   `ncm_scheduler.scheduler_loop` and
+   `scheduled_audit.scheduler_loop` called `session_local()` and
+   `db.query(...)` inside the coroutine, offloading only the SSH work
+   to a thread. A synchronous query blocks the loop for its duration --
+   and if the connection pool is exhausted, `session_local()` blocks
+   INDEFINITELY. The process keeps running and answers nothing, which
+   is precisely the reported symptom and why it appeared minutes after
+   startup rather than at boot.
+
+2. **A Session created on the event-loop thread was passed into
+   `asyncio.to_thread`.** SQLAlchemy sessions are not thread-safe.
+   `ncm_backup` deliberately avoids this by having its worker threads
+   return plain dicts and doing all writes on one thread; the
+   schedulers did the opposite. Undefined behaviour under concurrency,
+   and a plausible route to the pool exhaustion in (1).
+
+**Fix**: each loop's entire tick now lives in `_poll_once()`, executed
+wholly inside `asyncio.to_thread`. The session is created, used and
+closed on one thread, and the coroutine does nothing blocking at all --
+only `await asyncio.to_thread(...)` and `await asyncio.sleep(...)`.
+
+**Verified by measurement, not inspection.** A simulation of both
+shapes under load: the old pattern produced a **1001 ms** worst-case
+request stall, the new one **1 ms** -- a ~930x improvement, with an
+assertion that the old shape demonstrably stalls so the test cannot
+pass vacuously. Also asserted via AST that neither coroutine contains
+`db.query`, `session_local()`, `db.commit` or `db.close` any more.
+
+**On my verification generally.** This is the third runtime failure to
+reach the server. Compilation, then import-time names, and now
+event-loop behaviour -- each a category my checks did not cover.
+Static checks cannot catch a blocked loop; only reasoning about what
+runs where can. Both schedulers were written with a docstring claiming
+the blocking work was offloaded, and that claim was true of the SSH
+call and false of the database call in the same function. A comment
+asserting a property is not evidence of it.
+
+---
+
+### Fixed — service failed to start: missing `BaseModel` import in routes_radius
+
+`app/api/routes_radius.py` defined three Pydantic response models but
+never imported `BaseModel`. The service raised `NameError` at import
+time, exited 1, and systemd restart-looped it. My regression, from the
+RADIUS attributes/clients work.
+
+**Why my verification missed it, and what I did about that.**
+`py_compile` COMPILES a module; it never IMPORTS one. A missing import
+is not a syntax error, so the file compiled cleanly every time while
+being guaranteed to fail the moment Python actually executed the class
+definitions. Every "full project compiles" line in this changelog was
+therefore weaker evidence than it appeared -- it proved the files were
+parseable, not loadable.
+
+Added `tests/check_undefined_names.py`, which walks each module's AST
+and reports any name used by module-level code -- base classes,
+decorators, default arguments, module-level assignments and
+expressions -- that is not imported, defined, or a builtin. Function
+BODIES are deliberately skipped: a name resolved at call time is a
+different and far less fatal problem, and flagging those would make
+the check noisy enough to ignore.
+
+It cannot import the real modules (SQLAlchemy, FastAPI and Pydantic
+are not installed in the build environment, which is precisely how the
+gap arose), so it reasons statically instead. That is enough for this
+class of bug.
+
+**Verified it actually catches the failure**: reintroducing the exact
+missing import produces three specific findings naming the file, line,
+class and missing name -- while `py_compile` passes the same file
+without complaint, demonstrating the gap directly rather than
+asserting it.
+
+Clean across all 178 modules. Also added a check that every template
+referenced by a `_render(...)` call exists on disk, since a broken
+render target is the same shape of failure: invisible to compilation,
+fatal at runtime.
+
+---
+
+### Changed — progressive disclosure via a reusable feature gate (UI/UX pass, part 2)
+
+Spec sections 8-10: a page whose configuration is meaningless until the
+feature is switched on should not show that configuration. Active
+Directory was the named example -- nine fields plus a connection-status
+panel, all rendered whether or not AD was enabled.
+
+**Built as a reusable component, not a one-off.** `.feature-gate` plus
+`.gated-config` is the same markup shape for any on/off-gated
+configuration screen, which is the point of section 26. Applied to
+Active Directory AND the RADIUS server page in this pass; monitoring
+and any future gated feature use the same two classes.
+
+The gate itself carries the state rather than leaving it implied: a
+title, a one-line description of what the feature does, and an explicit
+state line that changes between "Disabled — enable it to configure
+domain settings" and "Enabled — configure the domain and service
+account below". The toggle is labelled On/Off in text as well as
+position, so the state does not depend on reading a switch graphic.
+
+**Two details that mattered:**
+* When AD is disabled the connection-status and health panels are
+  hidden too. Reporting "Not configured" for a feature an admin has
+  deliberately turned off is noise, not information.
+* A Save button remains available in the disabled state, in its own
+  action row. Turning AD **off** and saving is a legitimate action, and
+  hiding the only Save button behind the gate would have made it
+  impossible -- a bug the obvious implementation walks straight into.
+
+**A real CSS bug caught while wiring it:** `.modal-actions` sets
+`display: flex`, so the bare `hidden` attribute on the disabled-state
+action row would have had no effect and BOTH button rows would have
+shown at once. Added `.modal-actions[hidden]` -- the same class of bug
+this project already sweeps for, found by running that sweep rather
+than by noticing it.
+
+Active Directory keeps its existing Advanced-settings collapse, which
+already implemented section 9 correctly; nothing there was rebuilt.
+
+No backend, API, permission or business logic changed.
+
+**Verified**: 46 templates parse; both gated pages render their gate
+markup with zero ID mismatches and valid scripts; the project-wide
+`[hidden]` sweep is clean after the fix; full project compiles;
+authorization suite passes.
+
+---
+
+### Changed — modal sizing design system (UI/UX pass, part 1)
+
+Audited the modal layer before changing anything, and the root cause
+was systemic rather than per-page: the base `.modal` was capped at
+**480px** with always-on `overflow-y: auto`. Every dialog therefore
+inherited "narrow and scrolling", and **19 of 22 templates worked
+around it with one-off inline widths** -- precisely the per-page
+styling a design system exists to remove.
+
+**Four content-driven sizes** replace the single cap:
+
+    modal-sm   460px   confirmations, delete prompts, one or two fields
+    modal-md   760px   ordinary forms -- device, user, credential editing
+    modal-lg  1040px   multi-section forms, pickers, side-by-side content
+    modal-xl  1320px   workspaces: execution output, large tables
+
+All 19 inline overrides were replaced with these classes, and the
+forced `max-height: 90vh; overflow-y: auto` they carried was dropped
+-- the base rule already scrolls only when content genuinely exceeds
+the viewport, so the scrollbars those overrides created were
+unnecessary.
+
+Sizes were then assigned by CONTENT rather than left uniform:
+execution output and the generated-configuration viewer are `xl`;
+the device form, policy editor, permission matrix and device pickers
+are `lg`; the rest `md`. The resulting spread is 11 lg / 9 md / 2 xl,
+which is the point -- one width for everything was the original
+problem.
+
+**Two supporting rules:**
+* `.field-row` now collapses to a single column below 700px, instead
+  of squeezing two inputs into ~150px each.
+* New `.form-grid` flows fields into as many columns as fit, so a
+  ten-field form fills a wide dialog rather than becoming a tall
+  narrow column.
+
+The device form already used `field-row` in nine places -- it did not
+need restructuring, only the width to use it, which `modal-lg` now
+provides.
+
+No template markup beyond the modal class changed, and no backend,
+API, or business logic was touched.
+
+**Verified**: 46 templates parse; CSS brace-balanced with all six new
+classes present; `[hidden]` sweep clean; authorization suite passes;
+full project compiles.
+
+---
+
+### Added — RADIUS attribute dictionary (parsed from the real upstream file), plus a capability audit
+
+First step of the RADIUS GUI redesign. Started with an end-to-end
+audit of what tac_plus-ng can actually be made to do, page by page,
+because two of the seven requested pages turn out to depend on things
+that are not confirmed to exist. Recorded in
+`docs/RADIUS_FINDINGS.md`.
+
+**Attribute dictionary — built, and NOT hardcoded.**
+`app/services/radius_dictionary.py` parses
+`tac_plus-ng/sample/radius-dict.cfg` from the upstream checkout the
+installer already clones. The attributes an operator can pick are then
+exactly the attributes the daemon will accept; a hand-maintained list
+would drift the moment upstream changed one, and the GUI would start
+offering attributes that fail at config-compile time. Vendor
+dictionaries (Cisco, Cisco-ASA, Fortinet, PaloAlto, Juniper, Microsoft,
+APC, MikroTik) come with their real vendor IDs rather than being
+transcribed.
+
+Written as an explicit brace-depth scanner rather than independent
+regexes, because an attribute's enumerated-value block
+(`Login-User 1`) is only distinguishable from other tokens by its
+nesting.
+
+**When the file is absent it returns EMPTY and says so** -- no
+fallback list. An attribute picker showing plausible attributes the
+daemon may not accept is worse than one that admits it could not read
+the dictionary.
+
+Verified against the real dictionary content: 17 attributes across
+standard and three vendor blocks; `Service-Type` enumerations parsed
+(`Administrative-User` = 6); `Cisco-AVPair` qualifying to
+`Cisco:Cisco-AVPair`, exactly the form the sample's scripts use;
+MikroTik vendor id 14988; enumerated values correctly NOT leaking into
+the attribute list; and a missing file returning unavailable.
+
+**Capability audit — what will and will not be built:**
+
+*Supported, syntax confirmed*: Server (listeners and log targets),
+Clients (the device model already carries `radius_enabled` and
+`radius_secret_encrypted`, so no duplicate inventory is needed),
+Attributes, and Policies -- the sample confirms
+`if (aaa.protocol == radius) { if (radius[Attr] == V) { set
+radius[Vendor:Attr] = "..." permit } }`.
+
+*NOT supported — CoA.* No evidence of any kind: not in the upstream
+README (which lists RADIUS transports and auth methods but never CoA),
+not in the confirmed samples, not in the RADIUS source filenames the
+detector reported. CoA also requires the server to act as a CLIENT
+originating UDP to port 3799, a role tac_plus-ng plays nowhere else
+here. **A CoA page is deliberately not built** -- "View sessions /
+Disconnect" controls that cannot work are exactly the fake
+functionality the brief rules out. A one-line grep to settle it is in
+the findings doc.
+
+*Blocked, not unbuilt — statistics and accounting events.* Both logs
+are real and produced; their LINE FORMAT is not confirmed. The sample
+declares them with a `destination` only, so the default layout is
+unknown, and whether `accounting format = "..."` is accepted inside a
+`radius.accounting log` block has not been verified. A rejected
+directive would break the entire generated configuration, so this is
+blocked on one question rather than on effort.
+
+---
+
 ### Added — Module Management page; corrected the installer's stale "next steps" message
 
 Prompted by a question about the installer's closing line, which said:
