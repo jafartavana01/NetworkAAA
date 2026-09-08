@@ -96,8 +96,6 @@ _SECTION_BY_PATH: dict[str, tuple[str, list[str]]] = {
     # ---- Network Operations ----
     "/network-ops/jobs": ("network_ops", ["command job", "command jobs", "job", "jobs"]),
     "/network-ops/templates": ("network_ops", ["template", "templates", "command template"]),
-    "/network-ops/checks": ("network_ops", ["check", "checks"]),
-    "/network-ops/audits": ("network_ops", ["audit", "audits", "network ops audit"]),
 
     # ---- Security Center ----
     "/security/overview": ("security", ["security", "security center", "overview", "audit", "findings", "compliance"]),

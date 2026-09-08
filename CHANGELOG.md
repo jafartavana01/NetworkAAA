@@ -27,6 +27,62 @@ and every RADIUS nav entry is confirmed to resolve to a registered
 route. A "the regex ran without error" result is not evidence the edit
 happened.
 
+### Fixed — Groups page reported 0 policies and 0 members for groups that had both
+
+Two separate under-reporting bugs, both in the backend, both reported
+from a real screen showing "none" and "0 members" for groups
+demonstrably in use.
+
+**1. Policy references missed the condition tree.**
+`_referencing_policy_names` only looked at `Policy.condition_group_id`
+-- the original single-condition field. Any policy built with the
+condition BUILDER stores its group as a `user_group` condition inside
+the condition tree instead, so those policies were invisible to the
+reverse lookup: two policies targeting two groups reported "USED BY
+POLICIES: 0" and "2 unreferenced".
+
+Now checks both paths and de-duplicates, since one policy can
+reference the same group in several conditions. A reverse lookup has
+to cover every forward path or it quietly under-reports -- which is
+worse than not showing the column at all, because it looks authoritative.
+
+**2. Member counts ignored Active Directory.** `member_count` counts
+local `TacacsUser` rows only. An AD-backed group with three members in
+AD showed "0 members" -- while clicking Members listed all three,
+because that modal already queried AD. The list and the detail
+disagreed, and the list was wrong.
+
+Fixed in the GUI rather than the list endpoint, deliberately: querying
+LDAP once per group inside the list request would make the page slow
+and would fail outright whenever AD is unreachable. AD counts are
+fetched AFTER the table renders, one group at a time (a fleet of
+AD-backed groups should not open a burst of LDAP searches), and merged
+into both the cell and the KPI as they arrive.
+
+The cell now distinguishes every state rather than collapsing them
+into a number: `3 members (0 local, 3 AD)`, `0 local +AD…` while
+pending, and `0 local (AD unreachable)` on failure. That last one
+matters -- the endpoint deliberately distinguishes a failed search
+from an empty one, and treating a bind failure as "0 members" is
+exactly the bug being fixed.
+
+Response shape was verified against the endpoint (`results`, plus an
+`error` field) rather than assumed; my first draft guessed at
+`entries` and would have silently counted zero for every group.
+
+### Changed — removed Checks and Audits from Network Operations navigation
+
+Requested: Security Center covers this ground more thoroughly, and
+surfacing both invites confusion about which to trust.
+
+Nav entries and Ctrl+K search keywords removed. **The routes,
+templates, API and stored audit data are deliberately left intact** --
+removing navigation is reversible and loses nothing, whereas deleting
+the feature would destroy existing audit history that was never asked
+to be deleted. A bookmarked URL still works.
+
+---
+
 ### Fixed — web server stopped answering after ~10 minutes while the process stayed alive
 
 Reported symptom: the service ran, the server was reachable, but no

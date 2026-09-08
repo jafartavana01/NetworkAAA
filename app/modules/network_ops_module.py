@@ -34,6 +34,11 @@ def _build_module() -> Module:
         description="Command jobs against network devices and device groups: reusable command templates, target resolution, live execution progress, and full raw-output history.",
         router=combined_router,
         nav_entries=[
+            # Checks and Audits are intentionally NOT in the navigation:
+            # Security Center covers the same ground more thoroughly, so
+            # surfacing both invites confusion about which one to trust.
+            # Their routes and data remain intact -- a bookmarked URL
+            # still works, and nothing was deleted.
             NavEntry(
                 label="Network Operations",
                 path="/network-ops/jobs",
@@ -41,8 +46,6 @@ def _build_module() -> Module:
                 children=[
                     NavEntry(label="Command Jobs", path="/network-ops/jobs"),
                     NavEntry(label="Templates", path="/network-ops/templates"),
-                    NavEntry(label="Checks", path="/network-ops/checks"),
-                    NavEntry(label="Audits", path="/network-ops/audits"),
                 ],
             ),
         ],

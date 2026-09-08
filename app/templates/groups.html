@@ -134,8 +134,58 @@
   const ICON_USER = '{{ icons.icon("user", 16) }}';
   const ICON_LIST = '{{ icons.icon("list-checks", 16) }}';
 
+  // Members live in two places: local users (TacacsUser.group_id) and,
+  // for an AD-backed group, Active Directory itself. The list endpoint
+  // only counts local users -- querying LDAP once per group would make
+  // this page slow and would fail outright whenever AD is unreachable.
+  // So AD counts are fetched AFTER the table renders, per group, and
+  // merged in. A group whose AD count has not arrived shows its local
+  // count plus "+AD", never a bare 0 that reads as "nobody is in this
+  // group" when three people are.
+  const adCounts = new Map();   // group id -> number | 'error'
+
+  function memberCellText(g) {
+    const local = g.member_count || 0;
+    if (!g.ad_group_name) return local + (local === 1 ? ' member' : ' members');
+    const ad = adCounts.get(g.id);
+    if (ad === undefined) return local + ' local +AD\u2026';
+    if (ad === 'error') return local + ' local (AD unreachable)';
+    return (local + ad) + ' members (' + local + ' local, ' + ad + ' AD)';
+  }
+
+  async function loadAdMemberCounts() {
+    // Sequential on purpose: a fleet of AD-backed groups should not
+    // open a burst of LDAP searches at once.
+    for (const g of tacacsGroups) {
+      if (!g.ad_group_name) continue;
+      try {
+        const res = await AAAPlatform.authedFetch(
+          '/api/ad-settings/group-members?group_name=' + encodeURIComponent(g.ad_group_name));
+        if (!res.ok) { adCounts.set(g.id, 'error'); }
+        else {
+          const data = await res.json();
+          // This endpoint deliberately distinguishes a failed search
+          // from a genuinely empty one (see AdSearchResult): `error`
+          // set means the count is unknown, NOT zero. Treating a bind
+          // failure as "0 members" is the exact bug that made this
+          // page misleading in the first place.
+          if (data.error) adCounts.set(g.id, 'error');
+          else adCounts.set(g.id, Array.isArray(data.results) ? data.results.length : 'error');
+        }
+      } catch (e) {
+        adCounts.set(g.id, 'error');
+      }
+      const cell = document.querySelector('[data-members-for="' + g.id + '"]');
+      if (cell) cell.textContent = memberCellText(g);
+      renderGroupKpis();
+    }
+  }
+
   function renderGroupKpis() {
-    const members = tacacsGroups.reduce((sum, g) => sum + (g.member_count || 0), 0);
+    const members = tacacsGroups.reduce((sum, g) => {
+      const ad = adCounts.get(g.id);
+      return sum + (g.member_count || 0) + (typeof ad === 'number' ? ad : 0);
+    }, 0);
     const inPolicy = tacacsGroups.filter(
       (g) => (g.referenced_by_policy_names || []).length > 0).length;
     document.getElementById('groups-kpis').innerHTML = [
@@ -148,6 +198,7 @@
 
   function renderTable() {
     renderGroupKpis();
+    loadAdMemberCounts();
     const wrap = document.getElementById('groups-table-wrap');
     document.getElementById('group-count').textContent = tacacsGroups.length + (tacacsGroups.length === 1 ? ' group' : ' groups');
 
@@ -168,7 +219,7 @@
         <td>${escapeHtml(g.name)}</td>
         <td>${escapeHtml(g.description || '—')}</td>
         <td>${g.referenced_by_policy_names.length ? g.referenced_by_policy_names.map(escapeHtml).join(', ') : '<span class="content-sub">none</span>'}</td>
-        <td class="cell-mono">${g.member_count} ${g.member_count === 1 ? 'member' : 'members'}</td>
+        <td class="cell-mono" data-members-for="${g.id}">${memberCellText(g)}</td>
         <td class="cell-actions">
           <button class="btn-secondary btn-small" data-members="${g.id}">Members</button>
           <button class="btn-secondary btn-small" data-edit="${g.id}">Edit</button>

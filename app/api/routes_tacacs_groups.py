@@ -26,6 +26,8 @@ from ..database import get_db
 from ..models.admin import AdminUser
 from ..models.group import TacacsGroup
 from ..models.policy import Policy
+from ..models.policy_condition import PolicyCondition
+from ..models.policy_condition_group import PolicyConditionGroup
 from ..models.user import TacacsUser
 from ..schemas.group import TacacsGroupCreate, TacacsGroupOut, TacacsGroupUpdate
 from .deps import get_current_admin, verify_csrf
@@ -44,10 +46,47 @@ def _member_counts(db: Session) -> dict[uuid.UUID, int]:
 
 
 def _referencing_policy_names(db: Session) -> dict[uuid.UUID, list[str]]:
-    rows = db.query(Policy).filter(Policy.condition_group_id.isnot(None)).all()
+    """
+    Which policies target each group.
+
+    Checks BOTH ways a policy can reference a group:
+
+      * `Policy.condition_group_id` -- the original single-condition
+        field, still used by simple policies.
+      * A `user_group` condition inside the policy's condition TREE,
+        which is what the condition builder writes and what any policy
+        with more than one condition uses.
+
+    Only the first was checked before, so a policy built with the
+    condition tree reported its group as "unreferenced" -- the Groups
+    page showed "none" and "0 used by policies" for groups that were
+    demonstrably in use. Reverse lookups have to cover every forward
+    path, or they quietly under-report.
+    """
     result: dict[uuid.UUID, list[str]] = {}
-    for p in rows:
+
+    for p in db.query(Policy).filter(Policy.condition_group_id.isnot(None)).all():
         result.setdefault(p.condition_group_id, []).append(p.name)
+
+    # Condition-tree references. A policy is joined to its conditions
+    # through its root condition group.
+    tree_rows = (
+        db.query(Policy.name, PolicyCondition.referenced_object_id)
+        .join(PolicyConditionGroup, PolicyConditionGroup.policy_id == Policy.id)
+        .join(PolicyCondition, PolicyCondition.group_id == PolicyConditionGroup.id)
+        .filter(
+            PolicyCondition.object_type == "user_group",
+            PolicyCondition.referenced_object_id.isnot(None),
+        )
+        .all()
+    )
+    for policy_name, group_id in tree_rows:
+        names = result.setdefault(group_id, [])
+        # A policy can reference the same group in several conditions;
+        # it should still be listed once.
+        if policy_name not in names:
+            names.append(policy_name)
+
     return result
 
 
