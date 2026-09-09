@@ -620,7 +620,7 @@
     } else {
       document.getElementById('device-modal-title').textContent = 'Add device';
       document.getElementById('device-id').value = '';
-      document.getElementById('secret-hint').textContent = 'Required for new devices.';
+      document.getElementById('secret-hint').textContent = 'Required unless this device uses RADIUS only.';
       document.getElementById('secret-configured-badge').hidden = true;
       document.getElementById('device-radius-enabled').checked = false;
       document.getElementById('radius-secret-badge').hidden = true;
@@ -693,9 +693,17 @@
     payload.radius_enabled = document.getElementById('device-radius-enabled').checked;
     const radiusSecret = document.getElementById('device-radius-secret').value;
     if (radiusSecret) payload.radius_secret = radiusSecret;
-    if (!id && !secret) {
-      errorBox.textContent = 'A shared secret is required for new devices.';
+    // A new device needs a secret for at least one protocol -- not a
+    // TACACS+ secret specifically. Demanding one for a RADIUS-only
+    // device (the previous behaviour) asked for a secret for a protocol
+    // the device never uses, and the warning appeared on a tab the
+    // admin had deliberately left alone.
+    if (!id && !secret && !(payload.radius_enabled && radiusSecret)) {
+      errorBox.textContent =
+        'Enter a TACACS+ shared secret, or switch to the RADIUS tab, enable RADIUS and enter a RADIUS secret.';
       errorBox.hidden = false;
+      // Send the admin to the tab that can actually fix it.
+      selectNodeTab(payload.radius_enabled ? 'radius' : 'tacacs');
       return;
     }
 

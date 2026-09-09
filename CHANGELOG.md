@@ -27,6 +27,122 @@ and every RADIUS nav entry is confirmed to resolve to a registered
 route. A "the regex ran without error" result is not evidence the edit
 happened.
 
+### Fixed — missing `pap backend`; probe timeout too short. Added — RADIUS policy model and generation
+
+**`pap backend = mavis` was missing.** Found by comparing a real
+generated configuration against the upstream sample
+`tac_plus-ng-radius-mavis.cfg`, which carries THREE MAVIS backends
+where the compiler emitted two.
+
+`login backend` covers TACACS+ ASCII login and `user backend` covers
+lookup, but neither authenticates a RADIUS PAP request -- which is
+what a MikroTik sends. So a directory user was looked up and never
+authenticated, and the daemon answered nothing. That is exactly the
+reported "requests counted, zero responses". Now emitted when RADIUS
+is enabled; a TACACS+-only install generates what it did before.
+Verified with both branches actually executed.
+
+**The probe's 3-second timeout was too short**, and its guidance was
+wrong about why. When users come from a directory the daemon performs
+an LDAP lookup before it can answer -- and a username that does NOT
+exist still costs a full round-trip. A short timeout turns "the
+directory is slow" into "RADIUS is broken", the opposite of this
+tool's purpose. Raised to 12s, and the guidance now lists directory
+latency FIRST, then secret/client mismatch, and points at the RADIUS
+access log to separate "never arrived" from "arrived and could not
+answer".
+
+**A flaw in the probe itself, exposed by a real test.** It sends from
+127.0.0.1 while tac_plus-ng matches clients by SOURCE address, so
+unless a host block covers the loopback the daemon discards it no
+matter how RADIUS is configured. It now detects that up front and says
+so, instead of producing a timeout that reads as a server fault.
+
+**RADIUS policies (model + generation).** `RadiusPolicy` and
+`RadiusPolicyAttribute`: who may authenticate where, and which
+attributes come back.
+
+Deliberately NOT a copy of the TACACS+ policy model. TACACS+ policies
+answer "which commands may this user run"; RADIUS has no per-command
+authorization, and offering it would let an operator configure
+something the protocol cannot enforce. A RADIUS policy answers two
+questions only: accept or reject, and which attributes are returned.
+
+Conditions reuse the existing objects -- TACACS+ group (which is how
+an AD group is represented here), device, device group, and optionally
+Service-Type -- rather than introducing a parallel identity model.
+Attributes are stored by their qualified dictionary name
+(`MikroTik:MikroTik-Group`), which is exactly the token the generated
+script uses, so a dictionary update cannot silently repoint an
+attribute at a different meaning.
+
+Generated form matches the upstream sample, including the
+`aaa.protocol == radius` guard -- without it a RADIUS profile would
+also apply to TACACS+ sessions and silently change shell authorization
+for the same users.
+
+**Still to build**: the RADIUS Policies API and page. The model and
+generation are done and tested; without the API the policies cannot be
+created yet.
+
+---
+
+### Fixed — a RADIUS-only device could not be created; diff stat cards rendered as run-together text
+
+**A RADIUS-only device was impossible to add.** Reported from a real
+attempt: selecting RADIUS still produced "A shared secret is required
+for new devices", asking for a TACACS+ secret on a tab the admin had
+deliberately left alone.
+
+Traced end to end, and it was not a frontend nag -- the whole chain was
+TACACS-first from before RADIUS existed:
+* `DeviceCreate.shared_secret` was `Field(min_length=1)` -- required.
+* `NetworkDevice.shared_secret_encrypted` was `nullable=False`.
+* `_host_block` emitted `key = ...` unconditionally.
+
+All four layers fixed together, because fixing only the message would
+have left the create call failing at the schema:
+1. The model column is nullable.
+2. The create schema makes the secret optional.
+3. The API now requires a secret for at least ONE protocol, and says
+   which, rather than naming TACACS+ specifically.
+4. The compiler emits `key =` only when a secret exists. A host block
+   carrying `radius.key` alone is valid per the upstream sample, and
+   emitting `key = ""` would put an EMPTY shared secret into a live
+   AAA configuration -- worse than omitting the line.
+
+The frontend validation now also switches to the tab that can actually
+fix the problem, instead of showing an error about a field the admin
+cannot see.
+
+Verified across all three device shapes: TACACS+ only emits `key` and
+no `radius.key`; RADIUS-only emits `radius.key` and provably NO empty
+`key` line; both protocols emit both.
+
+**The additive migration was extended to relax NOT NULL.** Adding
+columns was not enough: making an EXISTING column nullable is also a
+schema change, and without it an upgraded install would still reject a
+RADIUS-only device at the database. It only ever DROPS a NOT NULL,
+never adds one -- widening a constraint cannot fail on existing data
+or lose any, whereas tightening one can do both.
+
+**Diff stat cards** rendered as "TOTAL CHANGES10". The label and value
+are spans inside a span, and neither set `display`, so they ran
+together as inline text. Both are now block-level. Visible in the
+supplied screenshots at two different widths.
+
+**Not reproduced: "discard and close not working".** Investigated
+rather than guessed at -- `closeModal` is correct, `.modal-backdrop`
+does have its `[hidden]` override so the attribute takes effect, every
+`getElementById` in the file resolves against the rendered DOM (so no
+null access aborts the script), and no hidden `required` field exists
+to block submission silently. The most likely explanation is that the
+failed save above looked like "nothing works"; if closing is still
+broken after this change, the browser console error is the missing
+piece.
+
+---
+
 ### Added — RADIUS server probe, device node-type tabs, and AD support in the access tools
 
 **RADIUS probe (`POST /api/radius/probe` + a Test panel on the Server

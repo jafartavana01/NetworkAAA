@@ -158,6 +158,20 @@ def create_device(
 ):
     group = _resolve_group(db, payload.device_group_id)
     _check_no_overlap(db, payload.ip_address)
+    # A device must be reachable by at least one protocol. Requiring a
+    # TACACS+ secret unconditionally -- as this did before RADIUS
+    # existed -- forced operators to invent one for a RADIUS-only
+    # device, which is both pointless and a real secret sitting in the
+    # database for a protocol nothing uses.
+    if not payload.shared_secret and not (payload.radius_enabled and payload.radius_secret):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Provide a TACACS+ shared secret, or enable RADIUS and provide a RADIUS secret. "
+                "A device needs a secret for at least one protocol."
+            ),
+        )
+
     device = NetworkDevice(
         name=payload.name,
         ip_address=payload.ip_address,
@@ -167,7 +181,9 @@ def create_device(
         description=payload.description,
         device_group_id=group.id if group else None,
         enabled=payload.enabled,
-        shared_secret_encrypted=security.encrypt_secret(payload.shared_secret),
+        shared_secret_encrypted=(
+            security.encrypt_secret(payload.shared_secret) if payload.shared_secret else None
+        ),
         radius_enabled=payload.radius_enabled,
         radius_secret_encrypted=(
             security.encrypt_secret(payload.radius_secret) if payload.radius_secret else None

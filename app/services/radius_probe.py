@@ -143,12 +143,18 @@ def verify_response_authenticator(
 
 def probe(
     host: str, port: int, secret: str, username: str, password: str,
-    *, timeout_seconds: float = 3.0,
+    *, timeout_seconds: float = 12.0,
 ) -> ProbeResult:
     """
     One Access-Request, one wait. No retry: a retry would mask the
     intermittent case, and "answered on the second try" is itself worth
     seeing rather than smoothing over.
+
+    The default timeout is deliberately generous. When users come from
+    a directory, the daemon performs an LDAP lookup before it can
+    answer -- and a username that does NOT exist still costs a full
+    round-trip. A short timeout turns "the directory is slow" into
+    "RADIUS is broken", which is the opposite of what this tool is for.
     """
     packet, identifier, authenticator = build_access_request(username, password, secret)
 
@@ -163,11 +169,15 @@ def probe(
             reachable=False,
             detail=f"No reply within {timeout_seconds:.0f}s.",
             guidance=(
-                "The port is open but nothing answered. A RADIUS server silently DISCARDS a request "
-                "it cannot authenticate, so the most likely causes are: the device is not defined as "
-                "a RADIUS client (no matching host block), or its radius.key does not match the "
-                "secret the client is using. Check that the configuration has been compiled and "
-                "applied since RADIUS was enabled."
+                "The port is open but nothing came back in time. In order of likelihood:\n"
+                "1. If users are backed by Active Directory, the daemon asks LDAP before it can "
+                "answer. A username that does not exist still costs a full directory round-trip, "
+                "so a slow or unreachable directory shows up here as silence rather than a reject.\n"
+                "2. The shared secret does not match, or this source address is not defined as a "
+                "RADIUS client -- a RADIUS server silently DISCARDS such requests.\n"
+                "3. The configuration has not been compiled and applied since RADIUS was enabled.\n"
+                "Check the RADIUS access log for whether the request arrived at all: that separates "
+                "'never got there' from 'got there and could not answer'."
             ),
         )
     except OSError as exc:

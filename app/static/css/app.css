@@ -1864,8 +1864,10 @@ a.dash-kpi:hover { border-color: var(--line-bright); background: var(--bg-panel-
   font-family: var(--font-mono); font-size: 15px; font-weight: 700;
   background: var(--bg-panel-raised); border: 1px solid var(--line);
 }
-.cdiff-stat-label { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
-.cdiff-stat-value { font-family: var(--font-mono); font-size: 22px; font-weight: 700; color: var(--text-primary); line-height: 1.1; }
+/* Both are spans inside a span, so without an explicit display they
+   render as inline text and read as "TOTAL CHANGES10". */
+.cdiff-stat-label { display: block; font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+.cdiff-stat-value { display: block; font-family: var(--font-mono); font-size: 22px; font-weight: 700; color: var(--text-primary); line-height: 1.15; margin-top: 2px; }
 .cdiff-stat.is-add .cdiff-stat-icon { color: var(--signal); border-color: var(--signal); }
 .cdiff-stat.is-add .cdiff-stat-value { color: var(--signal); }
 .cdiff-stat.is-remove .cdiff-stat-icon { color: var(--red); border-color: var(--red); }

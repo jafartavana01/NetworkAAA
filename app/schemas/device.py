@@ -72,7 +72,9 @@ class DeviceBase(BaseModel):
 
 
 class DeviceCreate(DeviceBase):
-    shared_secret: str = Field(min_length=1, max_length=256)
+    # Optional: a RADIUS-only device has no TACACS+ secret. The API
+    # rejects a device with no usable secret at all.
+    shared_secret: str | None = Field(default=None, min_length=1, max_length=256)
     # RADIUS is opt-in per device. The secret is separate from the
     # TACACS+ one because they are independent on real equipment --
     # see NetworkDevice's own comment on why reusing it would be wrong.

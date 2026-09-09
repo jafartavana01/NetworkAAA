@@ -85,7 +85,7 @@ def init_db() -> None:
         policy_command_set, policy_version, policy_condition_group, policy_condition,
         device_access_grant, ad_settings, monitoring_settings, aaa_template_settings,
         command_template, command_job, network_ops_check, network_ops_audit, audit_run,
-        audit_schedule_settings, audit_batch, ncm, radius_settings,
+        audit_schedule_settings, audit_batch, ncm, radius_settings, radius_policy,
     )
 
     Base.metadata.create_all(bind=get_engine())
@@ -186,3 +186,36 @@ def _apply_additive_column_migrations() -> None:
                 logger.info("Schema migration: added %s.%s", table_name, column.name)
             except Exception as exc:  # noqa: BLE001
                 logger.error("Schema migration failed for %s.%s (%s).", table_name, column.name, exc)
+
+        # Relax a NOT NULL that the models no longer impose.
+        #
+        # Adding columns is not enough on its own: making an EXISTING
+        # column nullable is a schema change too, and without it an
+        # upgraded install still rejects rows the current code considers
+        # valid. That is exactly what happened when the TACACS+ shared
+        # secret became optional for RADIUS-only devices.
+        #
+        # Only ever DROPs NOT NULL, never adds one. Widening a
+        # constraint cannot fail on existing data and cannot lose any;
+        # tightening one can do both, so it is deliberately not done
+        # here.
+        try:
+            actual_meta = {c["name"]: c for c in inspector.get_columns(table_name)}
+        except Exception:
+            continue
+        for column in table.columns:
+            meta = actual_meta.get(column.name)
+            if meta is None:
+                continue
+            db_not_null = not meta.get("nullable", True)
+            if column.nullable and db_not_null and not column.primary_key:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text(
+                            f"ALTER TABLE {table_name} ALTER COLUMN {column.name} DROP NOT NULL"
+                        ))
+                    logger.info("Schema migration: %s.%s is now nullable", table_name, column.name)
+                except Exception as exc:  # noqa: BLE001
+                    logger.error(
+                        "Could not relax NOT NULL on %s.%s (%s).", table_name, column.name, exc
+                    )

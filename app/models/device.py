@@ -57,7 +57,12 @@ class NetworkDevice(Base):
         UUID(as_uuid=True), ForeignKey("device_groups.id", ondelete="SET NULL"), nullable=True
     )
 
-    shared_secret_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    # Nullable since RADIUS support was added: a device that speaks ONLY
+    # RADIUS has no TACACS+ shared secret, and requiring one forced
+    # operators to invent a secret for a protocol the device never uses.
+    # The API enforces that a device has a secret for at least one
+    # protocol it is enabled for -- see routes_devices.
+    shared_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # RADIUS, for devices that don't speak TACACS+. Confirmed against
     # the upstream sample `tac_plus-ng-radius.cfg`, which emits BOTH

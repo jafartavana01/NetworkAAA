@@ -258,6 +258,38 @@ def probe_radius(
             detail="RADIUS is disabled, so no listener is running to probe.",
         )
 
+    # The probe sends from 127.0.0.1, but tac_plus-ng matches a client
+    # by SOURCE address. Unless a host block covers the loopback, the
+    # daemon discards the probe exactly as it would an unknown NAS --
+    # and the operator gets a timeout that looks like "RADIUS is
+    # broken" when the real answer is "this test cannot reach it".
+    #
+    # Detected and reported UP FRONT rather than after a 3-second
+    # silence, because an ambiguous timeout is precisely what this tool
+    # exists to eliminate.
+    import ipaddress as _ipaddress
+
+    covers_loopback = False
+    for candidate in db.query(NetworkDevice).filter(NetworkDevice.radius_enabled.is_(True)).all():
+        try:
+            network = _ipaddress.ip_network(candidate.ip_address.strip(), strict=False)
+            if _ipaddress.ip_address("127.0.0.1") in network:
+                covers_loopback = True
+                break
+        except ValueError:
+            continue
+
+    if not covers_loopback:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "This test sends from 127.0.0.1, and no RADIUS client covers that address, so "
+                "the server would discard the probe no matter how RADIUS is configured. "
+                "Add a device with IP 127.0.0.1/32, enable RADIUS on it and give it a secret to "
+                "use this test — or verify from the real NAS instead."
+            ),
+        )
+
     secret = security.decrypt_secret(device.radius_secret_encrypted)
 
     # Probes the LOCAL listener: the question is whether this platform's

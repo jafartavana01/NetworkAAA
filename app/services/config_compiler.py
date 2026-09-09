@@ -32,6 +32,7 @@ from ..models.ad_settings import AdSettings
 from ..models.config_version import ConfigVersion
 from ..models.device import NetworkDevice
 from ..models.device_access_grant import DeviceAccessGrant
+from ..models.device_group import DeviceGroup
 from ..models.group import TacacsGroup
 from ..models.monitoring_settings import MonitoringSettings
 from ..models.policy import Policy
@@ -133,7 +134,7 @@ def _quote(value: str) -> str:
     return f'"{escaped}"'
 
 
-def _mavis_block(settings: AdSettings | None) -> str:
+def _mavis_block(settings: AdSettings | None, *, radius_enabled: bool = False) -> str:
     """
     Active Directory / MAVIS integration (confirmed real syntax --
     directly confirmed via a real tac_plus-ng-specific config, shebang
@@ -227,6 +228,23 @@ def _mavis_block(settings: AdSettings | None) -> str:
     lines.append("")
     lines.append("    login backend = mavis")
     lines.append("    user backend = mavis")
+
+    # RADIUS PAP needs its OWN backend directive. `login backend` covers
+    # TACACS+ ASCII login and `user backend` covers user lookup, but
+    # neither authenticates a RADIUS PAP request -- so with RADIUS
+    # enabled and only those two present, a directory user could be
+    # looked up and still never authenticated, and the daemon answers
+    # nothing. Confirmed against the upstream sample
+    # tac_plus-ng/sample/tac_plus-ng-radius-mavis.cfg, which carries all
+    # three:
+    #     user backend = mavis
+    #     login backend = mavis chpass
+    #     pap backend = mavis
+    #
+    # Emitted only when RADIUS is enabled, so a TACACS+-only install
+    # generates exactly what it did before.
+    if radius_enabled:
+        lines.append("    pap backend = mavis")
     lines.append("")
 
     return "\n".join(lines) + "\n"
@@ -293,7 +311,10 @@ def _radius_blocks(settings) -> dict:
 
 
 def _host_block(device: NetworkDevice) -> str:
-    secret = security.decrypt_secret(device.shared_secret_encrypted)
+    secret = (
+        security.decrypt_secret(device.shared_secret_encrypted)
+        if device.shared_secret_encrypted else None
+    )
     lines = [f"    host {device.name} {{"]
     lines.append(f"        address = {device.ip_address}")
     if device.ipv6_address:
@@ -306,7 +327,13 @@ def _host_block(device: NetworkDevice) -> str:
         # and surfaced as a comment so it's visible to anyone reading
         # the generated file, pending confirmation of real syntax.
         lines.append(f"        # ipv6_address on file (not yet emitted, syntax unconfirmed): {device.ipv6_address}")
-    lines.append(f"        key = {_quote(secret)}")
+    # Emitted only when the device HAS a TACACS+ secret. A RADIUS-only
+    # device legitimately has none, and the upstream sample shows a host
+    # block carrying `radius.key` alone is valid. Emitting `key = ""`
+    # instead would put an empty shared secret into a live AAA
+    # configuration -- worse than omitting the line.
+    if secret:
+        lines.append(f"        key = {_quote(secret)}")
 
     # RADIUS shared secret, in the SAME host block as the TACACS+ key.
     # Confirmed verbatim from the upstream sample
@@ -1006,8 +1033,18 @@ def compile_candidate(db: Session) -> str:
         _policy_block(p, policy_engine.get_ordered_rules_for_policy(db, p)) for p, _ in compilable_policies
     )
     acl_blocks = "".join(acl_blocks_out)
-    ruleset_block = _ruleset_block(compilable_policies, override_rule_texts=override_rule_texts)
-    mavis_block = _mavis_block(db.query(AdSettings).first())
+    # RADIUS policies produce their own profile and rule text. They are
+    # appended rather than merged into the TACACS+ ruleset builder:
+    # their profiles are guarded by `aaa.protocol == radius`, so mixing
+    # them into that function would blur two things that must stay
+    # separately reviewable.
+    radius_profiles, radius_rules = _radius_policy_blocks(db)
+
+    ruleset_block = _ruleset_block(
+        compilable_policies,
+        override_rule_texts=(override_rule_texts or []) + ([radius_rules] if radius_rules else []),
+    )
+    mavis_block = _mavis_block(db.query(AdSettings).first(), radius_enabled=_radius_on)
 
     from ..platform_settings import load_settings
     tacacs_port = load_settings()["tacacs_port"]
@@ -1025,7 +1062,7 @@ def compile_candidate(db: Session) -> str:
         group_blocks=group_blocks,
         user_blocks=user_blocks,
         acl_blocks=acl_blocks,
-        policy_blocks=policy_blocks,
+        policy_blocks=policy_blocks + radius_profiles,
         ruleset_block=ruleset_block,
     )
 
@@ -1241,3 +1278,117 @@ def _rollback(db: Session, previous_content: str, *, reason: str) -> None:
         db.commit()
     except Exception:
         db.rollback()
+
+
+def _radius_policy_blocks(db) -> tuple[str, str]:
+    """
+    Generates the profile and ruleset entries for RADIUS policies.
+
+    Returns (profile_blocks, rule_blocks) so the caller can place each
+    in the section it belongs to.
+
+    Emitted form is confirmed against the upstream sample
+    `tac_plus-ng/sample/tac_plus-ng-radius.cfg`:
+
+        profile <name> {
+            script {
+                if (aaa.protocol == radius) {
+                    set radius[Vendor:Attribute] = "value"
+                    permit
+                }
+            }
+        }
+
+    The `aaa.protocol == radius` guard matters: without it a RADIUS
+    profile would also apply to TACACS+ sessions, silently changing
+    shell authorization for the same users. The sample uses that guard
+    for exactly this reason.
+    """
+    from ..models.radius_policy import RadiusPolicy, RadiusPolicyAttribute
+
+    policies = (
+        db.query(RadiusPolicy)
+        .filter(RadiusPolicy.enabled.is_(True))
+        .order_by(RadiusPolicy.priority.asc(), RadiusPolicy.created_at.asc())
+        .all()
+    )
+    if not policies:
+        return "", ""
+
+    group_names = {g.id: g.name for g in db.query(TacacsGroup).all()}
+    device_names = {d.id: d.name for d in db.query(NetworkDevice).all()}
+    device_group_names = {g.id: g.name for g in db.query(DeviceGroup).all()}
+
+    profiles, rules = [], []
+
+    for policy in policies:
+        attributes = (
+            db.query(RadiusPolicyAttribute)
+            .filter(RadiusPolicyAttribute.policy_id == policy.id)
+            .order_by(RadiusPolicyAttribute.sort_order.asc())
+            .all()
+        )
+
+        body = ["    profile rad_%s {" % policy.name, "        script {",
+                "            if (aaa.protocol == radius) {"]
+
+        if policy.condition_service_type:
+            body.append(
+                f"                if (radius[Service-Type] == {policy.condition_service_type}) {{"
+            )
+            indent = "                    "
+        else:
+            indent = "                "
+
+        for attr in attributes:
+            # The attribute name is a dictionary token, not user prose;
+            # the VALUE is quoted because it routinely contains spaces
+            # and '=' (e.g. "shell:priv-lvl=15").
+            body.append(f'{indent}set radius[{attr.attribute}] = {_quote(attr.value)}')
+
+        body.append(f"{indent}{'permit' if policy.action == 'permit' else 'deny'}")
+
+        if policy.condition_service_type:
+            body.append("                }")
+
+        body.extend(["            }", "        }", "    }"])
+        profiles.append("\n".join(body) + "\n")
+
+        # Matching rule. Conditions use the same `member ==` /
+        # `device ==` vocabulary already proven by the TACACS+ ruleset.
+        clauses = []
+        if policy.condition_group_id and policy.condition_group_id in group_names:
+            clauses.append(f"member == {group_names[policy.condition_group_id]}")
+        if policy.condition_device_id and policy.condition_device_id in device_names:
+            clauses.append(f"device == {device_names[policy.condition_device_id]}")
+        if policy.condition_device_group_id and policy.condition_device_group_id in device_group_names:
+            members = [
+                d.name for d in db.query(NetworkDevice).filter(
+                    NetworkDevice.device_group_id == policy.condition_device_group_id
+                ).all()
+            ]
+            if members:
+                clauses.append("(" + " || ".join(f"device == {n}" for n in members) + ")")
+
+        condition = " && ".join(clauses) if clauses else None
+        rule = [f"        rule rad_{policy.name} {{", "            enabled = yes", "            script {"]
+        if condition:
+            rule.extend([
+                f"                if ({condition}) {{",
+                f"                    profile = rad_{policy.name}",
+                "                    permit",
+                "                }",
+            ])
+        else:
+            # No conditions means "every RADIUS request", which is a
+            # legitimate catch-all -- but it is still guarded by the
+            # profile's own aaa.protocol check, so it cannot affect
+            # TACACS+.
+            rule.extend([
+                f"                profile = rad_{policy.name}",
+                "                permit",
+            ])
+        rule.extend(["            }", "        }"])
+        rules.append("\n".join(rule) + "\n")
+
+    return "".join(profiles), "".join(rules)
