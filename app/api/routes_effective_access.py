@@ -23,6 +23,7 @@ from ..database import get_db
 from ..models.admin import AdminUser
 from ..models.device import NetworkDevice
 from ..models.user import TacacsUser
+from ..services import identity_resolver
 from ..services import policy_engine
 from .deps import get_current_admin
 
@@ -145,4 +146,56 @@ def why_can_access(
         "device_name": device.name,
         "result": _result_summary(db, result),
         "trace": [s.to_dict() for s in result.trace],
+    }
+
+
+@router.get("/by-username")
+def effective_access_by_username(
+    username: str,
+    db: Session = Depends(get_db),
+    # Same gate as the other endpoints in this module -- this is the
+    # username-keyed form of the same question, not a new capability.
+    _admin: AdminUser = Depends(get_current_admin),
+):
+    """
+    "What can this username access?" -- accepting a NAME rather than a
+    local user id, so an Active Directory user can be looked up.
+
+    The existing id-based endpoint can only ever answer for local
+    users, because an AD-authenticated user has no row and therefore no
+    id. That made Effective Access unable to answer for precisely the
+    identities an administrator most needs to check.
+    """
+    identity = identity_resolver.resolve_username(db, username)
+    if not identity.found:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail=identity.detail or "User not found.")
+
+    subject = identity_resolver.evaluation_subject(identity)
+    devices = db.query(NetworkDevice).order_by(NetworkDevice.name.asc()).all()
+
+    reachable = []
+    for device in devices:
+        result = policy_engine.evaluate(db, user=subject, device=device, command=None)
+        # `matched_policy` is the dataclass field; `matched_policy_name`
+        # exists only in to_dict(). Using the latter here would have
+        # raised AttributeError on the first device.
+        if result.matched_policy is not None:
+            reachable.append({
+                "device_name": device.name,
+                "ip_address": device.ip_address,
+                "policy_name": result.matched_policy.name,
+                "priv_lvl": result.priv_lvl,
+            })
+
+    return {
+        "username": identity.username,
+        "source": identity.source,
+        "group_name": identity.group.name if identity.group else None,
+        "all_groups": [g.name for g in identity.all_groups],
+        # Surfaced rather than dropped: an AD group with no counterpart
+        # here silently matches nothing, which is worth seeing.
+        "unmapped_ad_groups": identity.unmapped_ad_groups,
+        "detail": identity.detail,
+        "reachable": reachable,
+        "device_count": len(devices),
     }

@@ -85,6 +85,25 @@
     </div>
   </form>
 
+  <div class="content-head" style="margin-top:28px;"><h2>Test the RADIUS Server</h2>
+    <p class="content-sub">Sends a real Access-Request to the local listener using a device's stored shared secret. A NAS counter showing requests with zero responses can mean the listener is down, the client isn't defined, or the secret doesn't match — this tells them apart.</p>
+  </div>
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body">
+      <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+        <label class="field" style="min-width:220px;flex:1;">
+          <span class="field-label">Test as device (uses its stored secret)</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+            <select id="probe-device"></select>
+          </div>
+        </label>
+        <button type="button" class="btn-secondary btn-with-icon" id="probe-btn" style="width:auto;align-self:flex-end;">{{ icons.icon('activity', 16) }}Run Test</button>
+      </div>
+      <div id="probe-result" style="margin-top:12px;"></div>
+    </div>
+  </div>
+
   <div class="content-head" style="margin-top:28px;"><h2>Generated Configuration</h2>
     <p class="content-sub">What these settings add to the compiled tac_plus-ng configuration.</p>
   </div>
@@ -159,6 +178,50 @@
     renderPreview(s);
   }
 
+  async function loadProbeDevices() {
+    const sel = document.getElementById('probe-device');
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/radius/clients'); } catch (e) { res = null; }
+    if (!res || !res.ok) { sel.innerHTML = '<option value="">Could not load devices</option>'; return; }
+    const clients = (await res.json()).filter((d) => d.has_secret);
+    sel.innerHTML = clients.length
+      ? clients.map((d) => '<option value="' + d.device_id + '">' + esc(d.device_name) + ' (' + esc(d.ip_address) + ')</option>').join('')
+      : '<option value="">No RADIUS client has a secret configured</option>';
+    document.getElementById('probe-btn').disabled = !clients.length;
+  }
+
+  document.getElementById('probe-btn').addEventListener('click', async () => {
+    const deviceId = document.getElementById('probe-device').value;
+    const box = document.getElementById('probe-result');
+    if (!deviceId) { box.innerHTML = '<div class="empty-state">Select a device with a stored RADIUS secret.</div>'; return; }
+
+    box.innerHTML = '<div class="content-sub">Sending Access-Request…</div>';
+    const res = await AAAPlatform.authedFetch('/api/radius/probe', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: deviceId }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      box.innerHTML = '<div class="empty-state">' +
+        esc((body.detail && typeof body.detail === 'string') ? body.detail : 'The test could not be run.') + '</div>';
+      return;
+    }
+
+    // An Access-Reject is a PASS: it proves the server received the
+    // packet, validated the secret and evaluated policy. Showing it as
+    // a failure would perpetuate the confusion this test exists to end.
+    const ok = body.reachable;
+    box.innerHTML =
+      '<div class="cdiff-stat ' + (ok ? 'is-add' : 'is-remove') + '" style="align-items:flex-start;">' +
+      '<span class="cdiff-stat-icon">' + (ok ? '\u2713' : '\u2715') + '</span>' +
+      '<span><span class="cdiff-stat-label">' + (ok ? 'RADIUS is answering' : 'No valid reply') + '</span>' +
+      '<div style="font-size:13px;color:var(--text-primary);margin-top:2px;">' +
+      esc(body.detail) + (body.round_trip_ms ? ' (' + body.round_trip_ms + ' ms)' : '') + '</div>' +
+      (body.guidance ? '<div class="content-sub" style="margin-top:6px;max-width:70ch;">' + esc(body.guidance) + '</div>' : '') +
+      '<div class="content-sub cell-mono" style="margin-top:6px;font-size:11px;">target ' + esc(body.target) + '</div>' +
+      '</span></div>';
+  });
+
   async function load() {
     let res;
     try { res = await AAAPlatform.authedFetch('/api/radius/settings'); } catch (e) { res = null; }
@@ -170,6 +233,7 @@
       return;
     }
     apply(await res.json());
+    loadProbeDevices();
   }
 
   ['radius-enabled', 'radius-auth-port', 'radius-acct-port', 'radius-dictionaries'].forEach((id) => {

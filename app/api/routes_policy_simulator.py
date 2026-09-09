@@ -37,6 +37,7 @@ from ..models.admin import AdminUser
 from ..models.device import NetworkDevice
 from ..models.group import TacacsGroup
 from ..models.user import TacacsUser
+from ..services import identity_resolver
 from ..services import policy_engine
 from .deps import require_permission, verify_csrf
 
@@ -59,14 +60,29 @@ def simulate(
     db: Session = Depends(get_db),
     _admin: AdminUser = Depends(require_permission("policies:view")),
 ):
-    user = db.query(TacacsUser).filter(TacacsUser.username == payload.username).first()
+    # Resolve local OR Active Directory. Previously this looked only in
+    # TacacsUser, so simulating an AD-authenticated user always reported
+    # "no such user" -- for exactly the people whose access an
+    # administrator most needs to check, and in disagreement with the
+    # authorization path this tool exists to predict.
+    identity = identity_resolver.resolve_username(db, payload.username)
+    user = identity.user
     device = None
     if payload.device_name:
         device = db.query(NetworkDevice).filter(NetworkDevice.name == payload.device_name).first()
 
     authentication = {"result": "NOT_CHECKED", "detail": "No password supplied -- authentication was not evaluated."}
-    if user is None:
-        authentication = {"result": "FAILURE", "detail": f"No TACACS+ user named '{payload.username}' exists."}
+    if user is None and identity.source == "active_directory":
+        # An AD user's password is verified by the directory, not by a
+        # hash held here, so there is nothing this tool can check. Say
+        # that plainly instead of reporting a failure that would look
+        # like the account is broken.
+        authentication = {
+            "result": "NOT_CHECKED",
+            "detail": "This user authenticates against Active Directory, so no password can be verified here.",
+        }
+    elif user is None:
+        authentication = {"result": "FAILURE", "detail": identity.detail or f"No user named '{payload.username}' exists."}
     elif not user.enabled:
         authentication = {"result": "FAILURE", "detail": "This user account is disabled."}
     elif payload.password is not None:
@@ -77,10 +93,9 @@ def simulate(
             else {"result": "FAILURE", "detail": "Password does not match the stored hash."}
         )
 
-    group_name = None
-    if user and user.group_id:
-        group = db.query(TacacsGroup).filter(TacacsGroup.id == user.group_id).first()
-        group_name = group.name if group else None
+    # Group comes from the resolver, so an AD user is evaluated against
+    # the platform group its AD membership maps to.
+    group_name = identity.group.name if identity.group else None
 
     device_group_name = None
     if device and device.device_group_id:

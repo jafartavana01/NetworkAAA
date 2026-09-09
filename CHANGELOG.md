@@ -27,6 +27,232 @@ and every RADIUS nav entry is confirmed to resolve to a registered
 route. A "the regex ran without error" result is not evidence the edit
 happened.
 
+### Added — RADIUS server probe, device node-type tabs, and AD support in the access tools
+
+**RADIUS probe (`POST /api/radius/probe` + a Test panel on the Server
+page).** Sends a real RFC 2865 Access-Request to the local listener
+using a device's STORED shared secret, and reports whether the daemon
+answers.
+
+This exists because a NAS cannot tell these apart -- all of them show
+as "requests sent, zero responses": listener down, client not defined,
+secret mismatch, or a firewall eating the reply. The probe controls
+the secret and the source, so its result is unambiguous.
+
+The secret is never accepted from the request body; it is read from
+the encrypted device record, so the endpoint cannot be used to test a
+secret the caller does not already have, nor to discover one by trial.
+Superadmin-only for the same reason.
+
+**An Access-Reject is reported as SUCCESS**, with an explanation. It
+proves the server received the packet, validated the shared secret and
+evaluated policy -- showing that as a failure would perpetuate exactly
+the confusion the tool exists to end.
+
+Protocol verified against the RFC rather than assumed: password hiding
+round-trips at six lengths including empty and 17 characters, the
+length field matches the real packet, attributes parse back, and the
+Response Authenticator check rejects both a forged reply and a wrong
+secret. Then end-to-end against a simulated server across four
+behaviours (accept, reject, silent, secret mismatch).
+
+**Device node-type tabs.** The device form now has TACACS+ and RADIUS
+tabs with only the relevant fields on each. Both panels remain in the
+form and are always submitted -- the tabs control what is VISIBLE,
+never what is saved, so switching tabs cannot silently discard a
+secret already typed. Editing a RADIUS-only client opens on the RADIUS
+tab rather than one that says nothing about it.
+
+**Active Directory users now work in the access tools.** Reported and
+confirmed: Policy Simulator and Effective Access both queried
+`TacacsUser` only, so an AD-authenticated user always came back "not
+found" -- for precisely the identities an administrator most needs to
+check, and in disagreement with the authorization path those tools
+exist to predict.
+
+New `services/identity_resolver.py` resolves local first (matching the
+daemon's own precedence), then AD, mapping AD groups onto platform
+groups by `ad_group_name` and falling back to the group name, both
+case-insensitively. Verified across seven cases including group names
+with spaces.
+
+Two things are surfaced rather than swallowed: **unmapped AD groups**
+(an AD group with no counterpart here matches nothing, which is worth
+seeing), and **multi-group membership** (all mapped groups are listed
+and the first is used, because which one wins changes the answer).
+
+For an AD user the simulator now reports "authenticates against Active
+Directory, so no password can be verified here" instead of a failure
+that reads like a broken account.
+
+**Two bugs caught by verification before shipping:**
+* The evaluation stand-in for an AD identity was missing `user.id`,
+  which `condition_engine` reads for single-user policy conditions.
+  `None` is the correct value -- an AD identity is not that specific
+  local user -- but the attribute has to exist. Found by diffing the
+  attributes the engine reads against those the stand-in provides.
+* The new endpoint used `result.matched_policy_name`, which exists
+  only in `to_dict()`, not on the dataclass. That would have raised
+  `AttributeError` on the first device evaluated.
+
+---
+
+### Added — NCM Change Control page (Phases 6-9 GUI)
+
+The candidate/approval/deployment backend was built and tested two
+changes ago but had no pages. This is that GUI.
+
+**One page, two tabs**: Changes (the candidate lifecycle) and
+Deployments (what was actually pushed, and rollback).
+
+**Refused commands are surfaced in the LIST, not at deploy time.** A
+candidate containing `reload`, `no ip ssh` or similar shows the
+refusal on its row and in the drawer, so a reviewer sees the problem
+BEFORE approving. Discovering it at deployment would be too late to be
+useful.
+
+**"Verified" means what it says.** The deployments table reports
+"Config changed" or "No change detected" from the post-deployment
+backup being compared against the pre-deployment one -- not from the
+commands having been accepted. A deployment that changed nothing says
+so rather than reporting success.
+
+**Both destructive actions confirm, and the confirmations state what
+actually happens**: deploying explains that a backup is taken first
+and the device is not touched if that fails; rollback states plainly
+that replaying an archived configuration restores settings the change
+MODIFIED but does not remove lines it ADDED. That limit is in the
+service docstring and would have been invisible to the person clicking
+the button.
+
+The create form explains that `configure terminal` / `end` /
+`write memory` are added automatically, so an operator does not add
+them again, and that comment and blank lines are ignored.
+
+Deployment transcripts are shown with a note that credentials are
+redacted before storage -- the redaction already existed; saying so
+means nobody assumes a transcript is a safe place to paste a secret.
+
+**Verified**: 47 templates parse; the page renders with zero ID
+mismatches; scripts pass syntax checks; undefined-name scan (179
+modules), render-target check, `[hidden]` sweep and authorization
+suite all clean.
+
+---
+
+### Changed — Configuration Diff page rebuilt against the reference design
+
+Rebuilt on the structured backend from the previous change, so every
+number, row and category comes from the real comparison rather than
+from layout.
+
+**Side-by-side workspace.** Two panes with line numbers, monospaced
+text and change highlighting. A line present on only one side gets a
+hatched spacer opposite it -- that is what keeps the panes aligned row
+for row rather than drifting apart as soon as anything is added.
+Scrolling is synchronised in both directions, with a guard flag so the
+two panes cannot drive each other in a feedback loop.
+
+**Controls that all do something:** side-by-side / unified toggle, and
+"Show only changes" which keeps two lines of context around each
+change so a lone changed line is not stripped of the block it belongs
+to. No non-functional buttons were added -- fullscreen was left out
+rather than stubbed.
+
+**Changes table** with type, location, category and before/after
+values, filtered by type, category and free text, paginated at 25.
+**Export writes what is currently FILTERED**, so what you see is what
+you get, with proper CSV quote escaping.
+
+**Summary tab** groups changes by configuration area with a stacked
+bar per category. Categories with no changes are not listed -- an
+empty row implies something was checked and found clean, which would
+be untrue.
+
+**One claim from the reference deliberately not reproduced:** the
+"No syntax errors" indicator. There is no syntax checker behind this
+page, so asserting it would be a fabricated status on a screen whose
+whole job is to report what actually changed. The card shows
+"Identical" or "Configuration changed" instead, which is derivable.
+
+**Colours integrate with the existing token set** (`--signal` /
+`--red` / `--amber`) rather than introducing a second palette, and
+every state also carries a `+` / `−` / `~` marker and a text label, so
+nothing depends on colour alone.
+
+Error state shows a plain sentence and a Retry button, never a raw
+exception. Empty states are distinct for: no snapshots at all, no
+device selected, same snapshot twice, no differences found, and no
+rows matching the filters.
+
+`/api/ncm/diff` is untouched, so nothing else that used it changed.
+
+**Verified**: 46 templates parse; the page renders with zero ID
+mismatches across 28 references; scripts pass Node syntax checks; CSS
+brace-balanced with all ten new component classes present; project-wide
+`[hidden]` sweep, undefined-name scan (179 modules), render-target
+check and authorization suite all clean.
+
+---
+
+### Added — structured diff backend for the Configuration Diff redesign
+
+The reference design needs three things the current `/api/ncm/diff`
+cannot provide: side-by-side ALIGNED rows, a change table with
+location and before/after values, and per-category counts. Built the
+backend for those first, because a page that renders any of them from
+guesswork would be a mockup.
+
+**New `app/services/ncm_diff_detail.py`.** The raw text diff stays
+authoritative -- this is a VIEW over difflib's opcodes, not a second
+algorithm, and no line is shown as changed that difflib did not report
+as changed. `/api/ncm/diff` is untouched, so the existing page and any
+other caller keep working.
+
+**Two derivations, both real rather than invented:**
+
+*Location* (`interface GigabitEthernet0/1 - description`) comes from
+the nearest preceding column-0 line plus the changed line's first
+token. In IOS the indentation IS the hierarchy, so this is structure,
+not a guess.
+
+*Modified* comes from difflib's `replace` opcodes: within one such
+block, a removal and an addition are paired as a modification when
+they share the same parent context AND the same first token. Anything
+unpaired stays a plain add or remove. The pairing is a presentation
+choice and is documented as one -- add/remove counts are never altered
+by it, and the summary reports all three so the numbers can always be
+reconciled.
+
+**Categories reuse `ncm_compare.CATEGORY_PATTERNS`** rather than
+introducing a second taxonomy, so a line that is "Routing" on the
+multi-device Compare page is "Routing" here too.
+
+**A real bug caught and fixed during testing:** a top-level line was
+treated as its own parent, producing the nonsense location
+`version 17.9 - version` -- and worse, preventing it from pairing with
+its replacement, since two different top-level lines never share a
+context. A `version` bump therefore showed as an unrelated add plus
+remove instead of one modification. Context search now starts ABOVE
+the line: after the fix the same comparison reports three
+modifications with correct locations.
+
+Verified against a realistic IOS change: description edit, IP change,
+OSPF network change and an added `transport input ssh` all classify
+and locate correctly; categories populate Interfaces / Routing / SSH;
+every aligned row has at least one populated side; and an identical
+configuration returns `identical` with no changes.
+
+**New endpoint** `POST /api/ncm/diff/detailed`, gated on the same
+`ncm:diff` permission as the existing diff.
+
+**Still to build**: the redesigned page itself -- side-by-side panels
+with synchronised scrolling, the change table with search and export,
+and the Summary tab. The data behind every one of those is now real
+and tested, which is the part that had to come first.
+
+---
+
 ### Fixed — Groups page reported 0 policies and 0 members for groups that had both
 
 Two separate under-reporting bugs, both in the backend, both reported

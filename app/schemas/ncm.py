@@ -335,3 +335,44 @@ class DeployResultOut(BaseModel):
     verified_changed: bool
     message: str
     blocked_commands: list[str]
+
+
+class DiffRowOut(BaseModel):
+    """One aligned side-by-side row. A None side means that panel has
+    no corresponding line, which is what keeps the two aligned."""
+    left_no: int | None
+    left: str | None
+    right_no: int | None
+    right: str | None
+    kind: str  # equal | add | remove | modify
+
+
+class ChangeEntryOut(BaseModel):
+    type: str            # added | removed | modified
+    location: str
+    previous_value: str
+    new_value: str
+    category: str
+    left_no: int | None
+    right_no: int | None
+
+
+class NcmDetailedDiffOut(BaseModel):
+    device_name: str
+    configuration_type: str
+    from_version: int
+    to_version: int
+    from_created_at: datetime
+    to_created_at: datetime
+    identical: bool
+    added: int
+    removed: int
+    modified: int
+    unchanged: int
+    #: added + removed + modified -- the "Total Changes" figure.
+    total_changes: int
+    #: category -> {added, removed, modified}, derived from the same
+    #: patterns the multi-device comparison uses.
+    categories: dict
+    rows: list[DiffRowOut]
+    changes: list[ChangeEntryOut]

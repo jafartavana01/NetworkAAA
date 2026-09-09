@@ -1,0 +1,474 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Change Control — NetOpsGuard{% endblock %}
+{% block breadcrumb %}NCM / Change Control{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="dash-hero">
+    <div class="dash-hero-title">
+      <span class="dash-hero-icon">{{ icons.icon('clipboard-list', 26) }}</span>
+      <div>
+        <h1>Change Control</h1>
+        <p class="content-sub">Propose a configuration change, have it reviewed, then deploy it with an automatic rollback point.</p>
+      </div>
+    </div>
+    <div class="dash-hero-meta">
+      <button type="button" class="btn-primary btn-with-icon" id="new-candidate-btn" style="width:auto;">{{ icons.icon('plus', 16) }}New Change</button>
+    </div>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;border-color:var(--amber);">
+    <div class="panel-body" style="font-size:12px;color:var(--amber);">
+      ⚠ Deploying writes to a live device. A fresh backup is taken immediately beforehand as the rollback point, and the deployment is abandoned without touching the device if that backup fails.
+    </div>
+  </div>
+
+  <div class="status-card-grid" id="cc-kpis" style="margin-bottom:16px;"></div>
+
+  <div class="cdiff-tabs" role="tablist">
+    <button type="button" class="cdiff-tab is-active" id="tab-candidates" role="tab" aria-selected="true">Changes</button>
+    <button type="button" class="cdiff-tab" id="tab-deployments" role="tab" aria-selected="false">Deployments</button>
+  </div>
+
+  <div id="panel-candidates">
+    <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+      <label class="field" style="min-width:170px;">
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('list-checks', 14) }}</span>
+          <select id="filter-status">
+            <option value="">All statuses</option>
+            <option value="draft">Draft</option>
+            <option value="pending_approval">Pending approval</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+            <option value="deployed">Deployed</option>
+            <option value="failed">Failed</option>
+            <option value="cancelled">Cancelled</option>
+          </select>
+        </div>
+      </label>
+      <label class="field" style="min-width:200px;flex:1;">
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+          <input type="text" id="filter-search" placeholder="Title or device…">
+        </div>
+      </label>
+    </div>
+    <div id="candidates-wrap"><div class="empty-state">Loading…</div></div>
+  </div>
+
+  <div id="panel-deployments" hidden>
+    <div id="deployments-wrap"><div class="empty-state">Loading…</div></div>
+  </div>
+</main>
+
+<!-- Create change -->
+<div class="modal-backdrop" id="candidate-modal-backdrop" hidden>
+  <div class="modal modal-lg">
+    <button type="button" class="modal-close-btn" id="candidate-modal-close" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2>New Configuration Change</h2>
+    <form id="candidate-form">
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Device</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+            <select id="cand-device" required></select>
+          </div>
+        </label>
+        <label class="field">
+          <span class="field-label">Title</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('clipboard-list', 14) }}</span>
+            <input type="text" id="cand-title" required maxlength="200" placeholder="e.g. Enable SSH v2 on uplinks">
+          </div>
+        </label>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Why this change is needed</span>
+        <textarea id="cand-description" rows="2" placeholder="Context for whoever reviews it"></textarea>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Configuration commands</span>
+        <textarea id="cand-lines" rows="10" required spellcheck="false"
+          style="font-family:var(--font-mono);font-size:12px;"
+          placeholder="interface GigabitEthernet0/1&#10; description UPLINK&#10; no shutdown"></textarea>
+      </label>
+      <div class="field-hint" style="margin-top:-8px;">
+        Enter the commands exactly as you would type them. <span class="cell-mono">configure terminal</span>, <span class="cell-mono">end</span> and <span class="cell-mono">write memory</span> are added automatically, so the sequence is always balanced. Blank lines and lines starting with <span class="cell-mono">!</span> or <span class="cell-mono">#</span> are ignored.
+      </div>
+
+      <div id="candidate-error" class="form-error" role="alert" hidden></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="candidate-cancel">Cancel</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Create Draft</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Detail drawer -->
+<div class="drawer-backdrop" id="cc-drawer-backdrop" hidden>
+  <aside class="drawer" style="width:min(96vw,820px);" role="dialog" aria-labelledby="cc-drawer-title">
+    <button type="button" class="modal-close-btn" id="cc-drawer-close" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <div id="cc-drawer-body"></div>
+  </aside>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_LIST = '{{ icons.icon("clipboard-list", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const ICON_ACTIVITY = '{{ icons.icon("activity", 16) }}';
+  const esc = AAAPlatform.escapeHtml;
+
+  let candidates = [];
+  let deployments = [];
+  let devices = [];
+  let currentCandidate = null;
+
+  const STATUS = {
+    draft:            { label: 'Draft',            cls: '' },
+    pending_approval: { label: 'Pending approval', cls: 'is-amber' },
+    approved:         { label: 'Approved',         cls: 'is-signal' },
+    rejected:         { label: 'Rejected',         cls: 'is-red' },
+    deployed:         { label: 'Deployed',         cls: 'is-signal' },
+    failed:           { label: 'Failed',           cls: 'is-red' },
+    cancelled:        { label: 'Cancelled',        cls: '' },
+  };
+  const DEPLOY_STATUS = {
+    running:         { label: 'Running',         cls: 'is-amber' },
+    succeeded:       { label: 'Succeeded',       cls: 'is-signal' },
+    failed:          { label: 'Failed',          cls: 'is-red' },
+    rolled_back:     { label: 'Rolled back',     cls: 'is-amber' },
+    rollback_failed: { label: 'Rollback failed', cls: 'is-red' },
+  };
+
+  function badge(map, key) {
+    const s = map[key] || { label: key, cls: '' };
+    return '<span class="badge sec-sev-badge ' + s.cls + '">' + esc(s.label) + '</span>';
+  }
+
+  // ---------------- candidates ----------------
+  function visibleCandidates() {
+    const status = document.getElementById('filter-status').value;
+    const q = document.getElementById('filter-search').value.trim().toLowerCase();
+    return candidates.filter((c) => {
+      if (status && c.status !== status) return false;
+      if (q && !(c.title.toLowerCase().includes(q) || c.device_name.toLowerCase().includes(q))) return false;
+      return true;
+    });
+  }
+
+  function renderCandidates() {
+    const wrap = document.getElementById('candidates-wrap');
+    if (!candidates.length) {
+      wrap.innerHTML = '<div class="empty-state"><div class="empty-state-title">No configuration changes yet</div>' +
+        '<p class="empty-state-desc">Create one to propose a change, have it reviewed, and deploy it with a rollback point.</p></div>';
+      return;
+    }
+    const rows = visibleCandidates();
+    if (!rows.length) { wrap.innerHTML = '<div class="empty-state">No changes match these filters.</div>'; return; }
+
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>#</th><th>Title</th><th>Device</th><th>Status</th>' +
+      '<th>Created by</th><th>Approved by</th><th>Created</th><th></th></tr></thead><tbody>' +
+      rows.map((c) =>
+        '<tr><td class="cell-mono">#' + c.display_number + '</td>' +
+        '<td>' + esc(c.title) +
+        // Surfaced in the LIST, not just at deploy time: a reviewer
+        // should see a blocked command before approving, not after.
+        (c.blocked_commands.length
+          ? '<div class="content-sub" style="color:var(--red);">Contains refused commands: ' +
+            esc(c.blocked_commands.join(', ')) + '</div>'
+          : '') + '</td>' +
+        '<td class="content-sub">' + esc(c.device_name) + '</td>' +
+        '<td>' + badge(STATUS, c.status) + '</td>' +
+        '<td class="content-sub">' + esc(c.created_by || '—') + '</td>' +
+        '<td class="content-sub">' + esc(c.approved_by || '—') + '</td>' +
+        '<td class="content-sub">' + new Date(c.created_at).toLocaleString() + '</td>' +
+        '<td class="cell-actions"><button type="button" class="btn-secondary btn-small" data-open="' + c.id + '">Open</button></td></tr>'
+      ).join('') + '</tbody></table>';
+  }
+
+  function renderDeployments() {
+    const wrap = document.getElementById('deployments-wrap');
+    if (!deployments.length) {
+      wrap.innerHTML = '<div class="empty-state"><div class="empty-state-title">No deployments yet</div>' +
+        '<p class="empty-state-desc">Approved changes appear here once they have been deployed to a device.</p></div>';
+      return;
+    }
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>#</th><th>Device</th><th>Status</th><th>Verified</th>' +
+      '<th>Started by</th><th>Started</th><th></th></tr></thead><tbody>' +
+      deployments.map((d) =>
+        '<tr><td class="cell-mono">#' + d.display_number + '</td>' +
+        '<td>' + esc(d.device_name) + '</td>' +
+        '<td>' + badge(DEPLOY_STATUS, d.status) + '</td>' +
+        // "Verified" means a post-deployment backup actually differed
+        // from the pre one -- not that commands were accepted.
+        '<td class="content-sub">' + (d.verified_changed ? 'Config changed' : 'No change detected') + '</td>' +
+        '<td class="content-sub">' + esc(d.started_by || '—') + '</td>' +
+        '<td class="content-sub">' + new Date(d.started_at).toLocaleString() + '</td>' +
+        '<td class="cell-actions">' +
+        '<button type="button" class="btn-secondary btn-small" data-deployment="' + d.id + '">Details</button>' +
+        (d.pre_configuration_id && d.status === 'succeeded'
+          ? '<button type="button" class="btn-danger btn-small" data-rollback="' + d.id + '">Roll back</button>'
+          : '') +
+        '</td></tr>').join('') + '</tbody></table>';
+  }
+
+  function renderKpis() {
+    const count = (s) => candidates.filter((c) => c.status === s).length;
+    document.getElementById('cc-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_LIST, label: 'Changes', value: candidates.length }),
+      AAAPlatform.kpiCard({ icon: ICON_ACTIVITY, label: 'Awaiting Approval', value: count('pending_approval'),
+                            state: count('pending_approval') ? 'is-amber' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'Approved, Not Deployed', value: count('approved'),
+                            state: count('approved') ? 'is-signal' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_ALERT, label: 'Failed', value: count('failed'),
+                            state: count('failed') ? 'is-red' : '' }),
+    ].join('');
+  }
+
+  // ---------------- detail drawer ----------------
+  function openCandidate(id) {
+    const c = candidates.find((x) => x.id === id);
+    if (!c) return;
+    currentCandidate = c;
+
+    const act = (label, action, cls) =>
+      '<button type="button" class="' + cls + ' btn-small" data-action="' + action + '" style="width:auto;">' + label + '</button>';
+    let actions = '';
+    if (c.status === 'draft') actions += act('Submit for approval', 'submit', 'btn-primary');
+    if (c.status === 'pending_approval') {
+      actions += act('Approve', 'approve', 'btn-primary') + act('Reject', 'reject', 'btn-danger');
+    }
+    if (c.status === 'approved') actions += act('Deploy to device', 'deploy', 'btn-danger');
+
+    document.getElementById('cc-drawer-body').innerHTML =
+      '<div class="drawer-head">' + badge(STATUS, c.status) +
+      '<h2 id="cc-drawer-title" style="margin:8px 0 0;font-size:17px;">#' + c.display_number + ' — ' + esc(c.title) + '</h2>' +
+      '<div class="content-sub" style="margin-top:4px;">' + esc(c.device_name) + '</div></div>' +
+      '<div class="drawer-meta">' +
+      '<div class="readout"><span class="readout-k">created by</span><span class="readout-v">' + esc(c.created_by || '—') + '</span></div>' +
+      '<div class="readout"><span class="readout-k">created</span><span class="readout-v">' + new Date(c.created_at).toLocaleString() + '</span></div>' +
+      (c.approved_by ? '<div class="readout"><span class="readout-k">approved by</span><span class="readout-v">' + esc(c.approved_by) + '</span></div>' : '') +
+      (c.review_note ? '<div class="readout"><span class="readout-k">review note</span><span class="readout-v">' + esc(c.review_note) + '</span></div>' : '') +
+      '</div>' +
+      (c.description ? '<div class="drawer-section"><div class="drawer-section-title">Why</div><p class="drawer-text">' + esc(c.description) + '</p></div>' : '') +
+      (c.blocked_commands.length
+        ? '<div class="drawer-section"><div class="drawer-section-title" style="color:var(--red);">Refused commands</div>' +
+          '<p class="drawer-text">This change contains commands the deployer will not send, because they could sever access to the device or reboot it: ' +
+          '<span class="cell-mono">' + esc(c.blocked_commands.join(', ')) + '</span>. Remove them before deploying.</p></div>'
+        : '') +
+      '<div class="drawer-section"><div class="drawer-section-title">Commands to be sent</div>' +
+      '<div class="diff-view">' + esc(c.configuration_lines) + '</div></div>' +
+      (actions ? '<div class="modal-actions" style="justify-content:flex-start;">' + actions + '</div>' : '') +
+      '<div id="cc-action-error" class="form-error" role="alert" hidden style="margin-top:10px;"></div>';
+
+    document.getElementById('cc-drawer-backdrop').hidden = false;
+  }
+
+  function openDeployment(id) {
+    const d = deployments.find((x) => x.id === id);
+    if (!d) return;
+    document.getElementById('cc-drawer-body').innerHTML =
+      '<div class="drawer-head">' + badge(DEPLOY_STATUS, d.status) +
+      '<h2 id="cc-drawer-title" style="margin:8px 0 0;font-size:17px;">Deployment #' + d.display_number + '</h2>' +
+      '<div class="content-sub" style="margin-top:4px;">' + esc(d.device_name) + '</div></div>' +
+      '<div class="drawer-meta">' +
+      '<div class="readout"><span class="readout-k">started by</span><span class="readout-v">' + esc(d.started_by || '—') + '</span></div>' +
+      '<div class="readout"><span class="readout-k">started</span><span class="readout-v">' + new Date(d.started_at).toLocaleString() + '</span></div>' +
+      '<div class="readout"><span class="readout-k">verified</span><span class="readout-v">' +
+      (d.verified_changed ? 'the device configuration changed' : 'no change detected between before and after') + '</span></div>' +
+      '<div class="readout"><span class="readout-k">rollback point</span><span class="readout-v">' +
+      (d.pre_configuration_id ? 'archived before the change' : 'none') + '</span></div>' +
+      '</div>' +
+      (d.error_message ? '<div class="drawer-section"><div class="drawer-section-title" style="color:var(--red);">Error</div>' +
+        '<p class="drawer-text">' + esc(d.error_message) + '</p></div>' : '') +
+      (d.transcript
+        ? '<div class="drawer-section"><div class="drawer-section-title">Device transcript</div>' +
+          '<div class="content-sub" style="margin-bottom:6px;font-size:11px;">Credentials are redacted before storage.</div>' +
+          '<div class="diff-view">' + esc(d.transcript) + '</div></div>'
+        : '');
+    document.getElementById('cc-drawer-backdrop').hidden = false;
+  }
+
+  const closeDrawer = () => { document.getElementById('cc-drawer-backdrop').hidden = true; };
+  document.getElementById('cc-drawer-close').addEventListener('click', closeDrawer);
+  document.getElementById('cc-drawer-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'cc-drawer-backdrop') closeDrawer();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !document.getElementById('cc-drawer-backdrop').hidden) closeDrawer();
+  });
+
+  // ---------------- actions ----------------
+  async function doAction(action) {
+    const c = currentCandidate;
+    if (!c) return;
+    const box = document.getElementById('cc-action-error');
+    if (box) box.hidden = true;
+
+    if (action === 'deploy') {
+      const ok = window.confirm(
+        'Deploy change #' + c.display_number + ' to ' + c.device_name + '?\n\n' +
+        'A backup is taken first as the rollback point. If that backup fails the device is not touched.');
+      if (!ok) return;
+    }
+
+    let url, body = null;
+    if (action === 'submit') url = '/api/ncm/candidates/' + c.id + '/submit';
+    else if (action === 'deploy') url = '/api/ncm/candidates/' + c.id + '/deploy';
+    else {
+      url = '/api/ncm/candidates/' + c.id + '/review';
+      const note = window.prompt(action === 'approve'
+        ? 'Optional note for the approval:' : 'Reason for rejection:');
+      if (action === 'reject' && note === null) return;
+      body = { decision: action, note: note || null };
+    }
+
+    const res = await AAAPlatform.authedFetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      const msg = (b.detail && typeof b.detail === 'string') ? b.detail
+        : (res.status === 403 ? "Your role doesn't have permission for that." : 'That action could not be completed.');
+      if (box) { box.textContent = msg; box.hidden = false; } else AAAPlatform.toast(msg, 'error');
+      return;
+    }
+
+    const result = await res.json();
+    closeDrawer();
+    // The deploy endpoint reports whether the device actually changed;
+    // saying "deployed" when nothing changed would hide a no-op.
+    AAAPlatform.toast(action === 'deploy' && result.message ? result.message : 'Change updated.',
+                      action === 'deploy' && result.ok === false ? 'error' : undefined);
+    load();
+  }
+
+  document.getElementById('cc-drawer-body').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (btn) doAction(btn.dataset.action);
+  });
+
+  document.getElementById('candidates-wrap').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-open]');
+    if (btn) openCandidate(btn.dataset.open);
+  });
+
+  document.getElementById('deployments-wrap').addEventListener('click', async (e) => {
+    const det = e.target.closest('button[data-deployment]');
+    if (det) { openDeployment(det.dataset.deployment); return; }
+    const rb = e.target.closest('button[data-rollback]');
+    if (!rb) return;
+    const d = deployments.find((x) => x.id === rb.dataset.rollback);
+    if (!d) return;
+    if (!window.confirm(
+      'Roll back deployment #' + d.display_number + ' on ' + d.device_name + '?\n\n' +
+      'This re-applies the configuration archived before the change. Note that replaying an old ' +
+      'configuration restores settings the change MODIFIED, but does not remove lines it ADDED.')) return;
+
+    const res = await AAAPlatform.authedFetch('/api/ncm/deployments/' + d.id + '/rollback', { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      AAAPlatform.toast((body.detail && typeof body.detail === 'string') ? body.detail : 'Rollback failed.', 'error');
+      return;
+    }
+    AAAPlatform.toast(body.message || 'Rollback complete.', body.ok === false ? 'error' : undefined);
+    load();
+  });
+
+  // ---------------- create ----------------
+  document.getElementById('new-candidate-btn').addEventListener('click', () => {
+    document.getElementById('candidate-error').hidden = true;
+    document.getElementById('candidate-form').reset();
+    document.getElementById('cand-device').innerHTML =
+      devices.map((d) => '<option value="' + d.device_id + '">' + esc(d.device_name) + '</option>').join('');
+    document.getElementById('candidate-modal-backdrop').hidden = false;
+  });
+  const closeModal = () => { document.getElementById('candidate-modal-backdrop').hidden = true; };
+  document.getElementById('candidate-cancel').addEventListener('click', closeModal);
+  document.getElementById('candidate-modal-close').addEventListener('click', closeModal);
+  document.getElementById('candidate-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'candidate-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('candidate-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const box = document.getElementById('candidate-error');
+    box.hidden = true;
+    const res = await AAAPlatform.authedFetch('/api/ncm/candidates', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        device_id: document.getElementById('cand-device').value,
+        title: document.getElementById('cand-title').value.trim(),
+        description: document.getElementById('cand-description').value.trim() || null,
+        configuration_lines: document.getElementById('cand-lines').value,
+      }),
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      box.textContent = res.status === 403
+        ? "Your role doesn't have permission to propose changes."
+        : ((b.detail && typeof b.detail === 'string') ? b.detail : 'Could not create the change.');
+      box.hidden = false;
+      return;
+    }
+    closeModal();
+    AAAPlatform.toast('Draft created. Submit it for approval when ready.');
+    load();
+  });
+
+  ['filter-status'].forEach((id) => document.getElementById(id).addEventListener('change', renderCandidates));
+  document.getElementById('filter-search').addEventListener('input', renderCandidates);
+
+  function selectTab(which) {
+    const isCand = which === 'candidates';
+    document.getElementById('tab-candidates').classList.toggle('is-active', isCand);
+    document.getElementById('tab-deployments').classList.toggle('is-active', !isCand);
+    document.getElementById('tab-candidates').setAttribute('aria-selected', String(isCand));
+    document.getElementById('tab-deployments').setAttribute('aria-selected', String(!isCand));
+    document.getElementById('panel-candidates').hidden = !isCand;
+    document.getElementById('panel-deployments').hidden = isCand;
+  }
+  document.getElementById('tab-candidates').addEventListener('click', () => selectTab('candidates'));
+  document.getElementById('tab-deployments').addEventListener('click', () => selectTab('deployments'));
+
+  async function load() {
+    let cRes, dRes, devRes;
+    try {
+      cRes = await AAAPlatform.authedFetch('/api/ncm/candidates');
+      dRes = await AAAPlatform.authedFetch('/api/ncm/deployments');
+      devRes = await AAAPlatform.authedFetch('/api/ncm/devices');
+    } catch (e) { cRes = null; }
+    if (!cRes || !cRes.ok) {
+      document.getElementById('candidates-wrap').innerHTML =
+        '<div class="empty-state">' + (cRes && cRes.status === 403
+          ? "Your role doesn't have permission to view Configuration Management."
+          : 'Could not load configuration changes.') + '</div>';
+      document.getElementById('cc-kpis').innerHTML = '';
+      return;
+    }
+    candidates = await cRes.json();
+    deployments = dRes && dRes.ok ? await dRes.json() : [];
+    devices = devRes && devRes.ok ? await devRes.json() : [];
+    renderKpis();
+    renderCandidates();
+    renderDeployments();
+  }
+
+  load();
+})();
+</script>
+{% endblock %}

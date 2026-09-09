@@ -1,137 +1,461 @@
 {% extends "app_shell.html" %}
 {% import "partials/icons.html" as icons %}
 {% block title %}Configuration Diff — NetOpsGuard{% endblock %}
-{% block breadcrumb %}NCM / Configuration Diff{% endblock %}
+{% block breadcrumb %}NCM / Configuration Compare{% endblock %}
 
 {% block view_content %}
 <main class="content">
-  <div class="content-head">
-    <h1>Configuration Diff</h1>
-    <p class="content-sub">Compare two archived versions of the same device. This is a text diff — it shows exactly what changed, without claiming to interpret what those lines mean to the device.</p>
+  <div class="dash-hero">
+    <div class="dash-hero-title">
+      <span class="dash-hero-icon">{{ icons.icon('database', 26) }}</span>
+      <div>
+        <h1>Configuration Diff</h1>
+        <p class="content-sub">Compare configuration versions of the same device. View changes, additions and removals between two selected snapshots.</p>
+      </div>
+    </div>
   </div>
 
-  <div class="toolbar" style="gap:12px;flex-wrap:wrap;align-items:flex-end;">
-    <label class="field" style="min-width:200px;">
+  <div class="cdiff-controls">
+    <label class="field">
       <span class="field-label">Device</span>
       <div class="field-icon-wrap">
         <span class="field-icon">{{ icons.icon('server', 14) }}</span>
         <select id="diff-device"><option value="">Select a device…</option></select>
       </div>
     </label>
-    <label class="field" style="min-width:200px;">
+    <label class="field">
       <span class="field-label">From version</span>
       <div class="field-icon-wrap">
         <span class="field-icon">{{ icons.icon('history', 14) }}</span>
         <select id="diff-from"><option value="">—</option></select>
       </div>
     </label>
-    <label class="field" style="min-width:200px;">
+    <label class="field">
       <span class="field-label">To version</span>
       <div class="field-icon-wrap">
         <span class="field-icon">{{ icons.icon('history', 14) }}</span>
         <select id="diff-to"><option value="">—</option></select>
       </div>
     </label>
-    <button type="button" class="btn-primary btn-with-icon" id="run-diff-btn" style="width:auto;">{{ icons.icon('check', 16) }}Compare</button>
-    <button type="button" class="btn-secondary btn-small" id="current-vs-previous-btn" style="width:auto;">Current vs Previous</button>
+    <div class="cdiff-actions">
+      <button type="button" class="btn-primary btn-with-icon" id="run-diff-btn" style="width:auto;">{{ icons.icon('check', 16) }}Compare</button>
+      <button type="button" class="btn-secondary btn-small" id="current-prev-btn" style="width:auto;">Current vs Previous</button>
+      <button type="button" class="btn-ghost btn-small" id="reset-btn" style="width:auto;">Reset</button>
+    </div>
   </div>
 
-  <div class="status-card-grid" id="diff-summary" style="margin-bottom:16px;"></div>
-  <div id="diff-body"><div class="empty-state">Select a device and two versions to compare.</div></div>
+  <div id="diff-results" hidden>
+    <div class="cdiff-summary" id="diff-summary"></div>
+
+    <div class="toolbar cdiff-toolbar" style="margin-bottom:10px;">
+      <span class="content-sub" id="diff-context-label"></span>
+      <div class="cdiff-toolbar">
+        <label class="field" style="margin:0;min-width:150px;">
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('folder', 14) }}</span>
+            <select id="view-mode">
+              <option value="split">Side by side</option>
+              <option value="unified">Unified view</option>
+            </select>
+          </div>
+        </label>
+        <button type="button" class="btn-secondary btn-small" id="only-changes-btn" aria-pressed="false">Show only changes</button>
+      </div>
+    </div>
+
+    <div class="cdiff-panes" id="diff-panes"></div>
+
+    <div style="margin-top:20px;">
+      <div class="cdiff-tabs" role="tablist">
+        <button type="button" class="cdiff-tab is-active" id="tab-changes" role="tab" aria-selected="true">Changes</button>
+        <button type="button" class="cdiff-tab" id="tab-summary" role="tab" aria-selected="false">Summary</button>
+        <span style="flex:1;"></span>
+        <button type="button" class="btn-secondary btn-small" id="export-btn" style="align-self:center;">Export CSV</button>
+      </div>
+
+      <div id="panel-changes">
+        <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+          <label class="field" style="min-width:160px;">
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('list-checks', 14) }}</span>
+              <select id="filter-type">
+                <option value="">All types</option>
+                <option value="added">Added</option>
+                <option value="removed">Removed</option>
+                <option value="modified">Modified</option>
+              </select>
+            </div>
+          </label>
+          <label class="field" style="min-width:160px;">
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('folder', 14) }}</span>
+              <select id="filter-category"><option value="">All categories</option></select>
+            </div>
+          </label>
+          <label class="field" style="min-width:200px;flex:1;">
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+              <input type="text" id="filter-search" placeholder="Search location or value…">
+            </div>
+          </label>
+        </div>
+        <div id="changes-wrap"></div>
+        <div class="toolbar" style="margin-top:10px;">
+          <span class="content-sub" id="changes-page-info"></span>
+          <div style="display:flex;gap:8px;">
+            <button type="button" class="btn-ghost btn-small" id="changes-prev">Previous</button>
+            <button type="button" class="btn-ghost btn-small" id="changes-next">Next</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="panel-summary" hidden></div>
+    </div>
+  </div>
+
+  <div id="diff-placeholder">
+    <div class="empty-state">
+      <div class="empty-state-title">Nothing compared yet</div>
+      <p class="empty-state-desc">Select a device and two configuration versions, then choose Compare.</p>
+    </div>
+  </div>
 </main>
 {% endblock %}
 
 {% block view_scripts %}
 <script>
 (() => {
-  const ICON_PLUS = '{{ icons.icon("plus", 16) }}';
-  const ICON_MINUS = '{{ icons.icon("x", 16) }}';
-  const ICON_LIST = '{{ icons.icon("list-checks", 16) }}';
   const esc = AAAPlatform.escapeHtml;
+  const cssVar = AAAPlatform.cssVar;
 
+  const PAGE_SIZE = 25;
   let allConfigs = [];
+  let current = null;
+  let onlyChanges = false;
+  let changesPage = 0;
+
+  const TYPE_MARK = { added: '+', removed: '\u2212', modified: '~' };
 
   function versionsFor(deviceId) {
     return allConfigs.filter((c) => c.device_id === deviceId)
       .sort((a, b) => b.version_number - a.version_number);
   }
 
-  function fillVersionSelects() {
-    const deviceId = document.getElementById('diff-device').value;
-    const versions = versionsFor(deviceId);
+  function fillVersions() {
+    const versions = versionsFor(document.getElementById('diff-device').value);
     const opts = versions.map((c) =>
-      '<option value="' + c.id + '">#' + c.version_number + ' — ' + esc(c.configuration_type) +
-      ' — ' + new Date(c.created_at).toLocaleString() + '</option>').join('');
-    document.getElementById('diff-from').innerHTML = '<option value="">—</option>' + opts;
-    document.getElementById('diff-to').innerHTML = '<option value="">—</option>' + opts;
-
-    // Sensible default: previous -> current, the comparison an operator
-    // asks for most often.
+      '<option value="' + c.id + '">#' + c.version_number + ' \u2014 ' + esc(c.configuration_type) +
+      ' \u2014 ' + new Date(c.created_at).toLocaleString() + '</option>').join('');
+    document.getElementById('diff-from').innerHTML = '<option value="">\u2014</option>' + opts;
+    document.getElementById('diff-to').innerHTML = '<option value="">\u2014</option>' + opts;
+    // Previous -> current is the comparison asked for most often.
     if (versions.length >= 2) {
       document.getElementById('diff-from').value = versions[1].id;
       document.getElementById('diff-to').value = versions[0].id;
     }
   }
 
-  function setMessage(html) {
-    document.getElementById('diff-summary').innerHTML = '';
-    document.getElementById('diff-body').innerHTML = html;
+  function showPlaceholder(html) {
+    document.getElementById('diff-results').hidden = true;
+    const ph = document.getElementById('diff-placeholder');
+    ph.hidden = false;
+    ph.innerHTML = html;
   }
 
   async function runDiff(fromId, toId) {
     if (!fromId || !toId) {
-      setMessage('<div class="empty-state">Select both a "from" and a "to" version.</div>');
+      showPlaceholder('<div class="empty-state"><div class="empty-state-title">Select two versions</div>' +
+        '<p class="empty-state-desc">Choose a "from" and a "to" snapshot to compare.</p></div>');
       return;
     }
+    if (fromId === toId) {
+      showPlaceholder('<div class="empty-state"><div class="empty-state-title">Same snapshot selected</div>' +
+        '<p class="empty-state-desc">Pick two different versions to see what changed between them.</p></div>');
+      return;
+    }
+
+    showPlaceholder('<div class="empty-state">Comparing configurations\u2026</div>');
     let res;
     try {
-      res = await AAAPlatform.authedFetch('/api/ncm/diff', {
+      res = await AAAPlatform.authedFetch('/api/ncm/diff/detailed', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ from_configuration_id: fromId, to_configuration_id: toId }),
       });
     } catch (e) { res = null; }
+
     if (!res || !res.ok) {
       const body = res ? await res.json().catch(() => ({})) : {};
-      setMessage('<div class="empty-state">' +
-        esc((body.detail && typeof body.detail === 'string') ? body.detail : 'Could not compare those versions.') +
-        '</div>');
-      return;
-    }
-    const d = await res.json();
-
-    document.getElementById('diff-summary').innerHTML = [
-      AAAPlatform.kpiCard({ icon: ICON_PLUS, label: 'Added Lines', value: d.added, state: d.added ? 'is-signal' : '' }),
-      AAAPlatform.kpiCard({ icon: ICON_MINUS, label: 'Removed Lines', value: d.removed, state: d.removed ? 'is-red' : '' }),
-      AAAPlatform.kpiCard({ icon: ICON_LIST, label: 'Comparing', value: '#' + d.from_version + ' → #' + d.to_version,
-                            sub: d.device_name + ' · ' + d.configuration_type }),
-    ].join('');
-
-    if (d.identical) {
-      document.getElementById('diff-body').innerHTML =
-        '<div class="empty-state"><div class="empty-state-title">These versions are identical</div>' +
-        '<p class="empty-state-desc">Both snapshots have the same content, so there is nothing to show.</p></div>';
+      // Never surfaces a raw exception: the API's own detail string, or
+      // a plain sentence, but nothing internal.
+      const msg = res && res.status === 403
+        ? "Your role doesn't have permission to compare configurations."
+        : ((body.detail && typeof body.detail === 'string') ? body.detail
+           : 'Unable to compare the selected configuration snapshots.');
+      showPlaceholder(
+        '<div class="empty-state"><div class="empty-state-title">Configuration comparison failed</div>' +
+        '<p class="empty-state-desc">' + esc(msg) + '</p>' +
+        '<button type="button" class="btn-secondary btn-small" id="retry-btn" style="width:auto;margin-top:10px;">Retry</button></div>');
+      const retry = document.getElementById('retry-btn');
+      if (retry) retry.addEventListener('click', () => runDiff(fromId, toId));
       return;
     }
 
-    document.getElementById('diff-body').innerHTML =
-      '<div class="panel panel-wide"><div class="panel-body ncm-diff">' +
-      d.lines.map((l) =>
-        '<div class="ncm-diff-line is-' + l.type + '">' +
-        '<span class="ncm-diff-marker">' + (l.type === 'add' ? '+' : (l.type === 'remove' ? '-' : ' ')) + '</span>' +
-        '<span class="ncm-diff-text">' + esc(l.text) + '</span></div>').join('') +
-      '</div></div>';
+    current = await res.json();
+    changesPage = 0;
+    document.getElementById('filter-category').innerHTML = '<option value="">All categories</option>';
+    render();
   }
 
-  document.getElementById('diff-device').addEventListener('change', fillVersionSelects);
+  function render() {
+    const d = current;
+    document.getElementById('diff-placeholder').hidden = true;
+    document.getElementById('diff-results').hidden = false;
+
+    document.getElementById('diff-context-label').textContent =
+      d.device_name + ' \u00b7 ' + d.configuration_type + ' \u00b7 #' + d.from_version + ' \u2192 #' + d.to_version;
+
+    const stat = (cls, mark, label, value) =>
+      '<div class="cdiff-stat ' + cls + '">' +
+      '<span class="cdiff-stat-icon">' + mark + '</span>' +
+      '<span><span class="cdiff-stat-label">' + label + '</span>' +
+      '<span class="cdiff-stat-value">' + value + '</span></span></div>';
+
+    // Only states this page can actually derive are shown. There is no
+    // syntax checker behind it, so no "no syntax errors" claim is made.
+    document.getElementById('diff-summary').innerHTML =
+      stat('', '\u03a3', 'Total Changes', d.total_changes) +
+      stat('is-add', '+', 'Added Lines', d.added) +
+      stat('is-remove', '\u2212', 'Removed Lines', d.removed) +
+      stat('is-modify', '~', 'Modified Lines', d.modified) +
+      '<div class="cdiff-stat"><span class="cdiff-stat-icon">' +
+      (d.identical ? '=' : '\u2260') + '</span><span>' +
+      '<span class="cdiff-stat-label">Result</span>' +
+      '<span class="cdiff-stat-value" style="font-size:14px;">' +
+      (d.identical ? 'Identical' : 'Configuration changed') + '</span></span></div>';
+
+    renderPanes();
+    renderChanges();
+    renderSummary();
+  }
+
+  function lineHtml(no, marker, text, kind) {
+    return '<div class="cdiff-line ' + kind + '">' +
+      '<span class="cdiff-lineno">' + (no != null ? no : '') + '</span>' +
+      '<span class="cdiff-marker">' + marker + '</span>' +
+      '<span class="cdiff-text">' + esc(text != null ? text : '') + '</span></div>';
+  }
+
+  function visibleRows() {
+    if (!onlyChanges) return current.rows;
+    // Keep a couple of lines of context around each change, so a lone
+    // changed line is not stripped of the block it belongs to.
+    const keep = new Set();
+    current.rows.forEach((r, i) => {
+      if (r.kind !== 'equal') {
+        for (let k = Math.max(0, i - 2); k <= Math.min(current.rows.length - 1, i + 2); k++) keep.add(k);
+      }
+    });
+    return current.rows.filter((_, i) => keep.has(i));
+  }
+
+  function renderPanes() {
+    const panes = document.getElementById('diff-panes');
+    const unified = document.getElementById('view-mode').value === 'unified';
+    panes.classList.toggle('is-unified', unified);
+
+    if (current.identical) {
+      panes.innerHTML = '<div class="empty-state"><div class="empty-state-title">No differences found</div>' +
+        '<p class="empty-state-desc">These two snapshots are byte-identical.</p></div>';
+      return;
+    }
+
+    const rows = visibleRows();
+    if (!rows.length) {
+      panes.innerHTML = '<div class="empty-state">No lines to display for this view.</div>';
+      return;
+    }
+
+    const head = (title, meta) =>
+      '<div class="cdiff-pane-head"><span class="cdiff-pane-title">' + esc(title) +
+      '</span><span class="cdiff-pane-meta">' + esc(meta) + '</span></div>';
+
+    if (unified) {
+      const body = rows.map((r) => {
+        if (r.kind === 'equal') return lineHtml(r.left_no, ' ', r.left, '');
+        if (r.kind === 'add') return lineHtml(r.right_no, '+', r.right, 'is-add');
+        if (r.kind === 'remove') return lineHtml(r.left_no, '\u2212', r.left, 'is-remove');
+        return lineHtml(r.left_no, '\u2212', r.left, 'is-remove') +
+               lineHtml(r.right_no, '+', r.right, 'is-add');
+      }).join('');
+      panes.innerHTML = '<div class="cdiff-pane">' +
+        head('Unified \u2014 #' + current.from_version + ' \u2192 #' + current.to_version,
+             new Date(current.to_created_at).toLocaleString()) +
+        '<div class="cdiff-pane-body" id="pane-left">' + body + '</div></div>';
+      return;
+    }
+
+    // Side by side. A line present on only one side gets a spacer on
+    // the other, which is what keeps the two panes aligned row for row
+    // when they scroll together.
+    const leftBody = rows.map((r) => {
+      if (r.kind === 'equal') return lineHtml(r.left_no, ' ', r.left, '');
+      if (r.kind === 'remove') return lineHtml(r.left_no, '\u2212', r.left, 'is-remove');
+      if (r.kind === 'modify') return lineHtml(r.left_no, '~', r.left, 'is-modify');
+      return lineHtml(null, ' ', '', 'is-void');
+    }).join('');
+
+    const rightBody = rows.map((r) => {
+      if (r.kind === 'equal') return lineHtml(r.right_no, ' ', r.right, '');
+      if (r.kind === 'add') return lineHtml(r.right_no, '+', r.right, 'is-add');
+      if (r.kind === 'modify') return lineHtml(r.right_no, '~', r.right, 'is-modify');
+      return lineHtml(null, ' ', '', 'is-void');
+    }).join('');
+
+    panes.innerHTML =
+      '<div class="cdiff-pane">' +
+      head('Previous version (#' + current.from_version + ')', new Date(current.from_created_at).toLocaleString()) +
+      '<div class="cdiff-pane-body" id="pane-left">' + leftBody + '</div></div>' +
+      '<div class="cdiff-pane">' +
+      head('Current version (#' + current.to_version + ')', new Date(current.to_created_at).toLocaleString()) +
+      '<div class="cdiff-pane-body" id="pane-right">' + rightBody + '</div></div>';
+
+    // Synchronised scrolling. The guard flag stops the two panes from
+    // driving each other in a feedback loop.
+    const left = document.getElementById('pane-left');
+    const right = document.getElementById('pane-right');
+    if (left && right) {
+      let syncing = false;
+      const link = (a, b) => a.addEventListener('scroll', () => {
+        if (syncing) { syncing = false; return; }
+        syncing = true;
+        b.scrollTop = a.scrollTop;
+        b.scrollLeft = a.scrollLeft;
+      });
+      link(left, right);
+      link(right, left);
+    }
+  }
+
+  function filteredChanges() {
+    const type = document.getElementById('filter-type').value;
+    const cat = document.getElementById('filter-category').value;
+    const q = document.getElementById('filter-search').value.trim().toLowerCase();
+    return current.changes.filter((c) => {
+      if (type && c.type !== type) return false;
+      if (cat && c.category !== cat) return false;
+      if (q && !(c.location.toLowerCase().includes(q) ||
+                 c.previous_value.toLowerCase().includes(q) ||
+                 c.new_value.toLowerCase().includes(q))) return false;
+      return true;
+    });
+  }
+
+  function renderChanges() {
+    const catSel = document.getElementById('filter-category');
+    if (catSel.options.length <= 1) {
+      const cats = [...new Set(current.changes.map((c) => c.category))].sort();
+      catSel.innerHTML = '<option value="">All categories</option>' +
+        cats.map((c) => '<option value="' + esc(c) + '">' + esc(c) + '</option>').join('');
+    }
+    document.getElementById('tab-changes').textContent = 'Changes (' + current.changes.length + ')';
+
+    const wrap = document.getElementById('changes-wrap');
+    if (!current.changes.length) {
+      wrap.innerHTML = '<div class="empty-state">No differences found between these snapshots.</div>';
+      document.getElementById('changes-page-info').textContent = '';
+      return;
+    }
+
+    const rows = filteredChanges();
+    const maxPage = Math.max(0, Math.ceil(rows.length / PAGE_SIZE) - 1);
+    if (changesPage > maxPage) changesPage = maxPage;
+    const slice = rows.slice(changesPage * PAGE_SIZE, (changesPage + 1) * PAGE_SIZE);
+
+    if (!rows.length) {
+      wrap.innerHTML = '<div class="empty-state">No changes match these filters.</div>';
+      document.getElementById('changes-page-info').textContent = '';
+      return;
+    }
+
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>Type</th><th>Location</th><th>Category</th>' +
+      '<th>Previous value</th><th>New value</th></tr></thead><tbody>' +
+      slice.map((c) =>
+        '<tr><td><span class="cdiff-type is-' + c.type + '">' +
+        '<span class="cdiff-type-mark">' + TYPE_MARK[c.type] + '</span>' +
+        esc(c.type.charAt(0).toUpperCase() + c.type.slice(1)) + '</span></td>' +
+        '<td class="cell-mono">' + esc(c.location) + '</td>' +
+        '<td class="content-sub">' + esc(c.category) + '</td>' +
+        '<td class="cell-mono content-sub">' + (c.previous_value ? esc(c.previous_value) : '\u2014') + '</td>' +
+        '<td class="cell-mono content-sub">' + (c.new_value ? esc(c.new_value) : '\u2014') + '</td></tr>').join('') +
+      '</tbody></table>';
+
+    document.getElementById('changes-page-info').textContent =
+      'Showing ' + (changesPage * PAGE_SIZE + 1) + '\u2013' +
+      Math.min((changesPage + 1) * PAGE_SIZE, rows.length) + ' of ' + rows.length;
+    document.getElementById('changes-prev').disabled = changesPage === 0;
+    document.getElementById('changes-next').disabled = changesPage >= maxPage;
+  }
+
+  function renderSummary() {
+    const panel = document.getElementById('panel-summary');
+    const cats = current.categories || {};
+    const names = Object.keys(cats).sort();
+    if (!names.length) {
+      panel.innerHTML = '<div class="empty-state">No categorised changes to summarise.</div>';
+      return;
+    }
+    const total = (c) => c.added + c.removed + c.modified;
+    const max = Math.max(...names.map((n) => total(cats[n])), 1);
+
+    panel.innerHTML =
+      '<p class="content-sub" style="margin-bottom:12px;">Changes grouped by configuration area, derived from the changed lines themselves. Categories with no changes are not listed.</p>' +
+      names.map((n) => {
+        const c = cats[n];
+        const seg = (v, colour) => v
+          ? '<span class="cdiff-catbar-seg" style="width:' + ((v / max) * 100) + '%;background:' + colour + ';"></span>'
+          : '';
+        return '<div class="bar-row">' +
+          '<span class="bar-label">' + esc(n) + '</span>' +
+          '<span class="cdiff-catbar-track">' +
+          seg(c.added, cssVar('--signal')) +
+          seg(c.modified, cssVar('--amber')) +
+          seg(c.removed, cssVar('--red')) +
+          '</span>' +
+          '<span class="bar-value cell-mono">+' + c.added + ' ~' + c.modified + ' \u2212' + c.removed + '</span>' +
+          '</div>';
+      }).join('');
+  }
+
+  document.getElementById('export-btn').addEventListener('click', () => {
+    if (!current || !current.changes.length) {
+      AAAPlatform.toast('There are no changes to export.', 'error');
+      return;
+    }
+    // Exports what is currently FILTERED -- what you see is what you get.
+    const rows = filteredChanges();
+    const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const csv = ['Type,Location,Category,Previous Value,New Value']
+      .concat(rows.map((c) => [c.type, c.location, c.category, c.previous_value, c.new_value].map(q).join(',')))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = current.device_name + '_v' + current.from_version + '_to_v' + current.to_version + '_changes.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  });
+
+  document.getElementById('diff-device').addEventListener('change', fillVersions);
   document.getElementById('run-diff-btn').addEventListener('click', () =>
     runDiff(document.getElementById('diff-from').value, document.getElementById('diff-to').value));
 
-  document.getElementById('current-vs-previous-btn').addEventListener('click', () => {
+  document.getElementById('current-prev-btn').addEventListener('click', () => {
     const versions = versionsFor(document.getElementById('diff-device').value);
     if (versions.length < 2) {
-      // Explicitly stated rather than silently doing nothing or
-      // fabricating a comparison against an empty configuration.
-      setMessage('<div class="empty-state"><div class="empty-state-title">No previous configuration available</div>' +
+      showPlaceholder('<div class="empty-state"><div class="empty-state-title">No previous configuration available</div>' +
         '<p class="empty-state-desc">This device has fewer than two archived versions, so there is nothing to compare against.</p></div>');
       return;
     }
@@ -140,27 +464,72 @@
     runDiff(versions[1].id, versions[0].id);
   });
 
+  document.getElementById('reset-btn').addEventListener('click', () => {
+    current = null;
+    onlyChanges = false;
+    const btn = document.getElementById('only-changes-btn');
+    btn.setAttribute('aria-pressed', 'false');
+    btn.classList.remove('is-active');
+    document.getElementById('filter-type').value = '';
+    document.getElementById('filter-category').innerHTML = '<option value="">All categories</option>';
+    document.getElementById('filter-search').value = '';
+    showPlaceholder('<div class="empty-state"><div class="empty-state-title">Nothing compared yet</div>' +
+      '<p class="empty-state-desc">Select a device and two configuration versions, then choose Compare.</p></div>');
+  });
+
+  document.getElementById('view-mode').addEventListener('change', () => { if (current) renderPanes(); });
+  document.getElementById('only-changes-btn').addEventListener('click', (e) => {
+    onlyChanges = !onlyChanges;
+    e.currentTarget.setAttribute('aria-pressed', String(onlyChanges));
+    e.currentTarget.classList.toggle('is-active', onlyChanges);
+    if (current) renderPanes();
+  });
+
+  ['filter-type', 'filter-category'].forEach((id) =>
+    document.getElementById(id).addEventListener('change', () => { changesPage = 0; renderChanges(); }));
+  document.getElementById('filter-search').addEventListener('input', () => { changesPage = 0; renderChanges(); });
+  document.getElementById('changes-prev').addEventListener('click', () => { if (changesPage > 0) { changesPage--; renderChanges(); } });
+  document.getElementById('changes-next').addEventListener('click', () => { changesPage++; renderChanges(); });
+
+  function selectTab(which) {
+    const isChanges = which === 'changes';
+    document.getElementById('tab-changes').classList.toggle('is-active', isChanges);
+    document.getElementById('tab-summary').classList.toggle('is-active', !isChanges);
+    document.getElementById('tab-changes').setAttribute('aria-selected', String(isChanges));
+    document.getElementById('tab-summary').setAttribute('aria-selected', String(!isChanges));
+    document.getElementById('panel-changes').hidden = !isChanges;
+    document.getElementById('panel-summary').hidden = isChanges;
+  }
+  document.getElementById('tab-changes').addEventListener('click', () => selectTab('changes'));
+  document.getElementById('tab-summary').addEventListener('click', () => selectTab('summary'));
+
   async function load() {
     let res;
     try { res = await AAAPlatform.authedFetch('/api/ncm/configurations?limit=1000'); } catch (e) { res = null; }
     if (!res || !res.ok) {
-      setMessage('<div class="empty-state">' + (res && res.status === 403
+      showPlaceholder('<div class="empty-state">' + (res && res.status === 403
         ? "Your role doesn't have permission to view Configuration Management."
         : 'Could not load configurations.') + '</div>');
       return;
     }
     allConfigs = await res.json();
+    if (!allConfigs.length) {
+      showPlaceholder('<div class="empty-state"><div class="empty-state-title">No configuration snapshots available</div>' +
+        '<p class="empty-state-desc">Back up a device from NCM Overview to archive its first configuration.</p></div>');
+      return;
+    }
+
     const devices = [...new Map(allConfigs.map((c) => [c.device_id, c.device_name])).entries()]
       .sort((a, b) => a[1].localeCompare(b[1]));
     document.getElementById('diff-device').innerHTML =
-      '<option value="">Select a device…</option>' +
+      '<option value="">Select a device\u2026</option>' +
       devices.map(([id, name]) => '<option value="' + id + '">' + esc(name) + '</option>').join('');
 
     const params = new URLSearchParams(window.location.search);
     const preset = params.get('device_id');
     if (preset && devices.some(([id]) => id === preset)) {
       document.getElementById('diff-device').value = preset;
-      fillVersionSelects();
+      fillVersions();
     }
   }
 

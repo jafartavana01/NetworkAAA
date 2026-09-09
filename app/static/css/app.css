@@ -1823,3 +1823,124 @@ a.dash-kpi:hover { border-color: var(--line-bright); background: var(--bg-panel-
    -- `[hidden]` needs the override because the base rule sets display. */
 .gated-config { display: block; }
 .gated-config[hidden] { display: none; }
+
+/* ==========================================================================
+   NCM — Configuration Diff workspace
+   Integrates with the existing token set rather than introducing a second
+   palette: --signal for additions, --red for removals, --amber for
+   modifications. Every state also carries a +/-/~ marker and a text
+   label, so nothing depends on colour alone.
+   ========================================================================== */
+
+.cdiff-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+.cdiff-actions { display: flex; gap: 8px; align-items: end; }
+
+/* Summary strip */
+.cdiff-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.cdiff-stat {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-panel);
+}
+.cdiff-stat-icon {
+  display: flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px; flex-shrink: 0;
+  border-radius: 8px;
+  font-family: var(--font-mono); font-size: 15px; font-weight: 700;
+  background: var(--bg-panel-raised); border: 1px solid var(--line);
+}
+.cdiff-stat-label { font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+.cdiff-stat-value { font-family: var(--font-mono); font-size: 22px; font-weight: 700; color: var(--text-primary); line-height: 1.1; }
+.cdiff-stat.is-add .cdiff-stat-icon { color: var(--signal); border-color: var(--signal); }
+.cdiff-stat.is-add .cdiff-stat-value { color: var(--signal); }
+.cdiff-stat.is-remove .cdiff-stat-icon { color: var(--red); border-color: var(--red); }
+.cdiff-stat.is-remove .cdiff-stat-value { color: var(--red); }
+.cdiff-stat.is-modify .cdiff-stat-icon { color: var(--amber); border-color: var(--amber); }
+.cdiff-stat.is-modify .cdiff-stat-value { color: var(--amber); }
+
+/* Side-by-side workspace */
+.cdiff-panes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.cdiff-panes.is-unified { grid-template-columns: 1fr; }
+@media (max-width: 1100px) { .cdiff-panes { grid-template-columns: 1fr; } }
+
+.cdiff-pane {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  overflow: hidden;
+  min-width: 0;
+}
+.cdiff-pane-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-panel-raised);
+}
+.cdiff-pane-title { font-size: 13px; color: var(--text-primary); }
+.cdiff-pane-meta { font-size: 11.5px; color: var(--text-faint); font-family: var(--font-mono); }
+.cdiff-pane-body {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  max-height: 62vh;
+  overflow: auto;
+  padding: 6px 0;
+}
+
+.cdiff-line { display: flex; gap: 10px; padding: 0 12px; white-space: pre; min-height: 1.55em; }
+.cdiff-lineno {
+  flex: 0 0 42px; text-align: right; color: var(--text-faint);
+  user-select: none;  /* so copying config never drags line numbers along */
+}
+.cdiff-marker { flex: 0 0 10px; user-select: none; color: var(--text-faint); }
+.cdiff-text { color: var(--text-dim); }
+.cdiff-line.is-add { background: rgba(79, 209, 165, 0.13); }
+.cdiff-line.is-add .cdiff-marker, .cdiff-line.is-add .cdiff-text { color: var(--signal); }
+.cdiff-line.is-remove { background: rgba(224, 97, 90, 0.13); }
+.cdiff-line.is-remove .cdiff-marker, .cdiff-line.is-remove .cdiff-text { color: var(--red); }
+.cdiff-line.is-modify { background: rgba(224, 168, 62, 0.14); }
+.cdiff-line.is-modify .cdiff-marker, .cdiff-line.is-modify .cdiff-text { color: var(--amber); }
+/* A gap opposite an added/removed line, so both panes stay aligned. */
+.cdiff-line.is-void { background: repeating-linear-gradient(45deg, transparent, transparent 6px, rgba(255,255,255,0.02) 6px, rgba(255,255,255,0.02) 12px); }
+
+.cdiff-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* Change table */
+.cdiff-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 12px; }
+.cdiff-tab {
+  padding: 9px 14px; font-size: 13px; background: none; border: none; cursor: pointer;
+  color: var(--text-dim); border-bottom: 2px solid transparent;
+}
+.cdiff-tab:hover { color: var(--text-primary); }
+.cdiff-tab.is-active { color: var(--signal); border-bottom-color: var(--signal); }
+
+.cdiff-type { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.cdiff-type-mark {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 17px; height: 17px; border-radius: 50%;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+}
+.cdiff-type.is-added .cdiff-type-mark { background: rgba(79,209,165,0.18); color: var(--signal); }
+.cdiff-type.is-added { color: var(--signal); }
+.cdiff-type.is-removed .cdiff-type-mark { background: rgba(224,97,90,0.18); color: var(--red); }
+.cdiff-type.is-removed { color: var(--red); }
+.cdiff-type.is-modified .cdiff-type-mark { background: rgba(224,168,62,0.18); color: var(--amber); }
+.cdiff-type.is-modified { color: var(--amber); }
+
+.cdiff-catbar-track { flex: 1; height: 6px; border-radius: 3px; background: var(--bg-void); overflow: hidden; display: flex; }
+.cdiff-catbar-seg { height: 100%; }

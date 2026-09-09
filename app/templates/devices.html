@@ -412,7 +412,18 @@
       </div>
 
       <div class="form-section">
-        <div class="form-section-title">AAA</div>
+        <div class="form-section-title">Node Type</div>
+        <div class="content-sub" style="margin-bottom:10px;">
+          Which protocol this device uses to reach the platform. A device can use both — enable each tab you need.
+        </div>
+        <div class="cdiff-tabs" role="tablist" style="margin-bottom:14px;">
+          <button type="button" class="cdiff-tab is-active" id="node-tab-tacacs" role="tab" aria-selected="true">TACACS+</button>
+          <button type="button" class="cdiff-tab" id="node-tab-radius" role="tab" aria-selected="false">RADIUS</button>
+        </div>
+      </div>
+
+      <div class="form-section" id="node-panel-tacacs">
+        <div class="form-section-title">TACACS+</div>
         <label class="field">
           <span class="field-label">Shared secret <span class="badge badge-on cell-mono" id="secret-configured-badge" hidden style="margin-left:6px;"></span></span>
           <div class="field-icon-wrap">
@@ -423,7 +434,7 @@
         <div class="field-hint" id="secret-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new devices. Never displayed once saved — leave blank when editing to keep the current secret.</div>
       </div>
 
-      <div class="form-section">
+      <div class="form-section" id="node-panel-radius" hidden>
         <div class="form-section-title">RADIUS</div>
         <label class="toggle-field field" style="margin-bottom:12px;">
           <span class="toggle-switch">
@@ -618,12 +629,31 @@
     }
     document.getElementById('device-radius-secret').value = '';
     toggleRadiusFields();
+    // Open on the tab that matches the device: editing a RADIUS client
+    // should not start on a tab that says nothing about it.
+    selectNodeTab(device && device.radius_enabled && !device.has_secret ? 'radius' : 'tacacs');
     document.getElementById('device-modal-backdrop').hidden = false;
   }
 
   function closeModal() {
     document.getElementById('device-modal-backdrop').hidden = true;
   }
+
+  // Node-type tabs. Both panels stay in the FORM and both are always
+  // submitted -- the tabs control what is visible, never what is saved.
+  // Hiding a panel must not silently discard a secret the admin already
+  // entered on it.
+  function selectNodeTab(which) {
+    const isTacacs = which === 'tacacs';
+    document.getElementById('node-tab-tacacs').classList.toggle('is-active', isTacacs);
+    document.getElementById('node-tab-radius').classList.toggle('is-active', !isTacacs);
+    document.getElementById('node-tab-tacacs').setAttribute('aria-selected', String(isTacacs));
+    document.getElementById('node-tab-radius').setAttribute('aria-selected', String(!isTacacs));
+    document.getElementById('node-panel-tacacs').hidden = !isTacacs;
+    document.getElementById('node-panel-radius').hidden = isTacacs;
+  }
+  document.getElementById('node-tab-tacacs').addEventListener('click', () => selectNodeTab('tacacs'));
+  document.getElementById('node-tab-radius').addEventListener('click', () => selectNodeTab('radius'));
 
   function toggleRadiusFields() {
     // The secret input is only meaningful when RADIUS is on for this

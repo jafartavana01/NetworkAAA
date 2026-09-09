@@ -34,13 +34,16 @@ from ..models.ncm import (
 from ..schemas.ncm import (
     BaselineOut, CandidateCreateRequest, CandidateOut, CandidateReviewRequest,
     CompareCategoryOut, CompareCellOut, CompareDeviceOut, CompareRequest,
-    CompareResultOut, DeployResultOut, DeploymentOut, DeviceDriftOut, DriftOverviewOut,
+    ChangeEntryOut, CompareResultOut, DeployResultOut, DeploymentOut, DeviceDriftOut,
+    DiffRowOut, DriftOverviewOut, NcmDetailedDiffOut,
     SetBaselineRequest,
     NcmBackupRequest, NcmBackupResultOut, NcmConfigurationDetailOut, NcmConfigurationSummaryOut,
     NcmDeviceStatusOut, NcmDiffLineOut, NcmDiffOut, NcmDiffRequest, NcmJobDetailOut, NcmJobSummaryOut,
     NcmJobTargetOut, NcmOverviewOut, NcmRecentChangeOut, NcmScheduleOut, NcmScheduleRequest,
 )
-from ..services import ncm_archive, ncm_backup, ncm_compare, ncm_deploy, ncm_drift
+from ..services import (
+    ncm_archive, ncm_backup, ncm_compare, ncm_deploy, ncm_diff_detail, ncm_drift,
+)
 from .deps import require_permission, verify_csrf
 
 router = APIRouter(prefix="/api/ncm", tags=["ncm"])
@@ -959,4 +962,56 @@ def rollback_deployment_endpoint(
         ok=outcome.ok, status=outcome.status, deployment_number=outcome.deployment_number,
         verified_changed=outcome.verified_changed, message=outcome.message,
         blocked_commands=outcome.blocked_commands,
+    )
+
+
+@router.post("/diff/detailed", response_model=NcmDetailedDiffOut,
+             dependencies=[Depends(verify_csrf)])
+def detailed_diff(
+    payload: NcmDiffRequest,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("ncm:diff")),
+):
+    """
+    The side-by-side view of the same comparison `/diff` already
+    returns: aligned rows, individual changes with their location, and
+    per-category counts.
+
+    The raw text diff remains authoritative -- this is a VIEW over
+    difflib's opcodes, not a second algorithm. `/diff` is left exactly
+    as it was so the existing Configuration Diff behaviour and any
+    other caller keep working unchanged.
+    """
+    ids = _parse_uuids([payload.from_configuration_id, payload.to_configuration_id], "configuration ids")
+    rows = db.query(NcmConfiguration).filter(NcmConfiguration.id.in_(ids)).all()
+    by_id = {c.id: c for c in rows}
+    a = by_id.get(ids[0])
+    b = by_id.get(ids[1])
+    if not a or not b:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="One or both configurations were not found.")
+    if a.device_id != b.device_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Both versions must belong to the same device.")
+
+    detail = ncm_diff_detail.build_detailed_diff(a.configuration_content, b.configuration_content)
+
+    return NcmDetailedDiffOut(
+        device_name=a.device_name, configuration_type=a.configuration_type,
+        from_version=a.version_number, to_version=b.version_number,
+        from_created_at=a.created_at, to_created_at=b.created_at,
+        identical=detail.identical, added=detail.added, removed=detail.removed,
+        modified=detail.modified, unchanged=detail.unchanged,
+        total_changes=detail.added + detail.removed + detail.modified,
+        categories=detail.categories,
+        rows=[
+            DiffRowOut(left_no=r.left_no, left=r.left, right_no=r.right_no, right=r.right, kind=r.kind)
+            for r in detail.rows
+        ],
+        changes=[
+            ChangeEntryOut(
+                type=c.type, location=c.location, previous_value=c.previous_value,
+                new_value=c.new_value, category=c.category,
+                left_no=c.left_no, right_no=c.right_no,
+            )
+            for c in detail.changes
+        ],
     )

@@ -56,6 +56,35 @@
     return match ? match.id : null;
   }
 
+  function renderAdResult(data) {
+    const box = document.getElementById('access-result');
+    const rows = data.reachable.map((r) => `
+      <tr>
+        <td>${escapeHtml(r.device_name)}</td>
+        <td class="cell-mono">${escapeHtml(r.ip_address)}</td>
+        <td>${escapeHtml(r.policy_name)}</td>
+        <td class="cell-mono">${r.priv_lvl == null ? '\u2014' : r.priv_lvl}</td>
+      </tr>`).join('');
+
+    box.innerHTML = `
+      <div class="panel panel-wide" style="margin-bottom:14px;">
+        <div class="panel-body">
+          <div class="readout"><span class="readout-k">user</span><span class="readout-v">${escapeHtml(data.username)}</span></div>
+          <div class="readout"><span class="readout-k">source</span><span class="readout-v">${data.source === 'active_directory' ? 'Active Directory' : 'Local'}</span></div>
+          <div class="readout"><span class="readout-k">group used</span><span class="readout-v">${escapeHtml(data.group_name || '(none)')}</span></div>
+          ${data.all_groups.length > 1
+            ? `<div class="readout"><span class="readout-k">all mapped groups</span><span class="readout-v">${escapeHtml(data.all_groups.join(', '))}</span></div>` : ''}
+          ${data.unmapped_ad_groups.length
+            ? `<div class="readout"><span class="readout-k">unmapped AD groups</span><span class="readout-v" style="color:var(--amber);">${escapeHtml(data.unmapped_ad_groups.join(', '))}</span></div>` : ''}
+          <div class="content-sub" style="margin-top:8px;">${escapeHtml(data.detail)}</div>
+        </div>
+      </div>
+      ${data.reachable.length
+        ? `<table class="data-table"><thead><tr><th>Device</th><th>IP Address</th><th>Policy</th><th>Privilege</th></tr></thead><tbody>${rows}</tbody></table>`
+        : `<div class="empty-state"><div class="empty-state-title">No devices reachable</div>
+             <p class="empty-state-desc">No policy matches this user on any of the ${data.device_count} configured devices.</p></div>`}`;
+  }
+
   function renderResult(data) {
     const box = document.getElementById('access-result');
     const isUser = data.subject_type === 'user';
@@ -106,6 +135,23 @@
     }
 
     const id = await findIdByName(mode, name);
+
+    // A user with no local record may still be a real Active Directory
+    // identity. Fall back to the username-keyed endpoint, which
+    // resolves AD membership -- previously this reported "no user
+    // found" for exactly the people whose access most needs checking.
+    if (!id && mode === 'user') {
+      const adRes = await AAAPlatform.authedFetch(
+        '/api/effective-access/by-username?username=' + encodeURIComponent(name));
+      if (adRes.status === 401) { window.location.href = '/login'; return; }
+      if (adRes.ok) { renderAdResult(await adRes.json()); return; }
+      const body = await adRes.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string')
+        ? body.detail : `No user named "${name}" found locally or in Active Directory.`;
+      errorBox.hidden = false;
+      return;
+    }
+
     if (!id) {
       errorBox.textContent = `No ${mode} named "${name}" found.`;
       errorBox.hidden = false;

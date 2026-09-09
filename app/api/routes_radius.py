@@ -15,11 +15,12 @@ response says so rather than implying the ports are already live.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel, Field
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from .. import security
 from ..database import get_db
 from ..models.admin import AdminUser
 from ..models.device import NetworkDevice
@@ -182,3 +183,93 @@ def list_radius_clients(
         )
         for d in devices
     ]
+
+
+# ------------------------------------------------------------ probe
+
+class RadiusProbeRequest(BaseModel):
+    """
+    Probe a device's own RADIUS client entry. The secret is NOT taken
+    from the request: it is read from the stored, encrypted device
+    record, so a caller can never use this endpoint to test a secret
+    they do not already have, or to learn one by trial.
+    """
+    device_id: str
+    username: str = Field(default="netopsguard-probe", max_length=64)
+    password: str = Field(default="probe-only-not-a-real-credential", max_length=128)
+
+
+class RadiusProbeOut(BaseModel):
+    reachable: bool
+    code_name: str
+    round_trip_ms: int
+    detail: str
+    guidance: str
+    target: str
+
+
+@router.post("/probe", response_model=RadiusProbeOut, dependencies=[Depends(verify_csrf)])
+def probe_radius(
+    payload: RadiusProbeRequest,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(get_current_superadmin),
+):
+    """
+    Sends a real Access-Request to this platform's RADIUS listener,
+    using a device's stored shared secret, and reports whether the
+    daemon answers.
+
+    This exists because a NAS cannot tell these cases apart -- all of
+    them look like "requests sent, zero responses":
+
+      * the listener is not running
+      * the device is not defined as a RADIUS client
+      * the shared secret does not match
+      * a firewall is dropping the reply
+
+    The probe controls the secret and the source, so a timeout here
+    means something quite different from a timeout at the NAS.
+
+    Superadmin-only: it reads a stored device secret to build the
+    packet, even though it never returns it.
+    """
+    import uuid as _uuid
+
+    from ..services import radius_probe
+
+    try:
+        device_uuid = _uuid.UUID(payload.device_id)
+    except (ValueError, AttributeError):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Malformed device id.")
+
+    device = db.query(NetworkDevice).filter(NetworkDevice.id == device_uuid).first()
+    if not device:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Device not found.")
+    if not device.radius_enabled or not device.radius_secret_encrypted:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="That device has no RADIUS secret configured, so there is nothing to test with.",
+        )
+
+    settings = _get_or_create(db)
+    if not settings.enabled:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail="RADIUS is disabled, so no listener is running to probe.",
+        )
+
+    secret = security.decrypt_secret(device.radius_secret_encrypted)
+
+    # Probes the LOCAL listener: the question is whether this platform's
+    # RADIUS server answers, not whether the network path from the NAS
+    # works. Those are different problems and conflating them is what
+    # makes the NAS counter so hard to interpret.
+    result = radius_probe.probe(
+        "127.0.0.1", settings.auth_port, secret, payload.username, payload.password,
+    )
+
+    return RadiusProbeOut(
+        reachable=result.reachable, code_name=result.code_name,
+        round_trip_ms=result.round_trip_ms, detail=result.detail,
+        guidance=result.guidance, target=f"127.0.0.1:{settings.auth_port}/udp",
+    )
