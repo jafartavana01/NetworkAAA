@@ -282,7 +282,13 @@ def read_auth_records(*, limit: int = 500) -> list[AccountingRecord]:
         lines = fh.readlines()
 
     tail = lines[-limit:]
-    records = [_auth_parse_line(line) for line in tail if line.strip()]
+    records = [
+        record
+        for line in tail
+        if line.strip()
+        for record in [_auth_parse_line(line)]
+        if record.cmd != ""
+    ]
     records.reverse()  # newest first
     return records
 
