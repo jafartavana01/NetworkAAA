@@ -59,9 +59,28 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ..config import LOG_DIR
-from .config_compiler import ACCOUNTING_FIELD_SEPARATOR
+
+# Keep the separator in sync with config_compiler.ACCOUNTING_FIELD_SEPARATOR.
+# Importing config_compiler at module level pulls in SQLAlchemy, bcrypt, etc.;
+# for unit tests and for the parser itself we only need the constant string.
+try:
+    from .config_compiler import ACCOUNTING_FIELD_SEPARATOR
+except Exception:  # pragma: no cover - defensive for isolated unit tests
+    ACCOUNTING_FIELD_SEPARATOR = "::"
 
 ACCOUNTING_LOG_PATH = LOG_DIR / "tac_plus-ng-accounting.log"
+
+
+
+#------custom Authorization Logs --------------------
+#----------------------------------------------------
+AUTH_LOG_PATH = LOG_DIR / "tac_plus-ng-authorization.log"
+AUTH_FIELD_SEPARATOR = "\t"
+
+
+
+#------custom Authorization Logs --------------------
+#----------------------------------------------------
 
 _FIELD_NAMES = ["nas", "user", "port", "nac", "accttype", "result", "service", "cmd"]
 _EXPECTED_FIELD_COUNT = len(_FIELD_NAMES)
@@ -168,6 +187,77 @@ def _parse_line(line: str) -> AccountingRecord:
     )
 
 
+
+
+#---------------------- custom defined --------------------------------
+
+#----------------------------------------------------------------------
+
+def _auth_parse_line(line: str) -> AccountingRecord:
+    line = line.rstrip("\n")
+
+    # Try the timestamp-prefix-first strategy: if the line starts with
+    # a recognized timestamp, strip it off FIRST and split the exact
+    # remainder -- this is what actually matches a real deployment's
+    # log, where the prefix is separated from the payload by a space,
+    # not by the "::" field separator. Splitting by "::" BEFORE
+    # removing the prefix (the previous approach) meant a
+    # space-separated prefix had no delimiter to be split apart on at
+    # all, so it silently fused onto the first real field's value
+    # instead of being recognized as a separate prefix -- confirmed
+    # directly from a real log where the "nas" field's value came back
+    # as "2026-09-03 08:02:18 +0000 192.168.44.10" instead of just the
+    # real device address.
+    ts_match = _TIMESTAMP_PATTERN.match(line)
+    if ts_match:
+        raw_prefix = ts_match.group(1)
+        payload = line[ts_match.end():]
+        parts = payload.split(AUTH_FIELD_SEPARATOR)
+        if len(parts) == _EXPECTED_FIELD_COUNT:
+            values = dict(zip(_FIELD_NAMES, parts))
+            return AccountingRecord(
+                raw_line=line,
+                parsed=True,
+                raw_prefix=raw_prefix,
+                parsed_at=_try_parse_timestamp(line),
+                **values,
+            )
+        # A recognized timestamp but an unexpected field count after
+        # it falls through to the anchor-from-the-end fallback below,
+        # rather than being force-fit or discarded outright.
+
+    # Fallback: no recognized timestamp prefix (or one was found but
+    # what followed it didn't cleanly split into the expected field
+    # count) -- anchor from the END instead, on the theory that
+    # whatever precedes the last _EXPECTED_FIELD_COUNT "::"-delimited
+    # segments is prefix material of some unrecognized shape. This is
+    # deliberately kept as a second attempt rather than the only
+    # strategy, since it's the weaker heuristic of the two -- proven
+    # wrong on its own for this project's actual real-world log
+    # format, which is exactly why the timestamp-first attempt above
+    # now runs first.
+    parts = line.split(AUTH_FIELD_SEPARATOR)
+    if len(parts) < _EXPECTED_FIELD_COUNT:
+        return AccountingRecord(raw_line=line, parsed=False)
+
+    field_values = parts[-_EXPECTED_FIELD_COUNT:]
+    raw_prefix = AUTH_FIELD_SEPARATOR.join(parts[:-_EXPECTED_FIELD_COUNT]).strip()
+
+    values = dict(zip(_FIELD_NAMES, field_values))
+    return AccountingRecord(
+        raw_line=line,
+        parsed=True,
+        raw_prefix=raw_prefix,
+        parsed_at=_try_parse_timestamp(raw_prefix),
+        **values,
+    )
+
+
+
+
+
+
+
 def read_records(*, limit: int = 500) -> list[AccountingRecord]:
     """Returns the most recent `limit` records, newest first."""
     if not ACCOUNTING_LOG_PATH.exists():
@@ -180,6 +270,24 @@ def read_records(*, limit: int = 500) -> list[AccountingRecord]:
     records = [_parse_line(line) for line in tail if line.strip()]
     records.reverse()  # newest first
     return records
+
+
+#-----------------------custom Reader -------------------------
+def read_auth_records(*, limit: int = 500) -> list[AccountingRecord]:
+    """Returns the most recent `limit` records, newest first."""
+    if not AUTH_LOG_PATH.exists():
+        return []
+
+    with AUTH_LOG_PATH.open("r", encoding="utf-8", errors="replace") as fh:
+        lines = fh.readlines()
+
+    tail = lines[-limit:]
+    records = [_auth_parse_line(line) for line in tail if line.strip()]
+    records.reverse()  # newest first
+    return records
+
+
+
 
 
 def filter_records(

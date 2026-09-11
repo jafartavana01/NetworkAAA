@@ -101,7 +101,7 @@ def list_accounting_records(
     db: Session = Depends(get_db),
     _admin: AdminUser = Depends(get_current_admin),
 ):
-    records = accounting_log.read_records(limit=max(limit, 2000))
+    records = accounting_log.read_auth_records(limit=max(limit, 2000))
     filtered = accounting_log.filter_records(
         records,
         user=user,
