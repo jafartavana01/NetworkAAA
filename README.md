@@ -1,3 +1,5 @@
+<img width="1601" height="795" alt="image" src="https://github.com/user-attachments/assets/f499df5a-8620-4f1f-ac92-fd7bfb75d639" />
+
 # NetOpsGuard — Network Operations & Security
 
 **Open-source network operations and security platform for Cisco infrastructure.**
