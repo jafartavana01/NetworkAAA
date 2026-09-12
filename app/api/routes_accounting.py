@@ -255,7 +255,7 @@ def accounting_health(
     exactly what is and isn't included, and why. Also includes an
     hourly activity time series (compute_hourly_activity) for the
     Dashboard's activity chart."""
-    records = accounting_log.read_records(limit=limit)
+    records = accounting_log.read_auth_records(limit=limit)
     stats = accounting_log.compute_health_and_failure_stats(records)
     stats["hourly_activity"] = accounting_log.compute_hourly_activity(records, hours=hours)
     return stats
