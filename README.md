@@ -9,6 +9,7 @@ TACACS+ authentication, authorization and accounting; device security auditing a
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](#requirements)
 
 ---
+<img width="1595" height="785" alt="image" src="https://github.com/user-attachments/assets/0434375b-40a2-4961-a021-5044e5a71a28" />
 
 ## What NetOpsGuard does
 
