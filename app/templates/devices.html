@@ -1,0 +1,1532 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Devices — NetOpsGuard{% endblock %}
+{% block breadcrumb %}TACACS+ / Devices{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Network Devices</h1>
+    <p class="content-sub">Saved here first; nothing reaches tac_plus-ng until you apply it on the Configuration page.</p>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="device-count"></span>
+    <button class="btn-primary btn-small" id="add-device-btn" style="width:auto;">+ Add device</button>
+  </div>
+
+  <div class="status-card-grid" id="devices-kpis" style="margin-bottom:16px;"></div>
+
+  <div id="devices-table-wrap">
+    <div class="empty-state">Loading devices…</div>
+  </div>
+
+  <div class="content-head" style="margin-top:32px;">
+    <h2>Monitoring</h2>
+    <p class="content-sub">When enabled, a connection attempt from a device with no matching entry above is still logged rather than silently dropped, and shows up live below with a one-click Add. Devices added this way join the prebuilt "monitor" group. This does not affect any already-configured device's behavior.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:16px;">
+    <div class="panel-body" style="font-size:12px;color:var(--text-dim);">
+      The shared key itself is never shown here — TACACS+ never transmits it over the wire, so it isn't something any monitoring tool could observe, by protocol design. What's shown is the source IP and the log line it appeared in.
+    </div>
+  </div>
+
+  <label class="toggle-field field" style="margin-bottom:16px;">
+    <span class="toggle-switch">
+      <input type="checkbox" id="monitoring-enabled-toggle">
+      <span class="toggle-switch-slider"></span>
+    </span>
+    <span>Enable monitoring mode</span>
+  </label>
+  <div class="field-hint" style="margin-bottom:16px;" id="monitoring-hint">Requires applying the configuration from the Config page to take effect.</div>
+
+  <div id="monitoring-list-wrap" hidden>
+    <div class="toolbar">
+      <span class="content-sub" id="monitoring-count"></span>
+      <button class="btn-secondary btn-small" id="monitoring-refresh-btn" style="width:auto;">Refresh</button>
+    </div>
+    <div id="monitoring-table-wrap">
+      <div class="empty-state">Loading…</div>
+    </div>
+  </div>
+
+  <div class="content-head" style="margin-top:32px;">
+    <h2>Network Scan &amp; Provision</h2>
+    <p class="content-sub">Scans an IP range for SSH-reachable hosts, then pushes Cisco IOS TACACS+ client configuration and adds them as devices. AAA commands are Cisco IOS specifically — not vendor-generic.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:16px;border-color:var(--red);">
+    <div class="panel-body" style="font-size:12px;color:var(--red);">
+      ⚠ The SSH username/password below are used only for this scan/apply session — never stored. Applying pushes real configuration to real devices over SSH; review results carefully, especially for "Apply to all."
+    </div>
+  </div>
+
+  <div class="field-row">
+    <label class="field">
+      <span class="field-label">IP range (CIDR)</span>
+      <input type="text" id="scan-cidr" placeholder="192.168.0.0/24">
+    </label>
+  </div>
+  <div class="field-row">
+    <label class="field">
+      <span class="field-label">SSH username</span>
+      <input type="text" id="scan-ssh-username">
+    </label>
+    <label class="field">
+      <span class="field-label">SSH password</span>
+      <input type="password" id="scan-ssh-password" autocomplete="new-password">
+    </label>
+  </div>
+  <button type="button" class="btn-primary btn-small" id="scan-btn" style="width:auto;margin-bottom:8px;">Scan</button>
+  <div id="scan-error" class="form-error" role="alert" hidden></div>
+
+  <div id="scan-results-wrap" hidden>
+    <div class="toolbar">
+      <span class="content-sub" id="scan-count"></span>
+      <button class="btn-primary btn-small" id="apply-all-btn" style="width:auto;">Apply AAA to all</button>
+    </div>
+    <div id="scan-results-table"></div>
+  </div>
+
+  <button type="button" class="btn-ghost btn-small" id="aaa-template-toggle" style="width:auto;margin-top:14px;">▸ Default AAA command template</button>
+  <div id="aaa-template-section" hidden style="margin-top:10px;">
+    <p class="content-sub" style="margin-top:0;">Used whenever "Edit commands before applying" isn't opened for a specific Apply. Changes here apply to every future scan/apply, not just the next one.</p>
+    <textarea id="aaa-template-editor" rows="14" style="width:100%;font-family:var(--font-mono);font-size:12px;background:var(--bg-input);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;color:var(--text-primary);"></textarea>
+    <div class="field-hint" style="margin-top:6px;">One command per line. <span class="cell-mono">{platform_ip}</span> and <span class="cell-mono">{shared_secret}</span> are replaced with the real values at apply time — <strong>each device always gets its own randomly-generated secret</strong>, whether applying one device or all of them; this template is never applied with the same literal secret to more than one device.</div>
+    <div class="field-row" style="margin-top:14px;">
+      <label class="field">
+        <span class="field-label">Default connect timeout (seconds)</span>
+        <input type="number" id="aaa-template-connect-timeout" min="1" max="120" placeholder="Built-in default">
+      </label>
+      <label class="field">
+        <span class="field-label">Default command timeout (seconds)</span>
+        <input type="number" id="aaa-template-command-timeout" min="1" max="300" placeholder="Built-in default">
+      </label>
+    </div>
+    <div class="field-hint" style="margin-top:-10px;margin-bottom:6px;" id="aaa-template-timeout-hint">Applies to every future Apply that doesn't set its own override. Leave blank to use the built-in default.</div>
+    <div id="aaa-template-status" class="content-sub" style="margin-top:6px;"></div>
+    <div id="aaa-template-error" class="form-error" role="alert" hidden></div>
+    <div style="margin-top:10px;">
+      <button type="button" class="btn-primary btn-small" id="aaa-template-save-btn" style="width:auto;">Save template</button>
+      <button type="button" class="btn-ghost btn-small" id="aaa-template-reset-btn" style="width:auto;">Reset to built-in default</button>
+    </div>
+  </div>
+
+  <div class="content-head" style="margin-top:32px;">
+    <h2>Access Grants</h2>
+    <p class="content-sub">Grants a user group unrestricted privilege-15 access to a device or device group, taking precedence over anything in the Policies section — evaluated first, regardless of policy priority. For a specific individual, put them in a dedicated group with just that one member; direct per-user targeting isn't offered here since it has no confirmed way to compile into the real config.</p>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="grant-count"></span>
+    <button class="btn-primary btn-small" id="add-grant-btn" style="width:auto;">+ Add access grant</button>
+  </div>
+
+  <div id="grants-table-wrap">
+    <div class="empty-state">Loading access grants…</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="quickadd-device-modal-backdrop" hidden>
+  <div class="modal">
+    <h2>Add device</h2>
+    <p class="content-sub" style="margin-top:-8px;">Seen connecting from <span class="cell-mono" id="quickadd-ip-display"></span></p>
+    <form id="quickadd-device-form">
+      <label class="field">
+        <span class="field-label">Name</span>
+        <input type="text" id="quickadd-device-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Letters, digits, hyphens, underscores only.</div>
+      <label class="field">
+        <span class="field-label">Shared secret</span>
+        <input type="password" id="quickadd-device-secret" required autocomplete="new-password">
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">The real TACACS+ key configured on this device — not the monitoring placeholder, which never works as an actual credential.</div>
+
+      <div id="quickadd-device-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="quickadd-device-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Add device</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="device-aaa-modal-backdrop" hidden>
+  <div class="modal modal-lg" style="max-width: min(95vw, 720px)">
+    <h2 id="device-aaa-modal-title">Apply AAA Configuration</h2>
+    <p class="content-sub" style="margin-top:-8px;">Uses this device's own already-saved shared secret — nothing about it changes unless the commands below are edited to use a different one.</p>
+    <form id="device-aaa-form">
+      <label class="field">
+        <span class="field-label">SSH username</span>
+        <input type="text" id="device-aaa-ssh-username" required>
+      </label>
+      <label class="field">
+        <span class="field-label">SSH password</span>
+        <input type="password" id="device-aaa-ssh-password" required autocomplete="new-password">
+      </label>
+
+      <label class="field">
+        <span class="field-label">This platform's address</span>
+        <select id="device-aaa-platform-ip-select"></select>
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:6px;">The address this device will send TACACS+ requests to.</div>
+      <label class="field">
+        <span class="field-label">Or enter one manually</span>
+        <input type="text" id="device-aaa-platform-ip-manual" placeholder="Leave blank to use the selection above">
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Overrides the dropdown above if filled in.</div>
+
+      <button type="button" class="btn-ghost btn-small" id="device-aaa-edit-toggle" style="width:auto;margin-bottom:8px;">▸ Edit commands before applying</button>
+      <div id="device-aaa-commands-section" hidden style="margin-bottom:14px;">
+        <textarea id="device-aaa-commands-editor" rows="12" style="width:100%;font-family:var(--font-mono);font-size:12px;background:var(--bg-input);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;color:var(--text-primary);"></textarea>
+        <div class="field-hint" style="margin-top:6px;">The shared key is shown as a placeholder, never the real value. Keep it as-is to push this device's already-saved secret, or replace it with a specific value to update what's stored for this device to match.</div>
+      </div>
+
+      <button type="button" class="btn-ghost btn-small" id="device-aaa-timeout-toggle" style="width:auto;margin-bottom:8px;">▸ Connection timeouts</button>
+      <div id="device-aaa-timeout-section" hidden class="field-row" style="margin-bottom:14px;">
+        <label class="field">
+          <span class="field-label">Connect timeout (seconds)</span>
+          <input type="number" id="device-aaa-connect-timeout" min="1" max="120" placeholder="Default">
+        </label>
+        <label class="field">
+          <span class="field-label">Command timeout (seconds)</span>
+          <input type="number" id="device-aaa-command-timeout" min="1" max="300" placeholder="Default">
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Leave blank to use the saved default (or the built-in 8s/10s if none is saved) — a slow or high-latency link to this device may need longer. Edit the saved default itself on the AAA Command Template page.</div>
+
+      <div id="device-aaa-error" class="form-error" role="alert" hidden></div>
+      <div id="device-aaa-live-progress" hidden style="margin-top:12px;">
+        <div class="bg-notif-progress-track" style="height:8px;margin-bottom:8px;"><div class="bg-notif-progress-fill" id="device-aaa-progress-fill" style="width:0%;"></div></div>
+        <div id="device-aaa-progress-status" class="content-sub" style="margin-bottom:6px;"></div>
+        <div style="height:160px;overflow-y:auto;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;">
+          <div id="device-aaa-live-lines" class="cell-mono content-sub" style="line-height:1.5;"></div>
+        </div>
+        <button type="button" class="btn-ghost btn-small" id="device-aaa-background-btn" style="width:auto;margin-top:8px;">Continue in background</button>
+      </div>
+      <div id="device-aaa-result" style="margin-top:12px;"></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="device-aaa-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;" id="device-aaa-confirm-btn">Apply</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="scan-apply-modal-backdrop" hidden>
+  <div class="modal modal-lg" style="max-width: 620px; max-height: 88vh">
+    <h2 id="scan-apply-modal-title">Apply AAA Configuration</h2>
+    <p class="content-sub" style="margin-top:-8px;" id="scan-apply-target-display"></p>
+    <form id="scan-apply-form">
+      <label class="field">
+        <span class="field-label">This platform's address</span>
+        <select id="scan-apply-platform-ip-select"></select>
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:6px;">The address these devices will send TACACS+ requests to.</div>
+      <label class="field">
+        <span class="field-label">Or enter one manually</span>
+        <input type="text" id="scan-apply-platform-ip-manual" placeholder="Leave blank to use the selection above">
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Overrides the dropdown above if filled in.</div>
+
+      <label class="field">
+        <span class="field-label">Device group (optional)</span>
+        <select id="scan-apply-group-select"><option value="">— No group —</option></select>
+      </label>
+      <button type="button" class="quickadd-toggle" id="scan-apply-group-quickadd-toggle">+ New group</button>
+      <div class="quickadd-panel" id="scan-apply-group-quickadd-panel" hidden>
+        <label class="field">
+          <span class="field-label">New group name</span>
+          <input type="text" id="scan-apply-group-quickadd-name" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        </label>
+        <label class="field">
+          <span class="field-label">Description</span>
+          <input type="text" id="scan-apply-group-quickadd-desc">
+        </label>
+        <div id="scan-apply-group-quickadd-error" class="form-error" role="alert" hidden></div>
+        <div class="modal-actions" style="justify-content:flex-start;margin-top:0;">
+          <button type="button" class="btn-secondary btn-small" id="scan-apply-group-quickadd-create-btn" style="width:auto;">Create</button>
+          <button type="button" class="btn-ghost btn-small" id="scan-apply-group-quickadd-cancel-btn">Cancel</button>
+        </div>
+      </div>
+
+      <button type="button" class="btn-ghost btn-small" id="scan-apply-edit-commands-toggle" style="width:auto;margin:6px 0 8px 0;">▸ Edit commands before applying</button>
+      <div id="scan-apply-commands-section" hidden style="margin-bottom:14px;">
+        <textarea id="scan-apply-commands-editor" rows="12" style="width:100%;font-family:var(--font-mono);font-size:12px;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;color:var(--text-primary);"></textarea>
+        <div class="field-hint" style="margin-top:6px;">One command per line, sent in this exact order. The preview above shows one representative secret — every device (including in a bulk "Apply to all") gets its own unique, randomly-generated secret automatically, <strong>unless you edit these commands yourself</strong>, in which case the edited commands (and whatever secret is in them) are sent to every target as-is. Edits here apply only to this Apply action, not saved for next time.</div>
+      </div>
+
+      <button type="button" class="btn-ghost btn-small" id="scan-apply-timeout-toggle" style="width:auto;margin:0 0 8px 0;">▸ Connection timeouts</button>
+      <div id="scan-apply-timeout-section" hidden class="field-row" style="margin-bottom:14px;">
+        <label class="field">
+          <span class="field-label">Connect timeout (seconds)</span>
+          <input type="number" id="scan-apply-connect-timeout" min="1" max="120" placeholder="Default">
+        </label>
+        <label class="field">
+          <span class="field-label">Command timeout (seconds)</span>
+          <input type="number" id="scan-apply-command-timeout" min="1" max="300" placeholder="Default">
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;" id="scan-apply-timeout-hint">Leave blank to use the saved default (or the built-in 8s/10s if none is saved) — a slow or high-latency link to this device may need longer. Edit the saved default itself on the AAA Command Template page.</div>
+
+      <div id="scan-apply-error" class="form-error" role="alert" hidden></div>
+      <div id="scan-apply-live-progress" hidden style="margin-top:12px;">
+        <div class="bg-notif-progress-track" style="height:8px;margin-bottom:8px;"><div class="bg-notif-progress-fill" id="scan-apply-progress-fill" style="width:0%;"></div></div>
+        <div id="scan-apply-progress-status" class="content-sub" style="margin-bottom:6px;"></div>
+        <div style="height:160px;overflow-y:auto;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:8px 10px;">
+          <div id="scan-apply-live-lines" class="cell-mono content-sub" style="line-height:1.5;"></div>
+        </div>
+        <button type="button" class="btn-ghost btn-small" id="scan-apply-background-btn" style="width:auto;margin-top:8px;">Continue in background</button>
+      </div>
+      <div id="scan-apply-results" style="margin-top:12px;max-height:280px;overflow-y:auto;"></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="scan-apply-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;" id="scan-apply-confirm-btn">Apply</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="grant-modal-backdrop" hidden>
+  <div class="modal">
+    <h2>Add access grant</h2>
+    <form id="grant-form">
+      <label class="field">
+        <span class="field-label">User group</span>
+        <select id="grant-user-group" required></select>
+      </label>
+
+      <label class="field">
+        <span class="field-label">Target</span>
+        <select id="grant-target-type">
+          <option value="device">A specific device</option>
+          <option value="device_group">A device group</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label" id="grant-target-label">Device</span>
+        <select id="grant-target-value" required></select>
+      </label>
+
+      <div id="grant-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="grant-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary" style="width:auto;">Add grant</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="device-modal-backdrop" hidden>
+  <div class="modal">
+    <button type="button" class="modal-close-btn" id="device-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2 id="device-modal-title">Add device</h2>
+    <form id="device-form">
+      <input type="hidden" id="device-id">
+
+      <div class="form-section">
+        <div class="form-section-title">Device Identity</div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Name</span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+              <input type="text" id="device-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+            </div>
+          </label>
+          <label class="field">
+            <span class="field-label">Enabled</span>
+            <div class="checkbox-field" style="padding-top:8px;">
+              <input type="checkbox" id="device-enabled" checked>
+              <span>Active in generated config</span>
+            </div>
+          </label>
+        </div>
+        <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng host identifier.</div>
+        <label class="field">
+          <span class="field-label">Description</span>
+          <input type="text" id="device-description">
+        </label>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Network</div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">IPv4 address / CIDR</span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('network', 14) }}</span>
+              <input type="text" id="device-ip" required placeholder="10.10.10.10 or 10.10.10.0/24">
+            </div>
+          </label>
+          <label class="field">
+            <span class="field-label">IPv6 address / CIDR (optional)</span>
+            <input type="text" id="device-ipv6" placeholder="2001:db8::1">
+          </label>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Platform</div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Vendor</span>
+            <input type="text" id="device-vendor" placeholder="Cisco">
+          </label>
+          <label class="field">
+            <span class="field-label">Platform</span>
+            <input type="text" id="device-platform" placeholder="IOS-XE">
+          </label>
+        </div>
+
+        <label class="field">
+          <span class="field-label">Device group</span>
+          <select id="device-group-select">
+            <option value="">— No group —</option>
+          </select>
+        </label>
+        <button type="button" class="quickadd-toggle" id="device-group-quickadd-toggle">+ New device group</button>
+        <div class="quickadd-panel" id="device-group-quickadd-panel" hidden>
+          <div class="field-row">
+            <label class="field">
+              <span class="field-label">New device group name</span>
+              <input type="text" id="device-group-quickadd-name" pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+            </label>
+            <label class="field">
+              <span class="field-label">Description</span>
+              <input type="text" id="device-group-quickadd-desc">
+            </label>
+          </div>
+          <div id="device-group-quickadd-error" class="form-error" role="alert" hidden></div>
+          <div class="modal-actions" style="justify-content:flex-start;margin-top:0;">
+            <button type="button" class="btn-secondary btn-small" id="device-group-quickadd-create-btn" style="width:auto;">Create</button>
+            <button type="button" class="btn-ghost btn-small" id="device-group-quickadd-cancel-btn">Cancel</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Node Type</div>
+        <div class="content-sub" style="margin-bottom:10px;">
+          Which protocol this device uses to reach the platform. A device can use both — enable each tab you need.
+        </div>
+        <div class="cdiff-tabs" role="tablist" style="margin-bottom:14px;">
+          <button type="button" class="cdiff-tab is-active" id="node-tab-tacacs" role="tab" aria-selected="true">TACACS+</button>
+          <button type="button" class="cdiff-tab" id="node-tab-radius" role="tab" aria-selected="false">RADIUS</button>
+        </div>
+      </div>
+
+      <div class="form-section" id="node-panel-tacacs">
+        <div class="form-section-title">TACACS+</div>
+        <label class="field">
+          <span class="field-label">Shared secret <span class="badge badge-on cell-mono" id="secret-configured-badge" hidden style="margin-left:6px;"></span></span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('lock', 14) }}</span>
+            <input type="password" id="device-secret" placeholder="" autocomplete="new-password">
+          </div>
+        </label>
+        <div class="field-hint" id="secret-hint" style="margin-top:-10px;margin-bottom:14px;">Required for new devices. Never displayed once saved — leave blank when editing to keep the current secret.</div>
+      </div>
+
+      <div class="form-section" id="node-panel-radius" hidden>
+        <div class="form-section-title">RADIUS</div>
+        <label class="toggle-field field" style="margin-bottom:12px;">
+          <span class="toggle-switch">
+            <input type="checkbox" id="device-radius-enabled">
+            <span class="toggle-switch-slider"></span>
+          </span>
+          <span>This device uses RADIUS</span>
+        </label>
+        <div id="device-radius-fields" hidden>
+          <label class="field">
+            <span class="field-label">RADIUS secret <span class="badge badge-on cell-mono" id="radius-secret-badge" hidden style="margin-left:6px;"></span></span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('lock', 14) }}</span>
+              <input type="password" id="device-radius-secret" placeholder="" autocomplete="new-password">
+            </div>
+          </label>
+          <div class="field-hint" id="radius-secret-hint" style="margin-top:-10px;">Separate from the TACACS+ secret — they're independent on real equipment, so this is never reused from above. Leave blank when editing to keep the current one.</div>
+          <div class="field-hint" style="margin-top:8px;">Emitted as <span class="cell-mono">radius.key</span> in this device's host block. RADIUS listeners must also be enabled under <a href="/tacacs/radius">RADIUS Settings</a>.</div>
+        </div>
+      </div>
+
+      <div id="device-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="device-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save device</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  // Pre-rendered server-side via Jinja (see the top-of-file macro
+  // import) since this markup is built client-side, per table row.
+  const ICON_DEVICE_ROW = '{{ icons.icon("server", 15) }}';
+  const ICON_GRANTS_EMPTY = '{{ icons.icon("shield", 22) }}';
+
+  let devices = [];
+  let deviceGroups = [];
+
+  async function loadDeviceGroupOptions() {
+    const res = await AAAPlatform.authedFetch('/api/device-groups');
+    if (!res.ok) return;
+    deviceGroups = await res.json();
+    const select = document.getElementById('device-group-select');
+    select.innerHTML = '<option value="">— No group —</option>' +
+      deviceGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+  }
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  const ICON_KPI_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_KPI_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_KPI_LOCK = '{{ icons.icon("lock", 16) }}';
+  const ICON_KPI_USERS = '{{ icons.icon("users", 16) }}';
+
+  function renderDeviceKpis() {
+    // enabled / vendor / device_group_name are the real fields the
+    // rows below already render -- verified, not assumed.
+    const enabled = devices.filter((d) => d.enabled).length;
+    const groups = new Set(devices.map((d) => d.device_group_name).filter(Boolean)).size;
+    const vendors = new Set(devices.map((d) => d.vendor).filter(Boolean)).size;
+    document.getElementById('devices-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_KPI_SERVER, label: 'Total Devices', value: devices.length }),
+      AAAPlatform.kpiCard({ icon: ICON_KPI_CHECK, label: 'Enabled', value: enabled, state: 'is-signal' }),
+      AAAPlatform.kpiCard({ icon: ICON_KPI_LOCK, label: 'Disabled', value: devices.length - enabled,
+                            state: (devices.length - enabled) ? 'is-amber' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_KPI_USERS, label: 'Device Groups', value: groups,
+                            sub: vendors + (vendors === 1 ? ' vendor' : ' vendors') }),
+    ].join('');
+  }
+
+  function renderTable() {
+    renderDeviceKpis();
+    const wrap = document.getElementById('devices-table-wrap');
+    document.getElementById('device-count').textContent = devices.length + (devices.length === 1 ? ' device' : ' devices');
+
+    if (devices.length === 0) {
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-title">No network devices</div>
+          <p class="empty-state-desc">NetOpsGuard doesn't have any devices configured yet. Add one to start managing TACACS+ access for it.</p>
+          <button type="button" class="btn-primary btn-small" id="empty-state-add-device-btn">+ Add device</button>
+        </div>
+      `;
+      document.getElementById('empty-state-add-device-btn').addEventListener('click', () => openModal(null));
+      return;
+    }
+
+    const rows = devices.map(d => `
+      <tr data-device-row="${d.id}">
+        <td style="display:flex;align-items:center;gap:8px;">${ICON_DEVICE_ROW}${escapeHtml(d.name)}</td>
+        <td class="cell-mono">${escapeHtml(d.ip_address)}${d.ipv6_address ? '<br>' + escapeHtml(d.ipv6_address) : ''}</td>
+        <td>${escapeHtml(d.vendor || '—')}</td>
+        <td>${escapeHtml(d.device_group_name || '—')}</td>
+        <td>${d.enabled ? '<span class="badge badge-on">Enabled</span>' : '<span class="badge badge-off">Disabled</span>'}</td>
+        <td class="cell-actions">
+          <button class="btn-secondary btn-small" data-apply-aaa="${d.id}">Apply AAA config</button>
+          <button class="btn-secondary btn-small" data-edit="${d.id}">Edit</button>
+          <button class="btn-danger btn-small" data-delete="${d.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th>Name</th><th>Address</th><th>Vendor</th><th>Group</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-apply-aaa]').forEach(btn => {
+      btn.addEventListener('click', () => openDeviceAaaModal(devices.find(d => d.id === btn.dataset.applyAaa)));
+    });
+    wrap.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.addEventListener('click', () => openModal(devices.find(d => d.id === btn.dataset.edit)));
+    });
+    wrap.querySelectorAll('[data-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deleteDevice(btn.dataset.delete));
+    });
+    wrap.querySelectorAll('[data-device-row]').forEach(row => {
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const device = devices.find(d => d.id === row.dataset.deviceRow);
+        if (!device) return;
+        AAAPlatform.showContextMenu(e.clientX, e.clientY, [
+          { label: 'Edit', onClick: () => openModal(device) },
+          { label: 'Apply AAA config', onClick: () => openDeviceAaaModal(device) },
+          'separator',
+          { label: 'Delete', onClick: () => deleteDevice(device.id), danger: true },
+        ]);
+      });
+    });
+  }
+
+  async function loadDevices() {
+    const res = await AAAPlatform.authedFetch('/api/devices');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    devices = await res.json();
+    renderTable();
+  }
+
+  function openModal(device) {
+    document.getElementById('device-form-error').hidden = true;
+    document.getElementById('device-form').reset();
+    document.getElementById('device-enabled').checked = true;
+    document.getElementById('device-group-quickadd-panel').hidden = true;
+
+    if (device) {
+      document.getElementById('device-modal-title').textContent = 'Edit device';
+      document.getElementById('device-id').value = device.id;
+      document.getElementById('device-name').value = device.name;
+      document.getElementById('device-ip').value = device.ip_address;
+      document.getElementById('device-ipv6').value = device.ipv6_address || '';
+      document.getElementById('device-vendor').value = device.vendor || '';
+      document.getElementById('device-platform').value = device.platform || '';
+      document.getElementById('device-group-select').value = device.device_group_id || '';
+      document.getElementById('device-description').value = device.description || '';
+      document.getElementById('device-enabled').checked = device.enabled;
+      document.getElementById('secret-hint').textContent = 'The full secret is never displayed once set, the same as every password field in this platform — the last 4 characters above are shown only so you can confirm which secret is currently saved. Leave the field below blank to keep it, or enter a new one to replace it.';
+      const secretBadge = document.getElementById('secret-configured-badge');
+      if (device.has_secret && device.secret_suffix) {
+        secretBadge.textContent = `Currently ends in …${device.secret_suffix}`;
+        secretBadge.hidden = false;
+      } else {
+        secretBadge.hidden = true;
+      }
+      document.getElementById('device-radius-enabled').checked = !!device.radius_enabled;
+      const radBadge = document.getElementById('radius-secret-badge');
+      radBadge.hidden = !device.has_radius_secret;
+      if (device.has_radius_secret) radBadge.textContent = 'configured';
+      document.getElementById('radius-secret-hint').textContent = device.has_radius_secret
+        ? 'A RADIUS secret is already saved. Leave blank to keep it, or enter a new one to replace it.'
+        : 'No RADIUS secret saved yet. Separate from the TACACS+ secret above — never reused from it.';
+    } else {
+      document.getElementById('device-modal-title').textContent = 'Add device';
+      document.getElementById('device-id').value = '';
+      document.getElementById('secret-hint').textContent = 'Required unless this device uses RADIUS only.';
+      document.getElementById('secret-configured-badge').hidden = true;
+      document.getElementById('device-radius-enabled').checked = false;
+      document.getElementById('radius-secret-badge').hidden = true;
+      document.getElementById('radius-secret-hint').textContent =
+        'Separate from the TACACS+ secret above — never reused from it.';
+    }
+    document.getElementById('device-radius-secret').value = '';
+    toggleRadiusFields();
+    // Open on the tab that matches the device: editing a RADIUS client
+    // should not start on a tab that says nothing about it.
+    selectNodeTab(device && device.radius_enabled && !device.has_secret ? 'radius' : 'tacacs');
+    document.getElementById('device-modal-backdrop').hidden = false;
+  }
+
+  function closeModal() {
+    document.getElementById('device-modal-backdrop').hidden = true;
+  }
+
+  // Node-type tabs. Both panels stay in the FORM and both are always
+  // submitted -- the tabs control what is visible, never what is saved.
+  // Hiding a panel must not silently discard a secret the admin already
+  // entered on it.
+  function selectNodeTab(which) {
+    const isTacacs = which === 'tacacs';
+    document.getElementById('node-tab-tacacs').classList.toggle('is-active', isTacacs);
+    document.getElementById('node-tab-radius').classList.toggle('is-active', !isTacacs);
+    document.getElementById('node-tab-tacacs').setAttribute('aria-selected', String(isTacacs));
+    document.getElementById('node-tab-radius').setAttribute('aria-selected', String(!isTacacs));
+    document.getElementById('node-panel-tacacs').hidden = !isTacacs;
+    document.getElementById('node-panel-radius').hidden = isTacacs;
+  }
+  document.getElementById('node-tab-tacacs').addEventListener('click', () => selectNodeTab('tacacs'));
+  document.getElementById('node-tab-radius').addEventListener('click', () => selectNodeTab('radius'));
+
+  function toggleRadiusFields() {
+    // The secret input is only meaningful when RADIUS is on for this
+    // device; hiding it keeps the form honest about what will be saved.
+    document.getElementById('device-radius-fields').hidden =
+      !document.getElementById('device-radius-enabled').checked;
+  }
+  document.getElementById('device-radius-enabled').addEventListener('change', toggleRadiusFields);
+
+  document.getElementById('add-device-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('device-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('device-modal-close-btn').addEventListener('click', closeModal);
+  document.getElementById('device-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'device-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('device-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('device-form-error');
+    errorBox.hidden = true;
+
+    const id = document.getElementById('device-id').value;
+    const secret = document.getElementById('device-secret').value;
+
+    const payload = {
+      name: document.getElementById('device-name').value,
+      ip_address: document.getElementById('device-ip').value,
+      ipv6_address: document.getElementById('device-ipv6').value || null,
+      vendor: document.getElementById('device-vendor').value || null,
+      platform: document.getElementById('device-platform').value || null,
+      device_group_id: document.getElementById('device-group-select').value || null,
+      description: document.getElementById('device-description').value || null,
+      enabled: document.getElementById('device-enabled').checked,
+    };
+    if (secret) payload.shared_secret = secret;
+
+    payload.radius_enabled = document.getElementById('device-radius-enabled').checked;
+    const radiusSecret = document.getElementById('device-radius-secret').value;
+    if (radiusSecret) payload.radius_secret = radiusSecret;
+    // A new device needs a secret for at least one protocol -- not a
+    // TACACS+ secret specifically. Demanding one for a RADIUS-only
+    // device (the previous behaviour) asked for a secret for a protocol
+    // the device never uses, and the warning appeared on a tab the
+    // admin had deliberately left alone.
+    if (!id && !secret && !(payload.radius_enabled && radiusSecret)) {
+      errorBox.textContent =
+        'Enter a TACACS+ shared secret, or switch to the RADIUS tab, enable RADIUS and enter a RADIUS secret.';
+      errorBox.hidden = false;
+      // Send the admin to the tab that can actually fix it.
+      selectNodeTab(payload.radius_enabled ? 'radius' : 'tacacs');
+      return;
+    }
+
+    const url = id ? `/api/devices/${id}` : '/api/devices';
+    const method = id ? 'PUT' : 'POST';
+
+    const res = await AAAPlatform.authedFetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not save device.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    closeModal();
+    AAAPlatform.toast(id ? 'Device updated.' : 'Device added.');
+    loadDevices();
+  });
+
+  async function deleteDevice(id) {
+    const device = devices.find(d => d.id === id);
+    if (!confirm(`Delete device "${device ? device.name : id}"? This cannot be undone.`)) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/devices/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not delete device.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Device deleted.');
+    loadDevices();
+  }
+
+  // ---------- Access Grants ----------
+  let accessGrants = [];
+  let allUserGroupsForGrants = [];
+
+  function renderGrantsTable() {
+    const wrap = document.getElementById('grants-table-wrap');
+    document.getElementById('grant-count').textContent = accessGrants.length + (accessGrants.length === 1 ? ' grant' : ' grants');
+
+    if (accessGrants.length === 0) {
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-icon-circle">${ICON_GRANTS_EMPTY}</div>
+          <div class="empty-state-title">No access grants</div>
+          <p class="empty-state-desc">Access is currently managed by policies only. Add an access grant to create an explicit user-group-to-device mapping alongside them.</p>
+          <button type="button" class="btn-primary btn-small" id="empty-state-add-grant-btn">+ Add access grant</button>
+        </div>
+      `;
+      document.getElementById('empty-state-add-grant-btn').addEventListener('click', () => {
+        document.getElementById('add-grant-btn').click();
+      });
+      return;
+    }
+
+    const rows = accessGrants.map(g => `
+      <tr>
+        <td>${escapeHtml(g.user_group_name || '(deleted group)')}</td>
+        <td>${g.device_name ? escapeHtml(g.device_name) : `<span class="content-sub">device group:</span> ${escapeHtml(g.device_group_name || '(deleted)')}`}</td>
+        <td class="cell-mono">priv 15, unrestricted</td>
+        <td class="cell-actions">
+          <button class="btn-danger btn-small" data-delete-grant="${g.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>User group</th><th>Target</th><th>Grants</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-delete-grant]').forEach(btn => {
+      btn.addEventListener('click', () => deleteGrant(btn.dataset.deleteGrant));
+    });
+  }
+
+  async function loadGrants() {
+    const res = await AAAPlatform.authedFetch('/api/device-access-grants');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) {
+      document.getElementById('grants-table-wrap').innerHTML = '<div class="empty-state">Could not load access grants.</div>';
+      return;
+    }
+    accessGrants = await res.json();
+    renderGrantsTable();
+  }
+
+  async function loadUserGroupsForGrants() {
+    const res = await AAAPlatform.authedFetch('/api/tacacs-groups');
+    if (res.ok) allUserGroupsForGrants = await res.json();
+  }
+
+  function updateGrantTargetOptions() {
+    const type = document.getElementById('grant-target-type').value;
+    const label = document.getElementById('grant-target-label');
+    const select = document.getElementById('grant-target-value');
+    if (type === 'device') {
+      label.textContent = 'Device';
+      select.innerHTML = devices.map(d => `<option value="${d.id}">${escapeHtml(d.name)}</option>`).join('');
+    } else {
+      label.textContent = 'Device group';
+      select.innerHTML = deviceGroups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    }
+  }
+
+  function openGrantModal() {
+    document.getElementById('grant-form-error').hidden = true;
+    document.getElementById('grant-form').reset();
+    document.getElementById('grant-user-group').innerHTML = allUserGroupsForGrants.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    updateGrantTargetOptions();
+    document.getElementById('grant-modal-backdrop').hidden = false;
+  }
+
+  document.getElementById('add-grant-btn').addEventListener('click', () => {
+    if (allUserGroupsForGrants.length === 0) {
+      AAAPlatform.toast('Create a TACACS+ group first — grants target a group, not an individual user.', 'error');
+      return;
+    }
+    openGrantModal();
+  });
+  document.getElementById('grant-cancel-btn').addEventListener('click', () => {
+    document.getElementById('grant-modal-backdrop').hidden = true;
+  });
+  document.getElementById('grant-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'grant-modal-backdrop') document.getElementById('grant-modal-backdrop').hidden = true;
+  });
+  document.getElementById('grant-target-type').addEventListener('change', updateGrantTargetOptions);
+
+  document.getElementById('grant-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('grant-form-error');
+    errorBox.hidden = true;
+
+    const targetType = document.getElementById('grant-target-type').value;
+    const targetValue = document.getElementById('grant-target-value').value;
+    const payload = {
+      user_group_id: document.getElementById('grant-user-group').value,
+      device_id: targetType === 'device' ? targetValue : null,
+      device_group_id: targetType === 'device_group' ? targetValue : null,
+    };
+
+    const res = await AAAPlatform.authedFetch('/api/device-access-grants', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Could not add grant.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+
+    document.getElementById('grant-modal-backdrop').hidden = true;
+    AAAPlatform.toast('Access grant added.');
+    loadGrants();
+  });
+
+  async function deleteGrant(id) {
+    if (!confirm('Remove this access grant?')) return;
+    const res = await AAAPlatform.authedFetch(`/api/device-access-grants/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not remove grant.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Access grant removed.');
+    loadGrants();
+  }
+
+  // ---------- Monitoring ----------
+  let monitoringIntervalId = null;
+
+  async function loadMonitoringSettings() {
+    const res = await AAAPlatform.authedFetch('/api/monitoring/settings');
+    if (!res.ok) return;
+    const settings = await res.json();
+    document.getElementById('monitoring-enabled-toggle').checked = settings.enabled;
+    document.getElementById('monitoring-list-wrap').hidden = !settings.enabled;
+    if (settings.enabled) startMonitoringPoll();
+  }
+
+  document.getElementById('monitoring-enabled-toggle').addEventListener('change', async (e) => {
+    const enabled = e.target.checked;
+    const res = await AAAPlatform.authedFetch('/api/monitoring/settings', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+    });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not update monitoring settings.', 'error');
+      e.target.checked = !enabled;
+      return;
+    }
+    document.getElementById('monitoring-list-wrap').hidden = !enabled;
+    if (enabled) {
+      startMonitoringPoll();
+    } else if (monitoringIntervalId) {
+      clearInterval(monitoringIntervalId);
+      monitoringIntervalId = null;
+    }
+    AAAPlatform.toast(enabled ? 'Monitoring enabled — apply the configuration for it to take effect.' : 'Monitoring disabled.');
+  });
+
+  function renderMonitoringTable(rows) {
+    const wrap = document.getElementById('monitoring-table-wrap');
+    document.getElementById('monitoring-count').textContent = rows.length + (rows.length === 1 ? ' unrecognized connection' : ' unrecognized connections');
+    if (rows.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">Nothing unrecognized seen recently.</div>';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>Source IP</th><th>Occurrences</th><th>Most recent log line</th><th></th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr>
+            <td class="cell-mono">${escapeHtml(r.ip_address)}</td>
+            <td class="cell-mono">${r.occurrences}</td>
+            <td class="cell-mono content-sub" style="max-width:360px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(r.sample_line)}">${escapeHtml(r.sample_line)}</td>
+            <td class="cell-actions"><button class="btn-primary btn-small" data-quickadd="${escapeHtml(r.ip_address)}">Add</button></td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+    wrap.querySelectorAll('[data-quickadd]').forEach(btn => {
+      btn.addEventListener('click', () => openQuickAddModal(btn.dataset.quickadd));
+    });
+  }
+
+  async function loadUnrecognizedConnections() {
+    const res = await AAAPlatform.authedFetch('/api/monitoring/unrecognized');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) return;
+    renderMonitoringTable(await res.json());
+  }
+
+  function startMonitoringPoll() {
+    loadUnrecognizedConnections();
+    if (monitoringIntervalId) clearInterval(monitoringIntervalId);
+    monitoringIntervalId = setInterval(loadUnrecognizedConnections, 15000);
+  }
+  if (window.AAAPlatform && AAAPlatform.onViewLeave) {
+    AAAPlatform.onViewLeave(() => { if (monitoringIntervalId) clearInterval(monitoringIntervalId); });
+  }
+
+  document.getElementById('monitoring-refresh-btn').addEventListener('click', loadUnrecognizedConnections);
+
+  function openQuickAddModal(ip) {
+    document.getElementById('quickadd-ip-display').textContent = ip;
+    document.getElementById('quickadd-device-form').reset();
+    document.getElementById('quickadd-device-error').hidden = true;
+    document.getElementById('quickadd-device-form').dataset.ip = ip;
+    document.getElementById('quickadd-device-modal-backdrop').hidden = false;
+  }
+  document.getElementById('quickadd-device-cancel-btn').addEventListener('click', () => {
+    document.getElementById('quickadd-device-modal-backdrop').hidden = true;
+  });
+  document.getElementById('quickadd-device-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'quickadd-device-modal-backdrop') document.getElementById('quickadd-device-modal-backdrop').hidden = true;
+  });
+  document.getElementById('quickadd-device-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('quickadd-device-error');
+    errorBox.hidden = true;
+    const payload = {
+      ip_address: e.target.dataset.ip,
+      name: document.getElementById('quickadd-device-name').value,
+      shared_secret: document.getElementById('quickadd-device-secret').value,
+    };
+    const res = await AAAPlatform.authedFetch('/api/monitoring/quick-add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Could not add device.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+    document.getElementById('quickadd-device-modal-backdrop').hidden = true;
+    AAAPlatform.toast('Device added to the monitor group.');
+    loadDevices();
+    loadUnrecognizedConnections();
+  });
+
+  // ---------- Network Scan & Provision ----------
+  let scanResults = [];
+
+  document.getElementById('scan-btn').addEventListener('click', async () => {
+    const errorBox = document.getElementById('scan-error');
+    errorBox.hidden = true;
+    const cidr = document.getElementById('scan-cidr').value.trim();
+    const sshUsername = document.getElementById('scan-ssh-username').value;
+    const sshPassword = document.getElementById('scan-ssh-password').value;
+    if (!cidr || !sshUsername || !sshPassword) {
+      errorBox.textContent = 'IP range, SSH username, and SSH password are all required.';
+      errorBox.hidden = false;
+      return;
+    }
+    const btn = document.getElementById('scan-btn');
+    btn.disabled = true;
+    btn.textContent = 'Scanning…';
+    const res = await AAAPlatform.authedFetch('/api/network-scan/scan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cidr, ssh_username: sshUsername, ssh_password: sshPassword }),
+    });
+    btn.disabled = false;
+    btn.textContent = 'Scan';
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Scan failed.';
+      errorBox.hidden = false;
+      return;
+    }
+    scanResults = await res.json();
+    renderScanResults();
+  });
+
+  function renderScanResults() {
+    document.getElementById('scan-results-wrap').hidden = scanResults.length === 0;
+    document.getElementById('scan-count').textContent = scanResults.length + (scanResults.length === 1 ? ' host found' : ' hosts found');
+    const wrap = document.getElementById('scan-results-table');
+    if (scanResults.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No SSH-reachable hosts found in that range.</div>';
+      return;
+    }
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead><tr><th>IP Address</th><th>Status</th><th></th></tr></thead>
+        <tbody>${scanResults.map(r => `
+          <tr>
+            <td class="cell-mono">${escapeHtml(r.ip_address)}</td>
+            <td>${r.already_exists ? '<span class="badge badge-off">Already exists</span>' : '<span class="content-sub">New</span>'}</td>
+            <td class="cell-actions">${r.already_exists ? '' : `<button class="btn-secondary btn-small" data-apply-single="${escapeHtml(r.ip_address)}">Apply AAA</button>`}</td>
+          </tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+    wrap.querySelectorAll('[data-apply-single]').forEach(btn => {
+      btn.addEventListener('click', () => openScanApplyModal('single', [btn.dataset.applySingle]));
+    });
+  }
+
+  document.getElementById('apply-all-btn').addEventListener('click', () => {
+    const newIps = scanResults.filter(r => !r.already_exists).map(r => r.ip_address);
+    if (newIps.length === 0) {
+      AAAPlatform.toast('Nothing new to apply — every found host already exists.', 'error');
+      return;
+    }
+    openScanApplyModal('all', newIps);
+  });
+
+  let scanApplyMode = 'single';
+  let scanApplyTargets = [];
+
+  async function loadScanApplyGroupOptions() {
+    const res = await AAAPlatform.authedFetch('/api/device-groups');
+    if (res.ok) {
+      const groups = await res.json();
+      document.getElementById('scan-apply-group-select').innerHTML =
+        '<option value="">— No group —</option>' + groups.map(g => `<option value="${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    }
+  }
+
+  function currentPlatformIp() {
+    const manual = document.getElementById('scan-apply-platform-ip-manual').value.trim();
+    return manual || document.getElementById('scan-apply-platform-ip-select').value;
+  }
+
+  async function refreshCommandPreview() {
+    const platformIp = currentPlatformIp();
+    if (!platformIp) return;
+    const res = await AAAPlatform.authedFetch('/api/network-scan/preview-commands', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ platform_ip: platformIp }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      document.getElementById('scan-apply-commands-editor').value = data.commands.join('\n');
+    }
+  }
+
+  async function openScanApplyModal(mode, targets) {
+    scanApplyMode = mode;
+    scanApplyTargets = targets;
+    document.getElementById('scan-apply-modal-title').textContent = mode === 'all' ? 'Apply AAA Configuration to All' : 'Apply AAA Configuration';
+    document.getElementById('scan-apply-target-display').textContent = mode === 'all'
+      ? `${targets.length} device(s): ${targets.join(', ')}${targets.length > 1 ? ' — editing commands below sends the SAME secret to every one of these' : ''}`
+      : `Target: ${targets[0]}`;
+    document.getElementById('scan-apply-error').hidden = true;
+    document.getElementById('scan-apply-results').innerHTML = '';
+    document.getElementById('scan-apply-commands-section').hidden = true;
+    document.getElementById('scan-apply-edit-commands-toggle').textContent = '▸ Edit commands before applying';
+    document.getElementById('scan-apply-platform-ip-manual').value = '';
+    document.getElementById('scan-apply-confirm-btn').disabled = false;
+    document.getElementById('scan-apply-confirm-btn').textContent = 'Apply';
+    document.getElementById('scan-apply-confirm-btn').type = 'submit';
+
+    const addrRes = await AAAPlatform.authedFetch('/api/network-scan/platform-addresses');
+    const addresses = addrRes.ok ? (await addrRes.json()).addresses : [];
+    const select = document.getElementById('scan-apply-platform-ip-select');
+    select.innerHTML = addresses.length
+      ? addresses.map(a => `<option value="${a}">${a}</option>`).join('')
+      : `<option value="${window.location.hostname}">${window.location.hostname} (fallback — could not detect this platform's own addresses)</option>`;
+
+    await loadScanApplyGroupOptions();
+    document.getElementById('scan-apply-modal-backdrop').hidden = false;
+  }
+
+  document.getElementById('scan-apply-platform-ip-select').addEventListener('change', refreshCommandPreview);
+  document.getElementById('scan-apply-platform-ip-manual').addEventListener('change', refreshCommandPreview);
+  document.getElementById('scan-apply-edit-commands-toggle').addEventListener('click', async () => {
+    const section = document.getElementById('scan-apply-commands-section');
+    const wasHidden = section.hidden;
+    section.hidden = !wasHidden;
+    document.getElementById('scan-apply-edit-commands-toggle').textContent = section.hidden ? '▸ Edit commands before applying' : '▾ Edit commands before applying';
+    if (wasHidden) await refreshCommandPreview();
+  });
+
+  document.getElementById('scan-apply-timeout-toggle').addEventListener('click', () => {
+    const section = document.getElementById('scan-apply-timeout-section');
+    section.hidden = !section.hidden;
+    document.getElementById('scan-apply-timeout-toggle').textContent = section.hidden ? '▸ Connection timeouts' : '▾ Connection timeouts';
+  });
+
+  document.getElementById('scan-apply-cancel-btn').addEventListener('click', () => {
+    document.getElementById('scan-apply-modal-backdrop').hidden = true;
+  });
+  document.getElementById('scan-apply-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'scan-apply-modal-backdrop') document.getElementById('scan-apply-modal-backdrop').hidden = true;
+  });
+
+  function renderScanApplyResults(results) {
+    document.getElementById('scan-apply-results').innerHTML = results.map((r, i) => `
+      <div class="version-row" style="flex-direction:column;align-items:stretch;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span>
+            <span style="color:${r.success ? 'var(--signal)' : 'var(--red)'};">${r.success ? '✓' : '✗'}</span>
+            <span class="cell-mono">${escapeHtml(r.ip_address)}</span> — ${escapeHtml(r.message)}
+          </span>
+          ${r.command_log.length ? `<button type="button" class="btn-ghost btn-small" data-show-log="${i}">Show executed commands</button>` : ''}
+        </div>
+        <div class="cell-mono content-sub" id="scan-apply-log-${i}" hidden style="white-space:pre-wrap;margin-top:8px;padding:8px;background:var(--bg-void);border-radius:var(--radius);max-height:220px;overflow-y:auto;">${escapeHtml((r.command_log || []).join('\n\n'))}</div>
+      </div>
+    `).join('');
+    document.querySelectorAll('[data-show-log]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const log = document.getElementById(`scan-apply-log-${btn.dataset.showLog}`);
+        log.hidden = !log.hidden;
+        btn.textContent = log.hidden ? 'Show executed commands' : 'Hide executed commands';
+      });
+    });
+  }
+
+  function renderLiveProgress(prefix, session) {
+    const total = session.total || 1;
+    const completed = session.completed || 0;
+    const pct = Math.min(100, Math.round((completed / total) * 100));
+    document.getElementById(`${prefix}-progress-fill`).style.width = `${pct}%`;
+    document.getElementById(`${prefix}-progress-status`).textContent =
+      session.status === 'done' ? 'Finishing up…' : `${completed} / ${total} complete`;
+    const linesEl = document.getElementById(`${prefix}-live-lines`);
+    linesEl.innerHTML = (session.log || []).map(line => {
+      const isPass = / Pass$/.test(line);
+      const isFail = /FAIL —/.test(line);
+      const color = isPass ? 'var(--signal)' : isFail ? 'var(--red)' : 'var(--text-dim)';
+      return `<div style="color:${color};">${escapeHtml(line)}</div>`;
+    }).join('');
+    linesEl.scrollTop = linesEl.scrollHeight;
+  }
+
+  // Returns the final results array normally, or the string
+  // 'backgrounded' if the admin clicked "Continue in background"
+  // while this was still running -- the caller checks for that
+  // specifically rather than treating it as a real result set.
+  async function pollApplyProgress(prefix, sessionId, backgroundDescription) {
+    const progressBox = document.getElementById(`${prefix}-live-progress`);
+    progressBox.hidden = false;
+    let backgrounded = false;
+
+    const bgBtn = document.getElementById(`${prefix}-background-btn`);
+    const onBackgroundClick = () => {
+      backgrounded = true;
+      AAAPlatform.trackBackgroundOperation(sessionId, backgroundDescription);
+      AAAPlatform.toast('Continuing in the background — check the topbar for progress.');
+    };
+    bgBtn.addEventListener('click', onBackgroundClick, { once: true });
+
+    try {
+      while (true) {
+        if (backgrounded) return 'backgrounded';
+        const res = await AAAPlatform.authedFetch(`/api/network-scan/apply-progress/${sessionId}`);
+        if (!res.ok) break;
+        const session = await res.json();
+        renderLiveProgress(prefix, session);
+        if (session.status === 'done') {
+          progressBox.hidden = true;
+          return session.results || [];
+        }
+        await new Promise(resolve => setTimeout(resolve, 800));
+      }
+      progressBox.hidden = true;
+      return [];
+    } finally {
+      bgBtn.removeEventListener('click', onBackgroundClick);
+    }
+  }
+
+  document.getElementById('scan-apply-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('scan-apply-error');
+    errorBox.hidden = true;
+
+    const sshUsername = document.getElementById('scan-ssh-username').value;
+    const sshPassword = document.getElementById('scan-ssh-password').value;
+    const platformIp = currentPlatformIp();
+    const groupId = document.getElementById('scan-apply-group-select').value || null;
+    const commandsSectionOpen = !document.getElementById('scan-apply-commands-section').hidden;
+    const commandsOverride = commandsSectionOpen
+      ? document.getElementById('scan-apply-commands-editor').value.split('\n').map(l => l.trim()).filter(Boolean)
+      : null;
+    const connectTimeoutVal = document.getElementById('scan-apply-connect-timeout').value;
+    const commandTimeoutVal = document.getElementById('scan-apply-command-timeout').value;
+    const connectTimeout = connectTimeoutVal ? parseInt(connectTimeoutVal, 10) : null;
+    const commandTimeout = commandTimeoutVal ? parseInt(commandTimeoutVal, 10) : null;
+
+    if (!platformIp) {
+      errorBox.textContent = 'Select or enter this platform\'s address.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    const btn = document.getElementById('scan-apply-confirm-btn');
+    btn.disabled = true;
+    btn.textContent = 'Applying…';
+
+    let results;
+    if (scanApplyMode === 'all') {
+      const res = await AAAPlatform.authedFetch('/api/network-scan/apply-all', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip_addresses: scanApplyTargets, ssh_username: sshUsername, ssh_password: sshPassword, platform_ip: platformIp, device_group_id: groupId, commands: commandsOverride, connect_timeout_seconds: connectTimeout, command_timeout_seconds: commandTimeout }),
+      });
+      if (!res.ok) {
+        btn.disabled = false;
+        btn.textContent = 'Apply';
+        const body = await res.json().catch(() => ({}));
+        errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Apply failed.';
+        errorBox.hidden = false;
+        return;
+      }
+      const { session_id } = await res.json();
+      results = await pollApplyProgress('scan-apply', session_id, `Applying AAA config to ${scanApplyTargets.length} device(s)`);
+      btn.disabled = false;
+      btn.textContent = 'Apply';
+    } else {
+      const res = await AAAPlatform.authedFetch('/api/network-scan/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip_address: scanApplyTargets[0], ssh_username: sshUsername, ssh_password: sshPassword, platform_ip: platformIp, device_group_id: groupId, commands: commandsOverride, connect_timeout_seconds: connectTimeout, command_timeout_seconds: commandTimeout }),
+      });
+      if (!res.ok) {
+        btn.disabled = false;
+        btn.textContent = 'Apply';
+        const body = await res.json().catch(() => ({}));
+        errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Apply failed.';
+        errorBox.hidden = false;
+        return;
+      }
+      const { session_id } = await res.json();
+      results = await pollApplyProgress('scan-apply', session_id, `Applying AAA config to ${scanApplyTargets[0]}`);
+      btn.disabled = false;
+      btn.textContent = 'Apply';
+    }
+
+    if (results === 'backgrounded') {
+      document.getElementById('scan-apply-modal-backdrop').hidden = true;
+      return;
+    }
+
+    renderScanApplyResults(results);
+    const successIps = new Set(results.filter(r => r.success).map(r => r.ip_address));
+    scanResults = scanResults.map(r => successIps.has(r.ip_address) ? { ...r, already_exists: 'new' } : r);
+    renderScanResults();
+    loadDevices();
+    btn.textContent = 'Close';
+    btn.disabled = false;
+    btn.onclick = null;
+    btn.type = 'button';
+    btn.addEventListener('click', () => { document.getElementById('scan-apply-modal-backdrop').hidden = true; }, { once: true });
+  });
+
+  AAAPlatform.setupQuickAdd(
+    {
+      toggleBtn: 'scan-apply-group-quickadd-toggle',
+      panel: 'scan-apply-group-quickadd-panel',
+      nameInput: 'scan-apply-group-quickadd-name',
+      descInput: 'scan-apply-group-quickadd-desc',
+      errorBox: 'scan-apply-group-quickadd-error',
+      createBtn: 'scan-apply-group-quickadd-create-btn',
+      cancelBtn: 'scan-apply-group-quickadd-cancel-btn',
+      select: 'scan-apply-group-select',
+    },
+    '/api/device-groups',
+    loadScanApplyGroupOptions
+  );
+
+  loadDeviceGroupOptions();
+  loadDevices();
+  loadUserGroupsForGrants();
+  loadGrants();
+  // ---------- AAA command template ----------
+  document.getElementById('aaa-template-toggle').addEventListener('click', async () => {
+    const section = document.getElementById('aaa-template-section');
+    const wasHidden = section.hidden;
+    section.hidden = !wasHidden;
+    document.getElementById('aaa-template-toggle').textContent = section.hidden ? '▸ Default AAA command template' : '▾ Default AAA command template';
+    if (wasHidden) await loadAaaTemplate();
+  });
+
+  async function loadAaaTemplate() {
+    const res = await AAAPlatform.authedFetch('/api/aaa-template');
+    if (!res.ok) return;
+    const data = await res.json();
+    document.getElementById('aaa-template-editor').value = data.commands.join('\n');
+    document.getElementById('aaa-template-status').textContent = data.is_default ? 'Using the built-in default.' : 'Using a saved customization.';
+    document.getElementById('aaa-template-connect-timeout').value = data.connect_timeout_seconds ?? '';
+    document.getElementById('aaa-template-command-timeout').value = data.command_timeout_seconds ?? '';
+    document.getElementById('aaa-template-connect-timeout').placeholder = `Built-in default (${data.default_connect_timeout_seconds}s)`;
+    document.getElementById('aaa-template-command-timeout').placeholder = `Built-in default (${data.default_command_timeout_seconds}s)`;
+  }
+
+  document.getElementById('aaa-template-save-btn').addEventListener('click', async () => {
+    const errorBox = document.getElementById('aaa-template-error');
+    errorBox.hidden = true;
+    const commands = document.getElementById('aaa-template-editor').value.split('\n').map(l => l.trim()).filter(Boolean);
+    if (commands.length === 0) {
+      errorBox.textContent = 'The template needs at least one command.';
+      errorBox.hidden = false;
+      return;
+    }
+    const connectTimeoutVal = document.getElementById('aaa-template-connect-timeout').value;
+    const commandTimeoutVal = document.getElementById('aaa-template-command-timeout').value;
+    const res = await AAAPlatform.authedFetch('/api/aaa-template', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commands,
+        connect_timeout_seconds: connectTimeoutVal ? parseInt(connectTimeoutVal, 10) : null,
+        command_timeout_seconds: commandTimeoutVal ? parseInt(commandTimeoutVal, 10) : null,
+      }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Could not save the template.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+    AAAPlatform.toast('Template saved — used for every future Apply.');
+    await loadAaaTemplate();
+  });
+
+  document.getElementById('aaa-template-reset-btn').addEventListener('click', async () => {
+    if (!confirm('Reset the AAA command template to the built-in default? Any customization will be lost.')) return;
+    const res = await AAAPlatform.authedFetch('/api/aaa-template/reset-to-default', { method: 'POST' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not reset the template.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Template reset to the built-in default.');
+    await loadAaaTemplate();
+  });
+
+  loadMonitoringSettings();
+
+  AAAPlatform.setupQuickAdd(
+    {
+      toggleBtn: 'device-group-quickadd-toggle',
+      panel: 'device-group-quickadd-panel',
+      nameInput: 'device-group-quickadd-name',
+      descInput: 'device-group-quickadd-desc',
+      errorBox: 'device-group-quickadd-error',
+      createBtn: 'device-group-quickadd-create-btn',
+      cancelBtn: 'device-group-quickadd-cancel-btn',
+      select: 'device-group-select',
+    },
+    '/api/device-groups',
+    loadDeviceGroupOptions
+  );
+
+  // ---------- Apply AAA config to an existing device ----------
+  let deviceAaaTarget = null;
+
+  function currentDeviceAaaPlatformIp() {
+    const manual = document.getElementById('device-aaa-platform-ip-manual').value.trim();
+    return manual || document.getElementById('device-aaa-platform-ip-select').value;
+  }
+
+  async function refreshDeviceAaaPreview() {
+    if (!deviceAaaTarget) return;
+    const platformIp = currentDeviceAaaPlatformIp();
+    if (!platformIp) return;
+    const res = await AAAPlatform.authedFetch(`/api/devices/${deviceAaaTarget.id}/aaa-preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ platform_ip: platformIp }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      document.getElementById('device-aaa-commands-editor').value = data.commands.join('\n');
+    }
+  }
+
+  async function openDeviceAaaModal(device) {
+    if (!device) return;
+    deviceAaaTarget = device;
+    document.getElementById('device-aaa-modal-title').textContent = `Apply AAA Configuration — ${device.name}`;
+    document.getElementById('device-aaa-form').reset();
+    document.getElementById('device-aaa-error').hidden = true;
+    document.getElementById('device-aaa-result').innerHTML = '';
+    document.getElementById('device-aaa-commands-section').hidden = true;
+    document.getElementById('device-aaa-edit-toggle').textContent = '▸ Edit commands before applying';
+    document.getElementById('device-aaa-confirm-btn').disabled = false;
+    document.getElementById('device-aaa-confirm-btn').textContent = 'Apply';
+    document.getElementById('device-aaa-confirm-btn').type = 'submit';
+
+    const addrRes = await AAAPlatform.authedFetch('/api/network-scan/platform-addresses');
+    const addresses = addrRes.ok ? (await addrRes.json()).addresses : [];
+    const select = document.getElementById('device-aaa-platform-ip-select');
+    select.innerHTML = addresses.length
+      ? addresses.map(a => `<option value="${a}">${a}</option>`).join('')
+      : `<option value="${window.location.hostname}">${window.location.hostname} (fallback — could not detect this platform's own addresses)</option>`;
+
+    document.getElementById('device-aaa-modal-backdrop').hidden = false;
+  }
+
+  document.getElementById('device-aaa-platform-ip-select').addEventListener('change', refreshDeviceAaaPreview);
+  document.getElementById('device-aaa-platform-ip-manual').addEventListener('change', refreshDeviceAaaPreview);
+  document.getElementById('device-aaa-edit-toggle').addEventListener('click', async () => {
+    const section = document.getElementById('device-aaa-commands-section');
+    const wasHidden = section.hidden;
+    section.hidden = !wasHidden;
+    document.getElementById('device-aaa-edit-toggle').textContent = section.hidden ? '▸ Edit commands before applying' : '▾ Edit commands before applying';
+    if (wasHidden) await refreshDeviceAaaPreview();
+  });
+  document.getElementById('device-aaa-timeout-toggle').addEventListener('click', () => {
+    const section = document.getElementById('device-aaa-timeout-section');
+    section.hidden = !section.hidden;
+    document.getElementById('device-aaa-timeout-toggle').textContent = section.hidden ? '▸ Connection timeouts' : '▾ Connection timeouts';
+  });
+  document.getElementById('device-aaa-cancel-btn').addEventListener('click', () => {
+    document.getElementById('device-aaa-modal-backdrop').hidden = true;
+  });
+  document.getElementById('device-aaa-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'device-aaa-modal-backdrop') document.getElementById('device-aaa-modal-backdrop').hidden = true;
+  });
+
+  document.getElementById('device-aaa-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('device-aaa-error');
+    errorBox.hidden = true;
+
+    const sshUsername = document.getElementById('device-aaa-ssh-username').value;
+    const sshPassword = document.getElementById('device-aaa-ssh-password').value;
+    const platformIp = currentDeviceAaaPlatformIp();
+    if (!platformIp) {
+      errorBox.textContent = 'Select or enter this platform\'s address.';
+      errorBox.hidden = false;
+      return;
+    }
+    const commandsSectionOpen = !document.getElementById('device-aaa-commands-section').hidden;
+    const commandsOverride = commandsSectionOpen
+      ? document.getElementById('device-aaa-commands-editor').value.split('\n').map(l => l.trim()).filter(Boolean)
+      : null;
+    const connectTimeoutVal = document.getElementById('device-aaa-connect-timeout').value;
+    const commandTimeoutVal = document.getElementById('device-aaa-command-timeout').value;
+    const connectTimeout = connectTimeoutVal ? parseInt(connectTimeoutVal, 10) : null;
+    const commandTimeout = commandTimeoutVal ? parseInt(commandTimeoutVal, 10) : null;
+
+    const btn = document.getElementById('device-aaa-confirm-btn');
+    btn.disabled = true;
+    btn.textContent = 'Applying…';
+
+    const res = await AAAPlatform.authedFetch(`/api/devices/${deviceAaaTarget.id}/apply-aaa`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ssh_username: sshUsername, ssh_password: sshPassword, platform_ip: platformIp, commands: commandsOverride, connect_timeout_seconds: connectTimeout, command_timeout_seconds: commandTimeout }),
+    });
+
+    if (!res.ok) {
+      btn.disabled = false;
+      btn.textContent = 'Apply';
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Apply failed.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+
+    const { session_id } = await res.json();
+    const results = await pollApplyProgress('device-aaa', session_id, `Applying AAA config to ${deviceAaaTarget.name}`);
+    btn.disabled = false;
+    btn.textContent = 'Apply';
+
+    if (results === 'backgrounded') {
+      document.getElementById('device-aaa-modal-backdrop').hidden = true;
+      return;
+    }
+
+    const result = results[0];
+    const resultBox = document.getElementById('device-aaa-result');
+    resultBox.innerHTML = `<span style="color:${result.success ? 'var(--signal)' : 'var(--red)'};">${result.success ? '✓' : '✗'}</span> ${escapeHtml(result.message)}`;
+    if (result.success) {
+      btn.textContent = 'Close';
+      btn.type = 'button';
+      btn.disabled = false;
+      btn.addEventListener('click', () => { document.getElementById('device-aaa-modal-backdrop').hidden = true; }, { once: true });
+      AAAPlatform.toast(`AAA configuration applied to ${deviceAaaTarget.name}.`);
+    }
+  });
+</script>
+{% endblock %}

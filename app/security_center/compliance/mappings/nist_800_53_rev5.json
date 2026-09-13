@@ -1,0 +1,1322 @@
+{
+  "framework_id": "nist_800_53",
+  "framework_name": "NIST SP 800-53 Rev. 5",
+  "license_note": "Public domain (U.S. government work). Control identifiers and titles reproduced freely.",
+  "checks": {
+    "AAA-01": [
+      {
+        "control": "AC-3",
+        "title": "Access Enforcement",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-02": [
+      {
+        "control": "IA-2",
+        "title": "Identification and Authentication (Organizational Users)",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-03": [
+      {
+        "control": "CP-2",
+        "title": "Contingency Plan",
+        "relationship": "supporting"
+      }
+    ],
+    "AAA-04": [
+      {
+        "control": "AC-6",
+        "title": "Least Privilege",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-05": [
+      {
+        "control": "AC-6",
+        "title": "Least Privilege",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-06": [
+      {
+        "control": "AU-2",
+        "title": "Event Logging",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-07": [
+      {
+        "control": "AU-2",
+        "title": "Event Logging",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-08": [
+      {
+        "control": "AC-7",
+        "title": "Unsuccessful Logon Attempts",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-09": [
+      {
+        "control": "IA-5",
+        "title": "Authenticator Management",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-10": [
+      {
+        "control": "IA-5",
+        "title": "Authenticator Management",
+        "relationship": "direct"
+      }
+    ],
+    "AAA-11": [
+      {
+        "control": "IA-5",
+        "title": "Authenticator Management",
+        "relationship": "direct"
+      }
+    ],
+    "USR-01": [
+      {
+        "control": "IA-5",
+        "title": "Authenticator Management",
+        "relationship": "direct"
+      }
+    ],
+    "USR-02": [
+      {
+        "control": "IA-4",
+        "title": "Identifier Management",
+        "relationship": "direct"
+      }
+    ],
+    "USR-03": [
+      {
+        "control": "AC-6",
+        "title": "Least Privilege",
+        "relationship": "supporting"
+      }
+    ],
+    "SSH-01": [
+      {
+        "control": "SC-8",
+        "title": "Transmission Confidentiality and Integrity",
+        "relationship": "direct"
+      }
+    ],
+    "SSH-02": [
+      {
+        "control": "SC-8",
+        "title": "Transmission Confidentiality and Integrity",
+        "relationship": "direct"
+      },
+      {
+        "control": "AC-17",
+        "title": "Remote Access",
+        "relationship": "direct"
+      }
+    ],
+    "SSH-03": [
+      {
+        "control": "AC-17",
+        "title": "Remote Access",
+        "relationship": "direct"
+      },
+      {
+        "control": "AC-4",
+        "title": "Information Flow Enforcement",
+        "relationship": "supporting"
+      }
+    ],
+    "SSH-04": [
+      {
+        "control": "AC-12",
+        "title": "Session Termination",
+        "relationship": "direct"
+      }
+    ],
+    "SSH-05": [
+      {
+        "control": "AC-12",
+        "title": "Session Termination",
+        "relationship": "direct"
+      }
+    ],
+    "SSH-06": [
+      {
+        "control": "AC-7",
+        "title": "Unsuccessful Logon Attempts",
+        "relationship": "direct"
+      }
+    ],
+    "SSH-07": [
+      {
+        "control": "SC-13",
+        "title": "Cryptographic Protection",
+        "relationship": "direct"
+      }
+    ],
+    "SSH-08": [
+      {
+        "control": "SC-13",
+        "title": "Cryptographic Protection",
+        "relationship": "direct"
+      }
+    ],
+    "HTTP-01": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "HTTP-02": [
+      {
+        "control": "AC-17",
+        "title": "Remote Access",
+        "relationship": "direct"
+      }
+    ],
+    "SNMP-01": [
+      {
+        "control": "IA-5",
+        "title": "Authenticator Management",
+        "relationship": "direct"
+      }
+    ],
+    "SNMP-02": [
+      {
+        "control": "SC-8",
+        "title": "Transmission Confidentiality and Integrity",
+        "relationship": "direct"
+      }
+    ],
+    "SNMP-03": [
+      {
+        "control": "IA-5",
+        "title": "Authenticator Management",
+        "relationship": "direct"
+      },
+      {
+        "control": "SC-13",
+        "title": "Cryptographic Protection",
+        "relationship": "direct"
+      }
+    ],
+    "SNMP-04": [
+      {
+        "control": "AC-4",
+        "title": "Information Flow Enforcement",
+        "relationship": "direct"
+      }
+    ],
+    "NTP-01": [
+      {
+        "control": "AU-8",
+        "title": "Timestamps",
+        "relationship": "direct"
+      }
+    ],
+    "NTP-02": [
+      {
+        "control": "AU-8",
+        "title": "Timestamps",
+        "relationship": "direct"
+      }
+    ],
+    "NTP-03": [
+      {
+        "control": "AU-8",
+        "title": "Timestamps",
+        "relationship": "direct"
+      }
+    ],
+    "NTP-04": [
+      {
+        "control": "AC-4",
+        "title": "Information Flow Enforcement",
+        "relationship": "supporting"
+      }
+    ],
+    "LOG-01": [
+      {
+        "control": "AU-9",
+        "title": "Protection of Audit Information",
+        "relationship": "direct"
+      },
+      {
+        "control": "AU-4",
+        "title": "Audit Log Storage Capacity",
+        "relationship": "supporting"
+      }
+    ],
+    "LOG-02": [
+      {
+        "control": "AU-8",
+        "title": "Timestamps",
+        "relationship": "direct"
+      }
+    ],
+    "LOG-03": [
+      {
+        "control": "AU-2",
+        "title": "Event Logging",
+        "relationship": "direct"
+      }
+    ],
+    "LOG-04": [
+      {
+        "control": "AU-2",
+        "title": "Event Logging",
+        "relationship": "direct"
+      }
+    ],
+    "BAN-01": [
+      {
+        "control": "AC-8",
+        "title": "System Use Notification",
+        "relationship": "direct"
+      }
+    ],
+    "DNS-01": [
+      {
+        "control": "SC-20",
+        "title": "Secure Name/Address Resolution Service (Authoritative Source)",
+        "relationship": "supporting"
+      }
+    ],
+    "MPP-01": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-RESTCONF": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-NETCONF": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-GNMI": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-IOX": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-TFTP": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      },
+      {
+        "control": "SC-8",
+        "title": "Transmission Confidentiality and Integrity",
+        "relationship": "supporting"
+      }
+    ],
+    "EXP-FTP": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "EXP-SCP": [
+      {
+        "control": "SC-8",
+        "title": "Transmission Confidentiality and Integrity",
+        "relationship": "supporting"
+      }
+    ],
+    "EXP-GUESTSHELL": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "supporting"
+      }
+    ],
+    "PWD-01": [
+      {
+        "control": "IA-5",
+        "title": "Authenticator Management",
+        "relationship": "direct"
+      }
+    ],
+    "PWD-02": [
+      {
+        "control": "IA-5",
+        "title": "Authenticator Management",
+        "relationship": "direct"
+      }
+    ],
+    "PWD-03": [
+      {
+        "control": "IA-5",
+        "title": "Authenticator Management",
+        "relationship": "direct"
+      }
+    ],
+    "PWD-04": [
+      {
+        "control": "IA-5",
+        "title": "Authenticator Management",
+        "relationship": "direct"
+      }
+    ],
+    "L2PS-01": [
+      {
+        "control": "AC-3",
+        "title": "Access Enforcement",
+        "relationship": "direct"
+      },
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "L2PS-02": [
+      {
+        "control": "AC-3",
+        "title": "Access Enforcement",
+        "relationship": "direct"
+      }
+    ],
+    "L2PS-03": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "supporting"
+      }
+    ],
+    "L2PS-04": [
+      {
+        "control": "AU-2",
+        "title": "Event Logging",
+        "relationship": "direct"
+      }
+    ],
+    "STP-01": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "STP-02": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "STP-03": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "STP-04": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "supporting"
+      }
+    ],
+    "UDLD-01": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "STORM-01": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "DHCPSNOOP-01": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      },
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "DHCPSNOOP-02": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "DHCPSNOOP-03": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "DHCPSNOOP-04": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "DHCPSNOOP-05": [
+      {
+        "control": "AC-6",
+        "title": "Least Privilege",
+        "relationship": "supporting"
+      }
+    ],
+    "DAI-01": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "DAI-02": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "direct"
+      }
+    ],
+    "DAI-03": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "DAI-04": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "DAI-05": [
+      {
+        "control": "CM-8",
+        "title": "System Component Inventory",
+        "relationship": "supporting"
+      }
+    ],
+    "IPSG-01": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "TRUNK-01": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "TRUNK-02": [
+      {
+        "control": "AC-4",
+        "title": "Information Flow Enforcement",
+        "relationship": "direct"
+      }
+    ],
+    "TRUNK-03": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "direct"
+      }
+    ],
+    "VTP-01": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "direct"
+      }
+    ],
+    "ECHAN-01": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "supporting"
+      }
+    ],
+    "URPF-01": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      },
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "URPF-02": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "RTAUTH-OSPF-01": [
+      {
+        "control": "IA-2",
+        "title": "Identification and Authentication (Organizational Users)",
+        "relationship": "direct"
+      }
+    ],
+    "RTAUTH-OSPF-02": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "supporting"
+      }
+    ],
+    "RTAUTH-EIGRP-01": [
+      {
+        "control": "IA-2",
+        "title": "Identification and Authentication (Organizational Users)",
+        "relationship": "direct"
+      }
+    ],
+    "RTAUTH-RIP-01": [
+      {
+        "control": "IA-2",
+        "title": "Identification and Authentication (Organizational Users)",
+        "relationship": "direct"
+      }
+    ],
+    "RTAUTH-BGP-01": [
+      {
+        "control": "IA-2",
+        "title": "Identification and Authentication (Organizational Users)",
+        "relationship": "direct"
+      }
+    ],
+    "RTAUTH-BGP-02": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "RTAUTH-BGP-03": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "RTAUTH-BGP-04": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "RTAUTH-ISIS-01": [
+      {
+        "control": "IA-2",
+        "title": "Identification and Authentication (Organizational Users)",
+        "relationship": "direct"
+      }
+    ],
+    "FHRP-HSRP-01": [
+      {
+        "control": "IA-2",
+        "title": "Identification and Authentication (Organizational Users)",
+        "relationship": "direct"
+      }
+    ],
+    "FHRP-HSRP-02": [
+      {
+        "control": "IA-5",
+        "title": "Authenticator Management",
+        "relationship": "direct"
+      }
+    ],
+    "FHRP-VRRP-01": [
+      {
+        "control": "IA-2",
+        "title": "Identification and Authentication (Organizational Users)",
+        "relationship": "direct"
+      }
+    ],
+    "ICMP-01": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "ICMP-02": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "ICMP-03": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "ICMP-04": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "ICMP-05": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "ACL-01": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "supporting"
+      }
+    ],
+    "ACL-02": [
+      {
+        "control": "AC-4",
+        "title": "Information Flow Enforcement",
+        "relationship": "direct"
+      }
+    ],
+    "ACL-03": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "supporting"
+      }
+    ],
+    "ACL-04": [
+      {
+        "control": "AU-2",
+        "title": "Event Logging",
+        "relationship": "supporting"
+      }
+    ],
+    "ACL-05": [
+      {
+        "control": "AC-4",
+        "title": "Information Flow Enforcement",
+        "relationship": "supporting"
+      }
+    ],
+    "TRACK-01": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "supporting"
+      }
+    ],
+    "TRACK-02": [
+      {
+        "control": "CM-8",
+        "title": "System Component Inventory",
+        "relationship": "supporting"
+      }
+    ],
+    "COPP-01": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-ICMP": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-ROUTING": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-ARP": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-L2CTRL": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-MGMT": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-DHCP": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-FHRP": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "COPP-CLASS-MCAST": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "CPURISK-01": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "CPURISK-02": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "supporting"
+      }
+    ],
+    "CPURISK-03": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "CPURISK-04": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "supporting"
+      }
+    ],
+    "CPURISK-05": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "CPURISK-06": [
+      {
+        "control": "AU-2",
+        "title": "Event Logging",
+        "relationship": "supporting"
+      }
+    ],
+    "VPN-01": [
+      {
+        "control": "SC-13",
+        "title": "Cryptographic Protection",
+        "relationship": "direct"
+      }
+    ],
+    "VPN-02": [
+      {
+        "control": "SC-8",
+        "title": "Transmission Confidentiality and Integrity",
+        "relationship": "supporting"
+      }
+    ],
+    "VPN-03": [
+      {
+        "control": "SC-13",
+        "title": "Cryptographic Protection",
+        "relationship": "direct"
+      }
+    ],
+    "VPN-04": [
+      {
+        "control": "SC-12",
+        "title": "Cryptographic Key Establishment and Management",
+        "relationship": "direct"
+      }
+    ],
+    "VPN-05": [
+      {
+        "control": "SC-12",
+        "title": "Cryptographic Key Establishment and Management",
+        "relationship": "direct"
+      }
+    ],
+    "VPN-06": [
+      {
+        "control": "SC-13",
+        "title": "Cryptographic Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "VPN-07": [
+      {
+        "control": "SC-12",
+        "title": "Cryptographic Key Establishment and Management",
+        "relationship": "direct"
+      }
+    ],
+    "ZBFW-01": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "ZBFW-02": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "ZBFW-03": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "ZBFW-04": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-01": [
+      {
+        "control": "SC-17",
+        "title": "Public Key Infrastructure Certificates",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-02": [
+      {
+        "control": "SC-17",
+        "title": "Public Key Infrastructure Certificates",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-03": [
+      {
+        "control": "SC-17",
+        "title": "Public Key Infrastructure Certificates",
+        "relationship": "supporting"
+      }
+    ],
+    "PKI-04": [
+      {
+        "control": "SC-17",
+        "title": "Public Key Infrastructure Certificates",
+        "relationship": "supporting"
+      }
+    ],
+    "PKI-05": [
+      {
+        "control": "SC-13",
+        "title": "Cryptographic Protection",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-06": [
+      {
+        "control": "SC-12",
+        "title": "Cryptographic Key Establishment and Management",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-07": [
+      {
+        "control": "SC-17",
+        "title": "Public Key Infrastructure Certificates",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-08": [
+      {
+        "control": "SC-17",
+        "title": "Public Key Infrastructure Certificates",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-09": [
+      {
+        "control": "SC-17",
+        "title": "Public Key Infrastructure Certificates",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-10": [
+      {
+        "control": "SC-17",
+        "title": "Public Key Infrastructure Certificates",
+        "relationship": "direct"
+      }
+    ],
+    "PKI-11": [
+      {
+        "control": "SC-17",
+        "title": "Public Key Infrastructure Certificates",
+        "relationship": "supporting"
+      }
+    ],
+    "PHYS-01": [
+      {
+        "control": "MP-6",
+        "title": "Media Sanitization",
+        "relationship": "supporting"
+      },
+      {
+        "control": "PE-3",
+        "title": "Physical Access Control",
+        "relationship": "supporting"
+      }
+    ],
+    "PHYS-02": [
+      {
+        "control": "AC-12",
+        "title": "Session Termination",
+        "relationship": "direct"
+      }
+    ],
+    "PHYS-03": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "PHYS-04": [
+      {
+        "control": "MP-6",
+        "title": "Media Sanitization",
+        "relationship": "direct"
+      }
+    ],
+    "PHYS-05": [
+      {
+        "control": "PE-3",
+        "title": "Physical Access Control",
+        "relationship": "direct"
+      }
+    ],
+    "BOOT-01": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "direct"
+      }
+    ],
+    "BOOT-02": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "supporting"
+      }
+    ],
+    "BOOT-03": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "BOOT-04": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "direct"
+      }
+    ],
+    "BOOT-05": [
+      {
+        "control": "SI-7",
+        "title": "Software, Firmware, and Information Integrity",
+        "relationship": "direct"
+      }
+    ],
+    "BOOT-06": [
+      {
+        "control": "SI-7",
+        "title": "Software, Firmware, and Information Integrity",
+        "relationship": "supporting"
+      }
+    ],
+    "BOOT-07": [
+      {
+        "control": "SC-28",
+        "title": "Protection of Information at Rest",
+        "relationship": "supporting"
+      }
+    ],
+    "BOOT-08": [
+      {
+        "control": "IA-5",
+        "title": "Authenticator Management",
+        "relationship": "direct"
+      }
+    ],
+    "BOOT-09": [
+      {
+        "control": "SI-7",
+        "title": "Software, Firmware, and Information Integrity",
+        "relationship": "supporting"
+      }
+    ],
+    "SVC-01": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-02": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-03": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-04": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-05": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-06": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-07": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-08": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      },
+      {
+        "control": "SI-3",
+        "title": "Malicious Code Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "SVC-09": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "SVC-10": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "MISC-01": [
+      {
+        "control": "SI-4",
+        "title": "System Monitoring",
+        "relationship": "supporting"
+      }
+    ],
+    "MISC-02": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "MISC-03": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "direct"
+      }
+    ],
+    "MISC-04": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "supporting"
+      }
+    ],
+    "MISC-05": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "VER-01": [
+      {
+        "control": "SI-2",
+        "title": "Flaw Remediation",
+        "relationship": "supporting"
+      }
+    ],
+    "CORR-01": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-02": [
+      {
+        "control": "CM-8",
+        "title": "System Component Inventory",
+        "relationship": "supporting"
+      }
+    ],
+    "CORR-03": [
+      {
+        "control": "AC-17",
+        "title": "Remote Access",
+        "relationship": "direct"
+      },
+      {
+        "control": "AC-4",
+        "title": "Information Flow Enforcement",
+        "relationship": "supporting"
+      }
+    ],
+    "CORR-04": [
+      {
+        "control": "AC-4",
+        "title": "Information Flow Enforcement",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-05": [
+      {
+        "control": "SC-7",
+        "title": "Boundary Protection",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-06": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "supporting"
+      }
+    ],
+    "CORR-07": [
+      {
+        "control": "SC-5",
+        "title": "Denial-of-Service Protection",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-08": [
+      {
+        "control": "SC-17",
+        "title": "Public Key Infrastructure Certificates",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-09": [
+      {
+        "control": "CM-6",
+        "title": "Configuration Settings",
+        "relationship": "direct"
+      }
+    ],
+    "CORR-10": [
+      {
+        "control": "CM-7",
+        "title": "Least Functionality",
+        "relationship": "supporting"
+      }
+    ]
+  }
+}

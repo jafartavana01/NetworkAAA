@@ -1,0 +1,1157 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Policies — NetOpsGuard{% endblock %}
+{% block breadcrumb %}TACACS+ / Policies{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Authorization Policies</h1>
+    <p class="content-sub">A policy is self-contained: it declares both when it applies (conditions below) and what it grants (privilege level + referenced Command Sets). Enabled policies are evaluated in ascending priority order — the first full match wins. Drag rows by the <span class="cell-mono">⠿</span> handle to reorder priority — every policy below the drop point is automatically renumbered.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">
+      <strong style="color:var(--text-primary);">Conditions:</strong> leave a condition as "— Any —" to match everyone/everywhere on that dimension. A policy with no conditions at all matches unconditionally — useful as a low-priority catch-all.
+      <br><br>
+      <strong style="color:var(--text-primary);">Command rules</strong> now live on Command Sets, not here — a policy grants access by referencing one or more sets below. Manage the actual permit/deny rules on the <a href="/tacacs/command-sets">Command Sets</a> page.
+      <br><br>
+      <strong style="color:var(--text-primary);">On privilege levels:</strong> Cisco IOS only meaningfully distinguishes level 1 (user) and 15 (enable) out of the box. Intermediate levels only do anything if the device itself has custom <code>privilege exec level</code> mappings configured.
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="policy-count"></span>
+    <button class="btn-primary btn-small" id="add-policy-btn" style="width:auto;">+ Add policy</button>
+  </div>
+
+  <div class="status-card-grid" id="policies-kpis" style="margin-bottom:16px;"></div>
+
+  <div id="policies-table-wrap">
+    <div class="empty-state">Loading policies…</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="policy-modal-backdrop" hidden>
+  <div class="modal modal-lg" style="max-width: min(95vw, 820px)">
+    <button type="button" class="modal-close-btn" id="policy-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2 id="policy-modal-title">Add policy</h2>
+    <form id="policy-form">
+      <input type="hidden" id="policy-id">
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Name</span>
+          <input type="text" id="policy-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        </label>
+        <label class="field">
+          <span class="field-label">Priority</span>
+          <input type="number" id="policy-priority" min="0" max="100000" value="0" required>
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Lower numbers are evaluated first, starting at 0. Entering an already-used priority inserts this policy there and shifts that policy (and everything after it) down by one — nothing is rejected or overwritten. Letters/digits/hyphens/underscores only in the name — used directly as the tac_plus-ng profile identifier.</div>
+
+      <label class="field">
+        <span class="field-label">Description</span>
+        <input type="text" id="policy-description">
+      </label>
+
+      <label class="checkbox-field field" style="margin-bottom:18px;">
+        <input type="checkbox" id="policy-enabled" checked>
+        <span>Enabled</span>
+      </label>
+
+      <div class="field-label" style="margin-bottom:6px;">Conditions</div>
+      <p class="field-hint" style="margin-top:0;margin-bottom:14px;">This policy applies when the connecting user (or their group) is one of the entries on the left, AND the target device (or its device group) is one of the entries on the right. Leave a list empty to match any.</p>
+
+      <div class="field-row" style="align-items:flex-start;">
+        <div class="field" style="flex:1;">
+          <span class="field-label">User Groups</span>
+          <div id="ms-users-list" style="border:1px solid var(--line);border-radius:var(--radius);padding:8px;min-height:50px;margin-bottom:8px;"></div>
+          <div class="field-row" style="align-items:flex-end;margin-bottom:0;">
+            <select id="ms-users-add-select" style="flex:1;"></select>
+            <button type="button" class="btn-secondary btn-small" id="ms-users-add-btn" style="width:auto;">Add</button>
+          </div>
+        </div>
+        <div class="field" style="flex:1;">
+          <span class="field-label">Devices &amp; Device Groups</span>
+          <div id="ms-devices-list" style="border:1px solid var(--line);border-radius:var(--radius);padding:8px;min-height:50px;margin-bottom:8px;"></div>
+          <div class="field-row" style="align-items:flex-end;margin-bottom:0;">
+            <select id="ms-devices-add-select" style="flex:1;"></select>
+            <button type="button" class="btn-secondary btn-small" id="ms-devices-add-btn" style="width:auto;">Add</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="field-row" style="margin:16px 0 18px 0;">
+        <button type="button" class="btn-primary btn-small" id="simple-tab-btn" style="width:auto;">Simple</button>
+        <button type="button" class="btn-secondary btn-small" id="advanced-tab-btn" style="width:auto;">Advanced</button>
+      </div>
+
+      <div id="advanced-conditions-section" hidden style="margin-bottom:18px;">
+        <div class="panel panel-wide" style="margin-bottom:14px;">
+          <div class="panel-body" style="font-size:12px;color:var(--text-dim);">
+            Replaces the Users/Groups and Devices lists above entirely — saving from here uses only what's built below. Source IP and NOT conditions are only available here; NOT conditions evaluate correctly in the Simulator but can't compile into the real configuration yet.
+          </div>
+        </div>
+
+        <label class="field" style="flex:0 0 220px;margin-bottom:10px;">
+          <span class="field-label">Match</span>
+          <select id="root-logical-operator">
+            <option value="AND">ALL of these (AND)</option>
+            <option value="OR">ANY of these (OR)</option>
+            <option value="NOT">NONE of these (NOT)</option>
+          </select>
+        </label>
+        <div id="root-conditions-list" style="margin-bottom:8px;"></div>
+        <button type="button" class="btn-secondary btn-small" id="add-root-condition-btn" style="width:auto;margin-right:8px;">+ Add Condition</button>
+        <button type="button" class="btn-secondary btn-small" id="add-nested-group-btn" style="width:auto;">+ Add Condition Group</button>
+
+        <div id="nested-groups-list" style="margin-top:14px;"></div>
+      </div>
+
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Privilege level</span>
+          <input type="number" id="policy-priv-lvl" min="0" max="15" value="1" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Default action</span>
+          <select id="policy-default-action">
+            <option value="deny">Deny — block anything not covered by a referenced set</option>
+            <option value="permit">Permit — allow anything not covered by a referenced set</option>
+          </select>
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:18px;">A full-access "Admin" policy needs no Command Sets at all — just Permit here.</div>
+
+      <label class="checkbox-field field" style="margin-bottom:8px;">
+        <input type="checkbox" id="policy-manual-mode">
+        <span>Manual mode — require live admin approval for this device or group</span>
+      </label>
+      <div id="policy-manual-fields" hidden>
+        <label class="field">
+          <span class="field-label">Default command set for approved sessions</span>
+          <select id="policy-manual-command-set"></select>
+        </label>
+        <div class="panel panel-wide" style="margin:8px 0 16px 0;border-color:var(--red);">
+          <div class="panel-body" style="font-size:12px;color:var(--red);">⚠ This device or group denies access by default. When an admin approves a specific login request, this command set applies unless overridden at approval time — but the approved user must retry their login after approval; their original attempt is not held open waiting for a decision. For an Active-Directory user specifically, this platform cannot yet enforce that only the approved individual (not anyone else) gets in during the approval window — see the Policies help text for why.</div>
+        </div>
+      </div>
+      <div class="field-hint" style="margin-top:-4px;margin-bottom:18px;" id="policy-manual-off-hint">Off by default — matching this policy grants access immediately, per Default action above.</div>
+
+      <div class="field-label" style="margin-bottom:8px;">Command Sets</div>
+      <input type="text" id="command-sets-filter" placeholder="Filter by name…" style="margin-bottom:8px;">
+      <div id="command-sets-checklist" style="margin-bottom:16px;"></div>
+
+      <label class="field">
+        <span class="field-label">Change description (optional)</span>
+        <input type="text" id="policy-change-description" placeholder="e.g. Widened access for on-call rotation">
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Recorded with this save's version history entry — visible later in Version History.</div>
+
+      <div id="policy-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="policy-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save policy</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="history-modal-backdrop" hidden>
+  <div class="modal modal-lg" style="max-width: 640px; max-height: 88vh">
+    <button type="button" class="modal-close-btn" id="history-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2 id="history-modal-title">Version History</h2>
+    <div id="history-list"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="history-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  let policies = [];
+  let allGroups = [];
+  let allDevices = [];
+  let allDeviceGroups = [];
+  let allCommandSets = [];
+  let allUsers = [];
+  let currentConditionTree = null; // used by BOTH the multi-select lists and the advanced tree builder -- see msEntriesToConditionTree/conditionTreeToMsEntries
+  let currentCommandSetIds = [];
+  let msUserEntries = [];   // [{object_type: 'user'|'user_group', id, name}]
+  let msDeviceEntries = []; // [{object_type: 'device'|'device_group', id, name}]
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  async function loadReferenceData() {
+    const [groupsRes, devicesRes, deviceGroupsRes, setsRes, usersRes] = await Promise.all([
+      AAAPlatform.authedFetch('/api/tacacs-groups'),
+      AAAPlatform.authedFetch('/api/devices'),
+      AAAPlatform.authedFetch('/api/device-groups'),
+      AAAPlatform.authedFetch('/api/command-sets'),
+      AAAPlatform.authedFetch('/api/tacacs-users'),
+    ]);
+    allGroups = groupsRes.ok ? await groupsRes.json() : [];
+    allDevices = devicesRes.ok ? await devicesRes.json() : [];
+    allDeviceGroups = deviceGroupsRes.ok ? await deviceGroupsRes.json() : [];
+    allCommandSets = setsRes.ok ? await setsRes.json() : [];
+    allUsers = usersRes.ok ? await usersRes.json() : [];
+  }
+
+  function renderCommandSetsChecklist() {
+    const container = document.getElementById('command-sets-checklist');
+    if (allCommandSets.length === 0) {
+      container.innerHTML = `<div class="content-sub">No command sets exist yet. <a href="/tacacs/command-sets">Create one</a> first, or leave this policy unrestricted with Default action = Permit.</div>`;
+      return;
+    }
+
+    const filterValue = (document.getElementById('command-sets-filter').value || '').toLowerCase();
+    const visibleSets = allCommandSets.filter(cs => cs.name.toLowerCase().includes(filterValue));
+
+    if (visibleSets.length === 0) {
+      container.innerHTML = `<div class="content-sub">No command sets match "${escapeHtml(filterValue)}".</div>`;
+      return;
+    }
+
+    container.innerHTML = visibleSets.map(cs => {
+      const permitCount = cs.rules.filter(r => r.action === 'permit').length;
+      const denyCount = cs.rules.filter(r => r.action === 'deny').length;
+      const ruleLines = cs.rules.length
+        ? cs.rules.map(r => `<div class="cell-mono content-sub" style="padding:2px 0;">${r.action === 'deny' ? '<span style="color:var(--red);">deny</span>' : '<span style="color:var(--signal);">permit</span>'}  ${escapeHtml(r.command_pattern)}${r.category_name ? ' <span class="content-sub">[' + escapeHtml(r.category_name) + ']</span>' : ''}</div>`).join('')
+        : '<div class="content-sub">No rules in this set.</div>';
+
+      return `
+      <div style="border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;margin-bottom:8px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <label class="checkbox-field field" style="margin-bottom:0;flex:1;">
+            <input type="checkbox" data-set-id="${cs.id}" ${currentCommandSetIds.includes(cs.id) ? 'checked' : ''}>
+            <span>${escapeHtml(cs.name)}${!cs.enabled ? ' <span class="content-sub">(disabled)</span>' : ''} <span class="content-sub cell-mono">— ${permitCount} permit / ${denyCount} deny</span></span>
+          </label>
+          <button type="button" class="btn-ghost btn-small" data-toggle-preview="${cs.id}" style="width:auto;">Preview ▾</button>
+        </div>
+        <div id="preview-${cs.id}" hidden style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line);">${ruleLines}</div>
+      </div>
+    `;
+    }).join('');
+
+    container.querySelectorAll('[data-set-id]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        const id = cb.dataset.setId;
+        if (cb.checked && !currentCommandSetIds.includes(id)) currentCommandSetIds.push(id);
+        if (!cb.checked) currentCommandSetIds = currentCommandSetIds.filter(x => x !== id);
+      });
+    });
+    container.querySelectorAll('[data-toggle-preview]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const preview = document.getElementById(`preview-${btn.dataset.togglePreview}`);
+        preview.hidden = !preview.hidden;
+        btn.textContent = preview.hidden ? 'Preview ▾' : 'Preview ▴';
+      });
+    });
+  }
+  document.getElementById('command-sets-filter').addEventListener('input', renderCommandSetsChecklist);
+
+  // ---------- Advanced condition builder ----------
+  // Scoped to root group + one level of nested groups -- covers every
+  // example in the spec (single AND, and one level of OR nested
+  // inside AND) without needing a fully general infinite-depth tree
+  // UI. The backend (app.services.condition_engine,
+  // app.api.routes_policy_conditions) already supports arbitrary
+  // nesting -- a future GUI enhancement could go deeper without any
+  // backend change.
+
+  const OBJECT_TYPE_LABELS = {
+    user_group: 'User Group', device: 'Device',
+    device_group: 'Device Group', source_ip: 'Source IP',
+  };
+  const OPERATORS_BY_OBJECT_TYPE = {
+    user_group: [['equal', 'Equal'], ['not_equal', 'Not Equal']],
+    device: [['equal', 'Equal'], ['not_equal', 'Not Equal']],
+    device_group: [['equal', 'Equal'], ['not_equal', 'Not Equal']],
+    source_ip: [['equal', 'Equal'], ['not_equal', 'Not Equal'], ['is_in_cidr', 'Is In CIDR'], ['is_not_in_cidr', 'Is Not In CIDR']],
+  };
+  // 'user' is deliberately no longer selectable anywhere in this
+  // builder -- it has no confirmed tac_plus-ng syntax and can never
+  // compile (see UncompilablePolicyError in app.services.config_compiler),
+  // so offering it as an option only ever led to a policy that saves
+  // successfully but silently contributes nothing to the real
+  // configuration. Kept here in DATABASE_BACKED_TYPES and
+  // referenceOptionsFor purely so a policy saved before this change,
+  // if one exists, still renders sensibly if reopened -- not because
+  // it can be chosen again.
+  const DATABASE_BACKED_TYPES = ['user', 'user_group', 'device', 'device_group'];
+
+  function referenceOptionsFor(objectType) {
+    if (objectType === 'user') return allUsers.map(u => ({ id: u.id, name: u.username }));
+    if (objectType === 'user_group') return allGroups.map(g => ({ id: g.id, name: g.name }));
+    if (objectType === 'device') return allDevices.map(d => ({ id: d.id, name: d.name }));
+    if (objectType === 'device_group') return allDeviceGroups.map(g => ({ id: g.id, name: g.name }));
+    return [];
+  }
+
+  function newCondition() {
+    return { object_type: 'user_group', operator: 'equal', value: '', referenced_object_id: null };
+  }
+
+  function renderConditionRow(cond, list, index, rerender) {
+    const isDbBacked = DATABASE_BACKED_TYPES.includes(cond.object_type);
+    const opOptions = OPERATORS_BY_OBJECT_TYPE[cond.object_type] || [];
+    const valueField = isDbBacked
+      ? `<select data-role="value" data-index="${index}">
+           <option value="">— select —</option>
+           ${referenceOptionsFor(cond.object_type).map(o => `<option value="${o.id}" ${cond.referenced_object_id === o.id ? 'selected' : ''}>${escapeHtml(o.name)}</option>`).join('')}
+         </select>`
+      : `<input type="text" data-role="value" data-index="${index}" value="${escapeHtml(cond.value)}" placeholder="${cond.operator.includes('cidr') ? '10.10.20.0/24' : '10.10.20.5'}">`;
+
+    const row = document.createElement('div');
+    row.className = 'field-row';
+    row.style.cssText = 'align-items:flex-end;margin-bottom:6px;';
+    row.innerHTML = `
+      <label class="field" style="flex:0 0 150px;">
+        <span class="field-label">Object type</span>
+        <select data-role="object_type" data-index="${index}">
+          ${Object.entries(OBJECT_TYPE_LABELS).map(([v, l]) => `<option value="${v}" ${cond.object_type === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field" style="flex:0 0 140px;">
+        <span class="field-label">Operator</span>
+        <select data-role="operator" data-index="${index}">
+          ${opOptions.map(([v, l]) => `<option value="${v}" ${cond.operator === v ? 'selected' : ''}>${l}</option>`).join('')}
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label">Value</span>
+        ${valueField}
+      </label>
+      <button type="button" class="btn-danger btn-small" data-role="remove" data-index="${index}" style="margin-bottom:2px;">×</button>
+    `;
+    let conditionRowHint = null;
+    if (cond.object_type === 'user') {
+      const hint = document.createElement('div');
+      hint.className = 'content-sub';
+      hint.style.cssText = 'margin:-4px 0 8px 0;';
+      hint.textContent = 'Evaluates correctly in the Simulator, but has no confirmed tac_plus-ng syntax — a policy using this condition is excluded from the generated config, not faked.';
+      // A separate, stacked block-level wrapper -- NOT row.appendChild(hint),
+      // which would add the hint as ANOTHER flex child of `row` itself
+      // (row is `.field-row`, display:flex), rendering it as a column
+      // to the right instead of a line below.
+      conditionRowHint = hint;
+    }
+
+    row.querySelector('[data-role="object_type"]').addEventListener('change', (e) => {
+      list[index].object_type = e.target.value;
+      list[index].operator = (OPERATORS_BY_OBJECT_TYPE[e.target.value] || [['equal']])[0][0];
+      list[index].value = '';
+      list[index].referenced_object_id = null;
+      rerender();
+    });
+    row.querySelector('[data-role="operator"]').addEventListener('change', (e) => {
+      list[index].operator = e.target.value;
+      rerender();
+    });
+    const valueEl = row.querySelector('[data-role="value"]');
+    const updateValue = () => {
+      if (isDbBacked) {
+        list[index].referenced_object_id = valueEl.value || null;
+      } else {
+        list[index].value = valueEl.value;
+      }
+    };
+    valueEl.addEventListener('change', updateValue);
+    valueEl.addEventListener('input', updateValue);
+    row.querySelector('[data-role="remove"]').addEventListener('click', () => {
+      list.splice(index, 1);
+      rerender();
+    });
+
+    if (conditionRowHint) {
+      const wrapper = document.createElement('div');
+      wrapper.appendChild(row);
+      wrapper.appendChild(conditionRowHint);
+      return wrapper;
+    }
+    return row;
+  }
+
+  function newGroup() {
+    return { logical_operator: 'AND', conditions: [newCondition()], child_groups: [] };
+  }
+
+  // Single recursive entry point: re-renders the ENTIRE tree from the
+  // root on any change, rather than trying to have each nested level
+  // re-render just itself. The whole tree is small in practice (a
+  // handful of conditions/groups), so this trades a little redundant
+  // DOM rebuilding for a much simpler, harder-to-get-wrong mental
+  // model -- especially once nesting is genuinely unlimited-depth,
+  // where granular per-node re-rendering would need every node to
+  // track a path back to its parent for removal.
+  function renderConditionTree() {
+    document.getElementById('root-logical-operator').value = currentConditionTree.logical_operator;
+    renderConditionRows(currentConditionTree.conditions, document.getElementById('root-conditions-list'), renderConditionTree);
+    renderChildGroups(currentConditionTree, document.getElementById('nested-groups-list'), 0, renderConditionTree);
+  }
+
+  function renderConditionRows(conditions, container, rerenderAll) {
+    container.innerHTML = '';
+    if (conditions.length === 0) {
+      container.innerHTML = '<div class="content-sub" style="padding:4px 0;">No conditions yet.</div>';
+      return;
+    }
+    conditions.forEach((cond, i) => {
+      container.appendChild(renderConditionRow(cond, conditions, i, rerenderAll));
+    });
+  }
+
+  // Renders `parentGroup.child_groups` into `container`, recursing
+  // into each child's OWN child_groups -- genuinely unlimited nesting
+  // depth, limited only by what's practical to build a policy with,
+  // not by this code. `depth` only controls visual indentation.
+  function renderChildGroups(parentGroup, container, depth, rerenderAll) {
+    container.innerHTML = '';
+    parentGroup.child_groups.forEach((group, groupIndex) => {
+      const box = document.createElement('div');
+      box.className = 'panel panel-wide';
+      box.style.cssText = `margin-bottom:12px;padding:14px;margin-left:${Math.min(depth, 6) * 20}px;`;
+
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;';
+      header.innerHTML = `
+        <label class="field" style="flex:0 0 220px;margin-bottom:0;">
+          <span class="field-label">Nested group match</span>
+          <select data-role="group-operator">
+            <option value="AND" ${group.logical_operator === 'AND' ? 'selected' : ''}>ALL of these (AND)</option>
+            <option value="OR" ${group.logical_operator === 'OR' ? 'selected' : ''}>ANY of these (OR)</option>
+            <option value="NOT" ${group.logical_operator === 'NOT' ? 'selected' : ''}>NONE of these (NOT)</option>
+          </select>
+        </label>
+        <button type="button" class="btn-danger btn-small" data-role="remove-group">Remove group</button>
+      `;
+      box.appendChild(header);
+      header.querySelector('[data-role="group-operator"]').addEventListener('change', (e) => {
+        group.logical_operator = e.target.value;
+      });
+      header.querySelector('[data-role="remove-group"]').addEventListener('click', () => {
+        parentGroup.child_groups.splice(groupIndex, 1);
+        rerenderAll();
+      });
+
+      const conditionsContainer = document.createElement('div');
+      box.appendChild(conditionsContainer);
+      renderConditionRows(group.conditions, conditionsContainer, rerenderAll);
+
+      const addCondBtn = document.createElement('button');
+      addCondBtn.type = 'button';
+      addCondBtn.className = 'btn-secondary btn-small';
+      addCondBtn.style.cssText = 'width:auto;margin-right:8px;';
+      addCondBtn.textContent = '+ Add Condition';
+      addCondBtn.addEventListener('click', () => {
+        group.conditions.push(newCondition());
+        rerenderAll();
+      });
+      box.appendChild(addCondBtn);
+
+      const addGroupBtn = document.createElement('button');
+      addGroupBtn.type = 'button';
+      addGroupBtn.className = 'btn-secondary btn-small';
+      addGroupBtn.style.width = 'auto';
+      addGroupBtn.textContent = '+ Add Nested Group';
+      addGroupBtn.addEventListener('click', () => {
+        group.child_groups.push(newGroup());
+        rerenderAll();
+      });
+      box.appendChild(addGroupBtn);
+
+      const nestedContainer = document.createElement('div');
+      nestedContainer.style.marginTop = '12px';
+      box.appendChild(nestedContainer);
+      renderChildGroups(group, nestedContainer, depth + 1, rerenderAll);
+
+      container.appendChild(box);
+    });
+  }
+
+  function apiTreeToBuilderTree(apiTree) {
+    return {
+      logical_operator: apiTree.logical_operator,
+      conditions: apiTree.conditions.map(c => ({
+        object_type: c.object_type, operator: c.operator,
+        value: c.value_type === 'manual' ? c.value : '',
+        referenced_object_id: c.referenced_object_id,
+      })),
+      // Genuinely recursive -- any depth of nesting already present
+      // (whether built here previously, or created via direct API
+      // access) round-trips fully editable, not just its first level.
+      child_groups: (apiTree.child_groups || []).map(g => apiTreeToBuilderTree(g)),
+    };
+  }
+
+  function builderTreeToApiPayload(tree) {
+    return {
+      logical_operator: tree.logical_operator,
+      conditions: tree.conditions.map(c => ({
+        object_type: c.object_type, operator: c.operator,
+        value: c.value || '', referenced_object_id: c.referenced_object_id || null,
+      })),
+      child_groups: tree.child_groups.map(g => builderTreeToApiPayload(g)),
+    };
+  }
+
+  // ---------- Multi-select conditions (the default view) ----------
+  // Internally still builds the SAME condition tree the advanced
+  // builder uses -- "Users & Groups" becomes an OR-group of
+  // user/user_group conditions, "Devices" becomes an OR-group of
+  // device/device_group conditions, combined with AND at the root.
+  // Saving from here always goes through the tree-based save path
+  // (never the legacy 3 fields), since representing more than one
+  // entry per list needs the OR-group shape the legacy flat fields
+  // can't express.
+
+  function msEntriesToConditionTree(userEntries, deviceEntries) {
+    const childGroups = [];
+    if (userEntries.length > 0) {
+      childGroups.push({
+        logical_operator: 'OR',
+        conditions: userEntries.map(e => ({ object_type: e.object_type, operator: 'equal', value: '', referenced_object_id: e.id })),
+        child_groups: [],
+      });
+    }
+    if (deviceEntries.length > 0) {
+      childGroups.push({
+        logical_operator: 'OR',
+        conditions: deviceEntries.map(e => ({ object_type: e.object_type, operator: 'equal', value: '', referenced_object_id: e.id })),
+        child_groups: [],
+      });
+    }
+    return { logical_operator: 'AND', conditions: [], child_groups: childGroups };
+  }
+
+  // Reverse conversion, for editing an existing policy. Only certain
+  // shapes are representable in the simple two-list view -- a root
+  // AND with no direct conditions, at most one OR-group of pure
+  // user/user_group conditions and at most one OR-group of pure
+  // device/device_group conditions, neither group nested further.
+  // Anything else (custom nesting, NOT, mixed groups, source_ip)
+  // opens in Advanced instead, with a note explaining why.
+  function conditionTreeToMsEntries(tree) {
+    const nameFor = (objectType, id) => {
+      if (objectType === 'user') return (allUsers.find(u => u.id === id) || {}).username;
+      if (objectType === 'user_group') return (allGroups.find(g => g.id === id) || {}).name;
+      if (objectType === 'device') return (allDevices.find(d => d.id === id) || {}).name;
+      if (objectType === 'device_group') return (allDeviceGroups.find(g => g.id === id) || {}).name;
+      return undefined;
+    };
+
+    if (tree.logical_operator !== 'AND' || tree.conditions.length > 0 || tree.child_groups.length > 2) {
+      return { representable: false };
+    }
+    let userEntries = [];
+    let deviceEntries = [];
+    for (const group of tree.child_groups) {
+      if (group.logical_operator !== 'OR' || group.child_groups.length > 0 || group.conditions.length === 0) {
+        return { representable: false };
+      }
+      const types = new Set(group.conditions.map(c => c.object_type));
+      const isUserGroup = [...types].every(t => t === 'user' || t === 'user_group');
+      const isDeviceGroup = [...types].every(t => t === 'device' || t === 'device_group');
+      if (isUserGroup && userEntries.length === 0) {
+        userEntries = group.conditions.map(c => ({ object_type: c.object_type, id: c.referenced_object_id, name: nameFor(c.object_type, c.referenced_object_id) }));
+      } else if (isDeviceGroup && deviceEntries.length === 0) {
+        deviceEntries = group.conditions.map(c => ({ object_type: c.object_type, id: c.referenced_object_id, name: nameFor(c.object_type, c.referenced_object_id) }));
+      } else {
+        return { representable: false };
+      }
+      if (group.conditions.some(c => c.operator !== 'equal')) return { representable: false };
+    }
+    return { representable: true, userEntries, deviceEntries };
+  }
+
+  function msEntryLabel(entry) {
+    const typeLabel = { user: 'User', user_group: 'Group', device: 'Device', device_group: 'Device Group' }[entry.object_type] || entry.object_type;
+    return `${escapeHtml(entry.name || '(deleted)')} <span class="content-sub">— ${typeLabel}</span>`;
+  }
+
+  function renderMsList(listElId, entries, onRemove) {
+    const el = document.getElementById(listElId);
+    if (entries.length === 0) {
+      el.innerHTML = '<div class="content-sub">Any (no restriction)</div>';
+      return;
+    }
+    el.innerHTML = entries.map((e, i) => `
+      <div class="version-row" style="padding:4px 0;">
+        <span style="flex:1;">${msEntryLabel(e)}</span>
+        <button type="button" class="btn-danger btn-small" data-ms-remove="${i}">×</button>
+      </div>
+    `).join('');
+    el.querySelectorAll('[data-ms-remove]').forEach(btn => {
+      btn.addEventListener('click', () => { onRemove(parseInt(btn.dataset.msRemove, 10)); });
+    });
+  }
+
+  function renderMsUserAddSelect() {
+    const chosenIds = new Set(msUserEntries.map(e => e.id));
+    const groupOpts = allGroups.filter(g => !chosenIds.has(g.id)).map(g => `<option value="user_group:${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    const select = document.getElementById('ms-users-add-select');
+    select.innerHTML = groupOpts || '<option value="">— No groups available —</option>';
+  }
+
+  function renderMsDeviceAddSelect() {
+    const chosenIds = new Set(msDeviceEntries.map(e => e.id));
+    const deviceOpts = allDevices.filter(d => !chosenIds.has(d.id)).map(d => `<option value="device:${d.id}">${escapeHtml(d.name)}</option>`).join('');
+    const groupOpts = allDeviceGroups.filter(g => !chosenIds.has(g.id)).map(g => `<option value="device_group:${g.id}">${escapeHtml(g.name)}</option>`).join('');
+    const select = document.getElementById('ms-devices-add-select');
+    select.innerHTML = `<optgroup label="Devices">${deviceOpts}</optgroup><optgroup label="Device Groups">${groupOpts}</optgroup>`;
+  }
+
+  function renderMultiSelect() {
+    renderMsList('ms-users-list', msUserEntries, (i) => { msUserEntries.splice(i, 1); renderMultiSelect(); });
+    renderMsList('ms-devices-list', msDeviceEntries, (i) => { msDeviceEntries.splice(i, 1); renderMultiSelect(); });
+    renderMsUserAddSelect();
+    renderMsDeviceAddSelect();
+  }
+
+  document.getElementById('ms-users-add-btn').addEventListener('click', () => {
+    const [objectType, id] = document.getElementById('ms-users-add-select').value.split(':');
+    if (!id) return;
+    // Always 'user_group' -- the picker no longer offers individual
+    // users as an option (see OBJECT_TYPE_LABELS above for why).
+    const name = (allGroups.find(g => g.id === id) || {}).name;
+    msUserEntries.push({ object_type: objectType, id, name });
+    renderMultiSelect();
+  });
+  document.getElementById('ms-devices-add-btn').addEventListener('click', () => {
+    const [objectType, id] = document.getElementById('ms-devices-add-select').value.split(':');
+    if (!id) return;
+    const name = objectType === 'device' ? (allDevices.find(d => d.id === id) || {}).name : (allDeviceGroups.find(g => g.id === id) || {}).name;
+    msDeviceEntries.push({ object_type: objectType, id, name });
+    renderMultiSelect();
+  });
+
+  function setTabButtonState(activeId, inactiveId) {
+    document.getElementById(activeId).className = 'btn-primary btn-small';
+    document.getElementById(inactiveId).className = 'btn-secondary btn-small';
+  }
+
+  function showMultiSelectConditions() {
+    document.getElementById('advanced-conditions-section').hidden = true;
+    document.getElementById('ms-users-list').closest('.field-row').style.display = '';
+    setTabButtonState('simple-tab-btn', 'advanced-tab-btn');
+    renderMultiSelect();
+  }
+
+  function showAdvancedConditions() {
+    document.getElementById('advanced-conditions-section').hidden = false;
+    document.getElementById('ms-users-list').closest('.field-row').style.display = 'none';
+    setTabButtonState('advanced-tab-btn', 'simple-tab-btn');
+    if (!currentConditionTree) {
+      // Carry over whatever was already built in the simple lists,
+      // so switching to Advanced never silently discards it.
+      currentConditionTree = msEntriesToConditionTree(msUserEntries, msDeviceEntries);
+      if (currentConditionTree.child_groups.length === 0) {
+        currentConditionTree.conditions.push(newCondition());
+      }
+    }
+    renderConditionTree();
+  }
+
+  document.getElementById('advanced-tab-btn').addEventListener('click', showAdvancedConditions);
+  document.getElementById('simple-tab-btn').addEventListener('click', () => {
+    // A straight tab switch, not a destructive action -- carries
+    // whatever's representable back into the simple lists rather than
+    // asking for confirmation first. Anything that doesn't fit two
+    // flat lists (custom nesting, NOT, source_ip) is dropped from the
+    // simple view, but only takes effect if the admin then saves from
+    // here -- switching tabs alone changes nothing on the server.
+    if (currentConditionTree) {
+      const converted = conditionTreeToMsEntries(currentConditionTree);
+      msUserEntries = converted.representable ? converted.userEntries : [];
+      msDeviceEntries = converted.representable ? converted.deviceEntries : [];
+      currentConditionTree = null;
+    }
+    showMultiSelectConditions();
+  });
+  document.getElementById('root-logical-operator').addEventListener('change', (e) => {
+    currentConditionTree.logical_operator = e.target.value;
+  });
+  document.getElementById('add-root-condition-btn').addEventListener('click', () => {
+    currentConditionTree.conditions.push(newCondition());
+    renderConditionTree();
+  });
+  document.getElementById('add-nested-group-btn').addEventListener('click', () => {
+    currentConditionTree.child_groups.push(newGroup());
+    renderConditionTree();
+  });
+
+  const ICON_KPI_LIST = '{{ icons.icon("clipboard-list", 16) }}';
+  const ICON_KPI_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_KPI_LOCK = '{{ icons.icon("lock", 16) }}';
+  const ICON_KPI_SHIELD = '{{ icons.icon("shield", 16) }}';
+
+  function renderPolicyKpis() {
+    // enabled / default_action / has_condition_tree are real fields on
+    // the policy objects rendered below.
+    const enabled = policies.filter((p) => p.enabled).length;
+    const permitDefault = policies.filter(
+      (p) => String(p.default_action || '').toLowerCase() === 'permit').length;
+    const conditional = policies.filter((p) => p.has_condition_tree).length;
+    document.getElementById('policies-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_KPI_LIST, label: 'Total Policies', value: policies.length }),
+      AAAPlatform.kpiCard({ icon: ICON_KPI_CHECK, label: 'Enabled', value: enabled, state: 'is-signal' }),
+      AAAPlatform.kpiCard({ icon: ICON_KPI_LOCK, label: 'Disabled', value: policies.length - enabled,
+                            state: (policies.length - enabled) ? 'is-amber' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_KPI_SHIELD, label: 'Default Permit', value: permitDefault,
+                            sub: conditional + ' with conditions' }),
+    ].join('');
+  }
+
+  function renderTable() {
+    renderPolicyKpis();
+    const wrap = document.getElementById('policies-table-wrap');
+    document.getElementById('policy-count').textContent = policies.length + (policies.length === 1 ? ' policy' : ' policies');
+
+    if (policies.length === 0) {
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-title">No authorization policies</div>
+          <p class="empty-state-desc">Policies decide who can access which devices and with what command set — nothing is authorized until at least one exists.</p>
+          <button type="button" class="btn-primary btn-small" id="empty-state-add-policy-btn">+ Add policy</button>
+        </div>
+      `;
+      document.getElementById('empty-state-add-policy-btn').addEventListener('click', () => openModal(null));
+      return;
+    }
+
+    const rows = policies.map((p, i) => {
+      const conditionParts = [];
+      if (p.condition_group_name) conditionParts.push(`group=${p.condition_group_name}`);
+      if (p.condition_device_name) conditionParts.push(`device=${p.condition_device_name}`);
+      if (p.condition_device_group_name) conditionParts.push(`device-group=${p.condition_device_group_name}`);
+      // has_condition_tree is checked FIRST -- a policy migrated to the
+      // Advanced condition builder has none of the legacy flat fields
+      // set at all (they're mutually exclusive models), so relying on
+      // conditionParts alone here always showed "unconditional" for
+      // any such policy, even one with real, non-trivial conditions.
+      const conditionsText = p.has_condition_tree
+        ? 'advanced conditions (see Edit)'
+        : (conditionParts.length ? conditionParts.join(', ') : 'unconditional');
+
+      return `
+      <tr draggable="true" data-row-index="${i}" class="draggable-row">
+        <td class="drag-handle" title="Drag to reorder priority">⠿</td>
+        <td>${escapeHtml(p.name)}</td>
+        <td class="cell-mono">${p.priority}</td>
+        <td>${p.enabled ? '<span class="badge badge-on">Enabled</span>' : '<span class="badge badge-off">Disabled</span>'}</td>
+        <td class="cell-mono">${escapeHtml(conditionsText)}</td>
+        <td>${p.command_sets.length ? p.command_sets.map(cs => escapeHtml(cs.name)).join(', ') : '<span class="content-sub">none</span>'}</td>
+        <td class="cell-mono">priv ${p.default_priv_lvl}, ${p.default_action}${p.requires_manual_approval ? ' <span class="badge" style="border-color:var(--red);color:var(--red);">MANUAL</span>' : ''}</td>
+        <td class="cell-actions">
+          <button class="btn-secondary btn-small" data-edit="${p.id}">Edit</button>
+          <button class="btn-secondary btn-small" data-history="${p.id}">History</button>
+          <button class="btn-danger btn-small" data-delete="${p.id}">Delete</button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th></th><th>Name</th><th>Priority</th><th>Status</th><th>Conditions</th><th>Command Sets</th><th>Grants</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.addEventListener('click', () => openModal(policies.find(p => p.id === btn.dataset.edit)));
+    });
+    wrap.querySelectorAll('[data-history]').forEach(btn => {
+      btn.addEventListener('click', () => openHistory(policies.find(p => p.id === btn.dataset.history)));
+    });
+    wrap.querySelectorAll('[data-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deletePolicy(btn.dataset.delete));
+    });
+
+    attachDragHandlers(wrap);
+  }
+
+  let draggedRowIndex = null;
+
+  function attachDragHandlers(wrap) {
+    wrap.querySelectorAll('tr.draggable-row').forEach(row => {
+      row.addEventListener('dragstart', () => {
+        draggedRowIndex = parseInt(row.dataset.rowIndex, 10);
+        row.classList.add('is-dragging');
+      });
+      row.addEventListener('dragend', () => {
+        row.classList.remove('is-dragging');
+        wrap.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+      });
+      row.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        row.classList.add('drag-over');
+      });
+      row.addEventListener('dragleave', () => {
+        row.classList.remove('drag-over');
+      });
+      row.addEventListener('drop', (e) => {
+        e.preventDefault();
+        row.classList.remove('drag-over');
+        const targetIndex = parseInt(row.dataset.rowIndex, 10);
+        if (draggedRowIndex === null || draggedRowIndex === targetIndex) return;
+        reorderPolicies(draggedRowIndex, targetIndex);
+        draggedRowIndex = null;
+      });
+    });
+  }
+
+  async function reorderPolicies(fromIndex, toIndex) {
+    const reordered = [...policies];
+    const [moved] = reordered.splice(fromIndex, 1);
+    reordered.splice(toIndex, 0, moved);
+
+    // Single bulk request, one transaction server-side -- priorities
+    // are UNIQUE now (deferred constraint; see app/models/policy.py),
+    // so this can't be done as separate sequential PUTs anymore: a
+    // policy moving onto another's CURRENT priority a moment before
+    // that other policy moves off it would violate uniqueness on an
+    // individual, immediately-committed request. The bulk endpoint
+    // reassigns everyone within one transaction, where that transient
+    // state is fine and only the final, fully-unique arrangement is
+    // ever actually checked.
+    const res = await AAAPlatform.authedFetch('/api/policies/reorder', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ordered_ids: reordered.map(p => p.id) }),
+    });
+
+    if (!res.ok) {
+      AAAPlatform.toast('Could not reorder policies.', 'error');
+      return;
+    }
+
+    AAAPlatform.toast('Priority order updated.');
+    loadPolicies();
+  }
+
+  function toggleManualModeFields() {
+    const isManual = document.getElementById('policy-manual-mode').checked;
+    document.getElementById('policy-manual-fields').hidden = !isManual;
+    document.getElementById('policy-manual-off-hint').hidden = isManual;
+  }
+  document.getElementById('policy-manual-mode').addEventListener('change', toggleManualModeFields);
+
+  function renderManualCommandSetOptions() {
+    const select = document.getElementById('policy-manual-command-set');
+    select.innerHTML = allCommandSets.length
+      ? allCommandSets.map(cs => `<option value="${cs.id}">${escapeHtml(cs.name)}</option>`).join('')
+      : '<option value="">— No Command Sets exist yet —</option>';
+  }
+
+  async function loadPolicies() {
+    const res = await AAAPlatform.authedFetch('/api/policies');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    policies = await res.json();
+    renderTable();
+  }
+
+  async function openModal(policy) {
+    document.getElementById('policy-form-error').hidden = true;
+    document.getElementById('policy-form').reset();
+    document.getElementById('policy-change-description').value = '';
+    msUserEntries = [];
+    msDeviceEntries = [];
+    currentConditionTree = null;
+
+    if (policy) {
+      document.getElementById('policy-modal-title').textContent = 'Edit policy';
+      document.getElementById('policy-id').value = policy.id;
+      document.getElementById('policy-name').value = policy.name;
+      document.getElementById('policy-priority').value = policy.priority;
+      document.getElementById('policy-description').value = policy.description || '';
+      document.getElementById('policy-enabled').checked = policy.enabled;
+      document.getElementById('policy-priv-lvl').value = policy.default_priv_lvl;
+      document.getElementById('policy-default-action').value = policy.default_action;
+      document.getElementById('policy-manual-mode').checked = policy.requires_manual_approval;
+      renderManualCommandSetOptions();
+      if (policy.manual_default_command_set_id) {
+        document.getElementById('policy-manual-command-set').value = policy.manual_default_command_set_id;
+      }
+      toggleManualModeFields();
+      currentCommandSetIds = policy.command_sets.map(cs => cs.id);
+
+      const treeRes = await AAAPlatform.authedFetch(`/api/policies/${policy.id}/condition-tree`);
+      let opensInAdvanced = false;
+      if (treeRes.ok) {
+        const treeData = await treeRes.json();
+        if (treeData.has_migrated) {
+          const builderTree = apiTreeToBuilderTree(treeData.tree);
+          const converted = conditionTreeToMsEntries(builderTree);
+          if (converted.representable) {
+            msUserEntries = converted.userEntries;
+            msDeviceEntries = converted.deviceEntries;
+          } else {
+            currentConditionTree = builderTree;
+            opensInAdvanced = true;
+          }
+        } else {
+          // Not yet migrated -- legacy flat fields. Each becomes at
+          // most one entry in the matching list; saving from the
+          // multi-select view migrates the policy to the tree model,
+          // same as saving from Advanced already did.
+          if (policy.condition_group_id) {
+            const foundGroup = allGroups.find(x => x.id === policy.condition_group_id);
+            if (foundGroup) msUserEntries.push({ object_type: 'user_group', id: foundGroup.id, name: foundGroup.name });
+          }
+          if (policy.condition_device_id) {
+            const foundDevice = allDevices.find(x => x.id === policy.condition_device_id);
+            if (foundDevice) msDeviceEntries.push({ object_type: 'device', id: foundDevice.id, name: foundDevice.name });
+          }
+          if (policy.condition_device_group_id) {
+            const foundDeviceGroup = allDeviceGroups.find(x => x.id === policy.condition_device_group_id);
+            if (foundDeviceGroup) msDeviceEntries.push({ object_type: 'device_group', id: foundDeviceGroup.id, name: foundDeviceGroup.name });
+          }
+        }
+      }
+      if (opensInAdvanced) {
+        showAdvancedConditions();
+      } else {
+        showMultiSelectConditions();
+      }
+    } else {
+      document.getElementById('policy-modal-title').textContent = 'Add policy';
+      document.getElementById('policy-id').value = '';
+      // Appends after the current highest priority, not 0 -- a brand
+      // new policy defaulting to the TOP of evaluation order (priority
+      // 0, pushing every existing policy down) would be a surprising
+      // default; most new policies are meant to be evaluated after
+      // the ones already there, not before them.
+      const maxPriority = policies.reduce((max, p) => Math.max(max, p.priority), -1);
+      document.getElementById('policy-priority').value = maxPriority + 1;
+      document.getElementById('policy-priv-lvl').value = 1;
+      document.getElementById('policy-default-action').value = 'deny';
+      document.getElementById('policy-manual-mode').checked = false;
+      renderManualCommandSetOptions();
+      toggleManualModeFields();
+      currentCommandSetIds = [];
+      showMultiSelectConditions();
+    }
+    renderCommandSetsChecklist();
+    document.getElementById('policy-modal-backdrop').hidden = false;
+  }
+
+  function closeModal() {
+    document.getElementById('policy-modal-backdrop').hidden = true;
+  }
+
+  document.getElementById('add-policy-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('policy-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('policy-modal-close-btn').addEventListener('click', closeModal);
+  document.getElementById('policy-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'policy-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('policy-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('policy-form-error');
+    errorBox.hidden = true;
+
+    const id = document.getElementById('policy-id').value;
+    const manualMode = document.getElementById('policy-manual-mode').checked;
+    const payload = {
+      name: document.getElementById('policy-name').value,
+      description: document.getElementById('policy-description').value || null,
+      enabled: document.getElementById('policy-enabled').checked,
+      priority: parseInt(document.getElementById('policy-priority').value, 10),
+      default_priv_lvl: parseInt(document.getElementById('policy-priv-lvl').value, 10),
+      default_action: document.getElementById('policy-default-action').value,
+      requires_manual_approval: manualMode,
+      manual_default_command_set_id: manualMode ? (document.getElementById('policy-manual-command-set').value || null) : null,
+      command_set_ids: currentCommandSetIds,
+      change_description: document.getElementById('policy-change-description').value || null,
+    };
+
+    const url = id ? `/api/policies/${id}` : '/api/policies';
+    const method = id ? 'PUT' : 'POST';
+
+    const res = await AAAPlatform.authedFetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let msg = 'Could not save policy.';
+      if (body.detail && typeof body.detail === 'string') msg = body.detail;
+      else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+      errorBox.textContent = msg;
+      errorBox.hidden = false;
+      return;
+    }
+
+    const savedPolicy = await res.json();
+
+    // If the advanced condition builder is active, save the tree as a
+    // separate step against the now-known policy id (a brand-new
+    // policy doesn't have one until the create above returns it).
+    // The simple fields on `payload` above were already sent and
+    // saved, but resolve_condition_expression() checks for a
+    // condition tree FIRST (see app.services.condition_engine.
+    // has_condition_tree) -- so as soon as this PUT succeeds, the
+    // tree takes over from those simple fields entirely, exactly as
+    // the "Switch to advanced" hint in the GUI says it will.
+    if (currentConditionTree) {
+      const treeRes = await AAAPlatform.authedFetch(`/api/policies/${savedPolicy.id}/condition-tree`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(builderTreeToApiPayload(currentConditionTree)),
+      });
+      if (!treeRes.ok) {
+        const body = await treeRes.json().catch(() => ({}));
+        let msg = 'Policy saved, but its conditions could not be saved.';
+        if (body.detail && typeof body.detail === 'string') msg = body.detail;
+        else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+        AAAPlatform.toast(msg, 'error');
+        loadPolicies();
+        return;
+      }
+    } else if (msUserEntries.length > 0 || msDeviceEntries.length > 0) {
+      const treeRes = await AAAPlatform.authedFetch(`/api/policies/${savedPolicy.id}/condition-tree`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(builderTreeToApiPayload(msEntriesToConditionTree(msUserEntries, msDeviceEntries))),
+      });
+      if (!treeRes.ok) {
+        const body = await treeRes.json().catch(() => ({}));
+        let msg = 'Policy saved, but its conditions could not be saved.';
+        if (body.detail && typeof body.detail === 'string') msg = body.detail;
+        else if (Array.isArray(body.detail) && body.detail[0] && body.detail[0].msg) msg = body.detail[0].msg;
+        AAAPlatform.toast(msg, 'error');
+        loadPolicies();
+        return;
+      }
+    }
+
+    closeModal();
+    AAAPlatform.toast(id ? 'Policy updated.' : 'Policy added.');
+    loadPolicies();
+  });
+
+  async function deletePolicy(id) {
+    const policy = policies.find(p => p.id === id);
+    if (!confirm(`Delete policy "${policy ? policy.name : id}"?`)) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/policies/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not delete policy.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Policy deleted.');
+    loadPolicies();
+  }
+
+  let currentHistoryPolicyId = null;
+
+  async function openHistory(policy) {
+    if (!policy) return;
+    currentHistoryPolicyId = policy.id;
+    document.getElementById('history-modal-title').textContent = `Version History — ${policy.name}`;
+    await renderHistoryList();
+    document.getElementById('history-modal-backdrop').hidden = false;
+  }
+
+  async function renderHistoryList() {
+    const list = document.getElementById('history-list');
+    list.innerHTML = '<div class="content-sub">Loading…</div>';
+
+    const res = await AAAPlatform.authedFetch(`/api/policies/${currentHistoryPolicyId}/versions`);
+    if (!res.ok) {
+      list.innerHTML = '<div class="empty-state">Could not load version history.</div>';
+      return;
+    }
+    const data = await res.json();
+    if (data.versions.length === 0) {
+      list.innerHTML = '<div class="empty-state">No versions recorded yet.</div>';
+      return;
+    }
+
+    list.innerHTML = `<div class="version-list">${data.versions.map(v => `
+      <div class="version-row" style="flex-direction:column;align-items:stretch;">
+        <div style="display:flex;justify-content:space-between;align-items:center;width:100%;">
+          <div>
+            <strong>v${v.version_number}</strong>
+            <div class="version-meta">${new Date(v.created_at).toLocaleString()} · ${escapeHtml(v.created_by || 'unknown')}${v.change_description ? ' · ' + escapeHtml(v.change_description) : ''}</div>
+          </div>
+          <div class="version-actions">
+            <button class="btn-secondary btn-small" data-diff="${v.id}">Diff vs. current</button>
+            <button class="btn-secondary btn-small" data-restore="${v.id}">Restore</button>
+          </div>
+        </div>
+        <div class="diff-view" id="diff-${v.id}" style="display:none;margin-top:10px;"></div>
+      </div>
+    `).join('')}</div>`;
+
+    list.querySelectorAll('[data-diff]').forEach(btn => {
+      btn.addEventListener('click', () => toggleDiff(btn.dataset.diff));
+    });
+    list.querySelectorAll('[data-restore]').forEach(btn => {
+      btn.addEventListener('click', () => restoreVersion(btn.dataset.restore));
+    });
+  }
+
+  async function toggleDiff(versionId) {
+    const box = document.getElementById(`diff-${versionId}`);
+    if (box.style.display === 'block') { box.style.display = 'none'; return; }
+
+    box.style.display = 'block';
+    box.textContent = 'Loading…';
+    const res = await AAAPlatform.authedFetch(`/api/policies/${currentHistoryPolicyId}/versions/${versionId}/diff`);
+    if (!res.ok) { box.textContent = 'Could not load diff.'; return; }
+    const data = await res.json();
+    if (data.identical) {
+      box.textContent = 'Identical to the current policy state.';
+      return;
+    }
+    box.textContent = data.changed.map(c => `${c.field}:\n  from: ${JSON.stringify(c.from)}\n  to:   ${JSON.stringify(c.to)}`).join('\n\n');
+  }
+
+  async function restoreVersion(versionId) {
+    if (!confirm('Restore this version? This creates a new version with these values — nothing is deleted.')) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/policies/${currentHistoryPolicyId}/versions/${versionId}/restore`, { method: 'POST' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not restore this version.', 'error');
+      return;
+    }
+    const data = await res.json();
+    if (data.warnings && data.warnings.length) {
+      AAAPlatform.toast(`Restored with ${data.warnings.length} warning(s) — see console.`, 'error');
+      console.warn('Restore warnings:', data.warnings);
+    } else {
+      AAAPlatform.toast('Policy restored.');
+    }
+    await renderHistoryList();
+    loadPolicies();
+  }
+
+  document.getElementById('history-close-btn').addEventListener('click', () => {
+    document.getElementById('history-modal-backdrop').hidden = true;
+  });
+  document.getElementById('history-modal-close-btn').addEventListener('click', () => {
+    document.getElementById('history-modal-backdrop').hidden = true;
+  });
+  document.getElementById('history-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'history-modal-backdrop') document.getElementById('history-modal-backdrop').hidden = true;
+  });
+
+  (async function init() {
+    await loadReferenceData();
+    await loadPolicies();
+  })();
+</script>
+{% endblock %}

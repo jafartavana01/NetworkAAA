@@ -1,0 +1,194 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}RADIUS Overview — NetOpsGuard{% endblock %}
+{% block breadcrumb %}RADIUS / Overview{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="dash-hero">
+    <div class="dash-hero-title">
+      <span class="dash-hero-icon">{{ icons.icon('shield', 26) }}</span>
+      <div>
+        <h1>RADIUS Overview</h1>
+        <p class="content-sub">Whether RADIUS is actually serving requests, and what is configured behind it.</p>
+      </div>
+    </div>
+    <div class="dash-hero-meta">
+      <button type="button" class="btn-secondary btn-small btn-with-icon" id="refresh-btn" style="width:auto;">{{ icons.icon('activity', 14) }}Refresh</button>
+    </div>
+  </div>
+
+  <div class="status-card-grid" id="ro-kpis" style="margin-bottom:16px;"></div>
+
+  <!-- Readiness is the point of this page: each row is a thing that
+       must be true before a device can authenticate. -->
+  <div class="content-head"><h2>Readiness</h2>
+    <p class="content-sub">Every one of these must hold before a device can authenticate over RADIUS.</p>
+  </div>
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body" id="ro-checks"><div class="empty-state">Checking…</div></div>
+  </div>
+
+  <section class="sec-grid sec-grid-risk">
+    <div class="panel panel-wide">
+      <div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;">
+        <span><span class="rail rail-dim"></span>Clients</span>
+        <a href="/radius/clients" class="content-sub" style="text-decoration:none;">Manage →</a>
+      </div>
+      <div class="panel-body" id="ro-clients"><div class="empty-state">Loading…</div></div>
+    </div>
+    <div class="panel panel-wide">
+      <div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;">
+        <span><span class="rail rail-dim"></span>Policies</span>
+        <a href="/radius/policies" class="content-sub" style="text-decoration:none;">Manage →</a>
+      </div>
+      <div class="panel-body" id="ro-policies"><div class="empty-state">Loading…</div></div>
+    </div>
+  </section>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_LIST = '{{ icons.icon("clipboard-list", 16) }}';
+  const esc = AAAPlatform.escapeHtml;
+
+  // A readiness row states the fact, not a colour. `ok=null` means the
+  // check could not be run -- distinct from a failure, because "this
+  // admin cannot see the setting" is not "the setting is wrong".
+  function checkRow(ok, title, detail, action) {
+    const mark = ok === true ? '\u2713' : (ok === null ? '?' : '\u2715');
+    const cls = ok === true ? 'is-add' : (ok === null ? '' : 'is-remove');
+    return '<div class="cdiff-stat ' + cls + '" style="align-items:flex-start;margin-bottom:8px;">' +
+      '<span class="cdiff-stat-icon">' + mark + '</span>' +
+      '<span style="flex:1;"><span class="cdiff-stat-label">' + esc(title) + '</span>' +
+      '<div style="font-size:13px;color:var(--text-primary);margin-top:2px;">' + detail + '</div></span>' +
+      (action ? '<a href="' + action.href + '" class="btn-secondary btn-small" style="align-self:center;">' +
+        esc(action.label) + '</a>' : '') +
+      '</div>';
+  }
+
+  async function getJson(url) {
+    try {
+      const res = await AAAPlatform.authedFetch(url);
+      if (res.status === 403) return { forbidden: true };
+      return res.ok ? await res.json() : null;
+    } catch (e) { return null; }
+  }
+
+  async function load() {
+    const [settings, listeners, clients, policies] = await Promise.all([
+      getJson('/api/radius/settings'),
+      getJson('/api/radius/listeners'),
+      getJson('/api/radius/clients?include_all=true'),
+      getJson('/api/radius/policies'),
+    ]);
+
+    // --- KPIs
+    const allClients = Array.isArray(clients) ? clients : [];
+    const radiusClients = allClients.filter((d) => d.radius_enabled);
+    const ready = radiusClients.filter((d) => d.has_secret && d.enabled);
+    const allPolicies = Array.isArray(policies) ? policies : [];
+    const enabledPolicies = allPolicies.filter((p) => p.enabled);
+    const enabled = settings && !settings.forbidden ? settings.enabled : null;
+
+    document.getElementById('ro-kpis').innerHTML = [
+      AAAPlatform.kpiCard({
+        icon: ICON_CHECK, label: 'RADIUS',
+        value: enabled === null ? '\u2014' : (enabled ? 'Enabled' : 'Disabled'),
+        state: enabled ? 'is-signal' : (enabled === null ? '' : 'is-amber'),
+        sub: enabled === null ? 'requires superadmin' : null,
+      }),
+      AAAPlatform.kpiCard({ icon: ICON_SERVER, label: 'Clients Ready', value: ready.length,
+                            sub: 'of ' + radiusClients.length + ' with RADIUS on',
+                            state: radiusClients.length && !ready.length ? 'is-red' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_LIST, label: 'Active Policies', value: enabledPolicies.length,
+                            state: enabledPolicies.length ? 'is-signal' : 'is-amber',
+                            sub: enabledPolicies.length ? null : 'devices fall back to their own defaults' }),
+      AAAPlatform.kpiCard({ icon: ICON_ALERT, label: 'Missing Secret',
+                            value: radiusClients.filter((d) => !d.has_secret).length,
+                            state: radiusClients.some((d) => !d.has_secret) ? 'is-red' : '' }),
+    ].join('');
+
+    // --- Readiness
+    const rows = [];
+
+    rows.push(enabled === null
+      ? checkRow(null, 'RADIUS enabled', 'Only a superadministrator can read this setting.')
+      : checkRow(enabled, 'RADIUS enabled',
+          enabled ? 'RADIUS is switched on in the server settings.'
+                  : 'RADIUS is switched off, so no listeners are configured.',
+          enabled ? null : { href: '/radius/server', label: 'Server settings' }));
+
+    if (Array.isArray(listeners)) {
+      const bad = listeners.filter((l) => !l.listening || l.loopback_only);
+      rows.push(checkRow(bad.length === 0, 'Ports listening',
+        listeners.map((l) => esc(l.detail)).join('<br>'),
+        bad.length ? { href: '/radius/server', label: 'Run test' } : null));
+    } else if (listeners && listeners.forbidden) {
+      rows.push(checkRow(null, 'Ports listening', 'Only a superadministrator can check the listeners.'));
+    } else {
+      rows.push(checkRow(false, 'Ports listening', 'The listener status could not be read.'));
+    }
+
+    rows.push(checkRow(ready.length > 0, 'At least one client configured',
+      radiusClients.length === 0
+        ? 'No device has RADIUS enabled, so nothing is permitted to send requests.'
+        : (ready.length
+            ? ready.length + ' device(s) have RADIUS enabled with a shared secret.'
+            : 'Devices have RADIUS enabled but no shared secret, so their requests will be discarded.'),
+      ready.length ? null : { href: '/radius/clients', label: 'Clients' }));
+
+    rows.push(checkRow(enabledPolicies.length > 0, 'At least one policy',
+      enabledPolicies.length
+        ? enabledPolicies.length + ' enabled policy(ies) will return attributes on an accept.'
+        : 'No enabled policy. Authentication can still succeed, but no attributes are returned — ' +
+          'the device will use its own default privilege.',
+      enabledPolicies.length ? null : { href: '/radius/policies', label: 'Policies' }));
+
+    // Applying is a separate step everywhere else in this platform, so
+    // it is listed as a reminder rather than asserted as done -- this
+    // page cannot tell whether the running daemon matches the database.
+    rows.push(checkRow(null, 'Configuration applied',
+      'Changes to settings, clients or policies only reach the daemon when the configuration is compiled and applied.',
+      { href: '/tacacs/config', label: 'Configuration' }));
+
+    document.getElementById('ro-checks').innerHTML = rows.join('');
+
+    // --- Clients panel
+    const cbox = document.getElementById('ro-clients');
+    cbox.innerHTML = radiusClients.length
+      ? '<table class="data-table"><thead><tr><th>Device</th><th>IP</th><th>Secret</th></tr></thead><tbody>' +
+        radiusClients.slice(0, 8).map((d) =>
+          '<tr><td>' + esc(d.device_name) + '</td>' +
+          '<td class="cell-mono">' + esc(d.ip_address) + '</td>' +
+          '<td>' + (d.has_secret
+            ? '<span class="badge sec-sev-badge is-signal">configured</span>'
+            : '<span class="badge sec-sev-badge is-red">missing</span>') + '</td></tr>').join('') +
+        '</tbody></table>' +
+        (radiusClients.length > 8 ? '<div class="content-sub" style="margin-top:8px;">and ' + (radiusClients.length - 8) + ' more</div>' : '')
+      : '<div class="empty-state">No device has RADIUS enabled yet.</div>';
+
+    // --- Policies panel
+    const pbox = document.getElementById('ro-policies');
+    pbox.innerHTML = allPolicies.length
+      ? '<table class="data-table"><thead><tr><th>Priority</th><th>Name</th><th>Decision</th><th>Status</th></tr></thead><tbody>' +
+        allPolicies.slice(0, 8).map((p) =>
+          '<tr><td class="cell-mono">' + p.priority + '</td>' +
+          '<td>' + esc(p.name) + '</td>' +
+          '<td class="content-sub">' + (p.action === 'permit' ? 'Permit' : 'Deny') + '</td>' +
+          '<td><span class="badge sec-sev-badge ' + (p.enabled ? 'is-signal' : '') + '">' +
+          (p.enabled ? 'Enabled' : 'Disabled') + '</span></td></tr>').join('') +
+        '</tbody></table>'
+      : '<div class="empty-state">No RADIUS policies defined.</div>';
+  }
+
+  document.getElementById('refresh-btn').addEventListener('click', load);
+  load();
+})();
+</script>
+{% endblock %}

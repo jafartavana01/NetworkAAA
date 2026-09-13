@@ -1,0 +1,128 @@
+"""
+app.models.device
+===================
+Network devices (NAS clients) -- spec section 18. Every field the GUI
+exposes maps directly to something the configuration compiler
+(app.services.config_compiler) writes into a tac_plus-ng `host {}`
+block; there is no field here that doesn't correspond to real
+generated config, per spec section 61 (no fake features).
+
+`device_group_id` is added in Phase 4 below, now that DeviceGroup
+exists. The policy-reference fields (authentication/authorization/
+accounting policy) are still NOT included -- Authorization policy is
+Phase 5, and adding a foreign key to a table that doesn't exist yet
+would be exactly the half-built feature spec section 49 prohibits.
+
+`shared_secret_encrypted` stores a Fernet token (app.security.encrypt_secret),
+never plaintext. Only the configuration compiler ever decrypts it.
+
+NOTE: no `from __future__ import annotations` here -- see the note in
+app/models/admin.py for why (Python 3.14 + SQLAlchemy + stringified
+`X | None` annotations is a confirmed CPython typing regression, and
+this file has several `X | None` columns).
+"""
+import uuid
+from datetime import datetime, timezone
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from ..database import Base
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class NetworkDevice(Base):
+    __tablename__ = "network_devices"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+
+    # Also used as the tac_plus-ng `host <name> { }` block identifier --
+    # constrained to an identifier-safe charset by app.schemas.device
+    # (never escaped into the config; restricted at input time instead,
+    # since bare-identifier grammar can't be safely quote-escaped).
+    name: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+
+    ip_address: Mapped[str] = mapped_column(String(64), nullable=False)     # CIDR, e.g. 10.10.10.10/32
+    ipv6_address: Mapped[str | None] = mapped_column(String(64), nullable=True)  # CIDR, e.g. 2001:db8::1/128
+
+    vendor: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    platform: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    device_group_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("device_groups.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Nullable since RADIUS support was added: a device that speaks ONLY
+    # RADIUS has no TACACS+ shared secret, and requiring one forced
+    # operators to invent a secret for a protocol the device never uses.
+    # The API enforces that a device has a secret for at least one
+    # protocol it is enabled for -- see routes_devices.
+    shared_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # RADIUS, for devices that don't speak TACACS+. Confirmed against
+    # the upstream sample `tac_plus-ng-radius.cfg`, which emits BOTH
+    # secrets inside the SAME host block:
+    #     host world { address = ...; key = demo; radius.key = demo }
+    # so no separate device record or host block is needed -- a device
+    # can serve both protocols at once.
+    #
+    # Nullable and separate from shared_secret_encrypted on purpose:
+    # RADIUS and TACACS+ secrets are independent on real equipment, and
+    # silently reusing the TACACS+ secret would put a secret on the
+    # wire over a protocol the operator never chose to enable.
+    radius_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    radius_secret_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+# ---------------------------------------------------------------------
+# Licence backstop
+# ---------------------------------------------------------------------
+#
+# The three known creation paths each check the limit explicitly, which
+# is where a useful error message comes from. This hook is the safety
+# net UNDER them: if a fourth path is added later and someone forgets
+# the check, the insert still fails rather than silently exceeding the
+# licence.
+#
+# It deliberately does not replace the explicit checks. A hook can only
+# raise a blunt error at flush time, long after the request handler
+# could have explained the problem -- so it is a backstop, not the
+# primary control.
+#
+# Bypassing it requires editing this file, which is the self-hosted
+# reality documented in docs/LICENSING.md rather than something the
+# code can prevent.
+from sqlalchemy import event as _sa_event
+
+
+@_sa_event.listens_for(NetworkDevice, "before_insert")
+def _enforce_device_licence(mapper, connection, target):  # noqa: ANN001
+    from ..services import entitlements
+
+    # Counted through the same connection the insert will use, so a
+    # concurrent request cannot slip past by reading a stale count.
+    from sqlalchemy import func, select
+
+    limit = entitlements.licence_limit_for_connection(connection)
+    if limit is None:
+        return
+
+    existing = connection.execute(
+        select(func.count()).select_from(NetworkDevice.__table__)
+    ).scalar_one()
+
+    if existing + 1 > limit:
+        raise PermissionError(
+            f"Device licence limit reached ({existing} of {limit}). "
+            "Import a licence to raise the limit."
+        )

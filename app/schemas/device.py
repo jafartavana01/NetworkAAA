@@ -1,0 +1,133 @@
+"""
+app.schemas.device
+====================
+Validation here is a security boundary, not just a UX nicety: `name`
+becomes a bare identifier inside a generated tac_plus-ng `host {}`
+block (app.services.config_compiler), so it's restricted to a
+conservative safe charset rather than escaped -- there's no confirmed
+quoting mechanism for that grammar position, so restriction is the
+only safe option (spec section 35: never construct config from
+unsanitized input). IP addresses are parsed with Python's `ipaddress`
+module, which rejects anything that isn't a real, unambiguous address.
+"""
+from __future__ import annotations
+
+import ipaddress
+import re
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{0,63}$")
+
+
+def _normalize_cidr(value: str, *, version: int) -> str:
+    value = value.strip()
+    try:
+        if "/" in value:
+            network = ipaddress.ip_network(value, strict=False)
+        else:
+            addr = ipaddress.ip_address(value)
+            max_prefix = 32 if addr.version == 4 else 128
+            network = ipaddress.ip_network(f"{addr}/{max_prefix}", strict=False)
+    except ValueError as exc:
+        raise ValueError(f"'{value}' is not a valid IP address or CIDR network.") from exc
+
+    if network.version != version:
+        raise ValueError(f"Expected an IPv{version} address, got IPv{network.version}.")
+    return str(network)
+
+
+class DeviceBase(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    ip_address: str
+    ipv6_address: str | None = None
+    vendor: str | None = Field(default=None, max_length=64)
+    platform: str | None = Field(default=None, max_length=64)
+    description: str | None = Field(default=None, max_length=2000)
+    device_group_id: str | None = None
+    enabled: bool = True
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if not _NAME_PATTERN.match(v):
+            raise ValueError(
+                "Device name must start with a letter or digit and contain only "
+                "letters, digits, hyphens, and underscores (max 64 chars) -- it is "
+                "used as a raw identifier in the generated tac_plus-ng configuration."
+            )
+        return v
+
+    @field_validator("ip_address")
+    @classmethod
+    def validate_ip_address(cls, v: str) -> str:
+        return _normalize_cidr(v, version=4)
+
+    @field_validator("ipv6_address")
+    @classmethod
+    def validate_ipv6_address(cls, v: str | None) -> str | None:
+        if v is None or v.strip() == "":
+            return None
+        return _normalize_cidr(v, version=6)
+
+
+class DeviceCreate(DeviceBase):
+    # Optional: a RADIUS-only device has no TACACS+ secret. The API
+    # rejects a device with no usable secret at all.
+    shared_secret: str | None = Field(default=None, min_length=1, max_length=256)
+    # RADIUS is opt-in per device. The secret is separate from the
+    # TACACS+ one because they are independent on real equipment --
+    # see NetworkDevice's own comment on why reusing it would be wrong.
+    radius_enabled: bool = False
+    radius_secret: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class DeviceUpdate(DeviceBase):
+    # Leave shared_secret unset (None) to keep the existing secret --
+    # the GUI never round-trips the real value back to the client.
+    shared_secret: str | None = Field(default=None, min_length=1, max_length=256)
+    radius_enabled: bool = False
+    radius_secret: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class DeviceOut(DeviceBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    has_secret: bool
+    secret_suffix: str | None = None
+    device_group_name: str | None = None
+    radius_enabled: bool = False
+    # Presence only -- the RADIUS secret is never returned to the
+    # client, same as the TACACS+ one.
+    has_radius_secret: bool = False
+
+
+class DeviceAaaPreviewRequest(BaseModel):
+    platform_ip: str = Field(min_length=1, max_length=64)
+
+
+class DeviceAaaPreviewOut(BaseModel):
+    commands: list[str]
+
+
+class DeviceAaaApplyRequest(BaseModel):
+    ssh_username: str = Field(min_length=1, max_length=128)
+    ssh_password: str = Field(min_length=1, max_length=256)
+    platform_ip: str = Field(min_length=1, max_length=64)
+    commands: list[str] | None = None
+    # Per-apply override -- falls back to the admin's stored default
+    # (AaaTemplateSettings.connect_timeout_seconds/
+    # command_timeout_seconds) when omitted, and from there to
+    # ssh_provision's own built-in defaults. Added directly in
+    # response to a real report that a slow/high-latency device link
+    # made the previous fixed timeout too short, with no way to adjust
+    # it short of editing source code.
+    connect_timeout_seconds: int | None = Field(default=None, ge=1, le=120)
+    command_timeout_seconds: int | None = Field(default=None, ge=1, le=300)
+
+
+class DeviceAaaApplyResult(BaseModel):
+    success: bool
+    message: str
+    command_log: list[str] = Field(default_factory=list)

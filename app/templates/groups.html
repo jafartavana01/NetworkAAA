@@ -1,0 +1,588 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Groups — NetOpsGuard{% endblock %}
+{% block breadcrumb %}TACACS+ / Groups{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>TACACS+ Groups</h1>
+    <p class="content-sub">Assign users to a group on the Users page. Deleting a group ungroups its members — it doesn't delete them.</p>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">
+      A group no longer "owns" a policy directly — <strong style="color:var(--text-primary);">assign a policy to this group from the Policies page instead</strong> (set the policy's Group condition). The "Policies" column below shows every policy currently targeting each group, for reference.
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <span class="content-sub" id="group-count"></span>
+    <button class="btn-primary btn-small" id="add-group-btn" style="width:auto;">+ Add group</button>
+  </div>
+
+  <div class="status-card-grid" id="groups-kpis" style="margin-bottom:16px;"></div>
+
+  <div id="groups-table-wrap">
+    <div class="empty-state">Loading groups…</div>
+  </div>
+</main>
+
+<div class="modal-backdrop" id="group-modal-backdrop" hidden>
+  <div class="modal">
+    <button type="button" class="modal-close-btn" id="group-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2 id="group-modal-title">Add group</h2>
+    <form id="group-form">
+      <input type="hidden" id="group-id">
+
+      <label class="field">
+        <span class="field-label">Type</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('shield', 14) }}</span>
+          <select id="group-type">
+            <option value="local">Local — you add members directly</option>
+            <option value="ad">Active Directory — matches a real AD group's own membership</option>
+          </select>
+        </div>
+      </label>
+      <div class="panel panel-wide" style="margin:-4px 0 16px 0;" id="group-type-hint-panel">
+        <div class="panel-body" style="font-size:12px;" id="group-type-hint"></div>
+      </div>
+
+      <div id="group-ad-fields" hidden>
+        <label class="field">
+          <span class="field-label">Search AD groups</span>
+          <input type="text" id="group-ad-search-input" placeholder="Type at least 2 characters…" autocomplete="off">
+        </label>
+        <div id="group-ad-search-results" style="margin-bottom:8px;"></div>
+        <div class="field-hint" style="margin-top:-2px;margin-bottom:14px;">Searches as you type. Selecting a match fills in Name and Linked AD Group below automatically.</div>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Name</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('users', 14) }}</span>
+          <input type="text" id="group-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        </div>
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;" id="group-name-hint">Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng group identifier.</div>
+
+      <label class="field">
+        <span class="field-label">Description</span>
+        <input type="text" id="group-description">
+      </label>
+
+      <div id="group-ad-linked-field" hidden>
+        <label class="field">
+          <span class="field-label">Linked AD group</span>
+          <input type="text" id="group-ad-name" placeholder="e.g. tacacs_admins — the AD group's exact CN">
+        </label>
+        <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">The AD group's exact CN — filled in automatically above, or type one directly if you already know it. Kept as a reference alongside Name, which is the prefix-stripped form tac_plus-ng actually matches.</div>
+      </div>
+
+      <div id="group-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="group-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save group</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="members-modal-backdrop" hidden>
+  <div class="modal modal-md" style="max-width: 560px">
+    <h2 id="members-modal-title">Members</h2>
+
+    <div id="members-local-fields">
+      <div class="field-row" style="align-items:flex-end;margin-bottom:16px;">
+        <label class="field">
+          <span class="field-label">Add a user</span>
+          <select id="members-add-select"></select>
+        </label>
+        <button type="button" class="btn-primary btn-small" id="members-add-btn" style="width:auto;margin-bottom:2px;">Add</button>
+      </div>
+      <div id="members-add-note" class="content-sub" style="margin:-10px 0 14px 0;" hidden></div>
+    </div>
+
+    <div id="members-ad-note" class="panel panel-wide" style="margin-bottom:16px;" hidden>
+      <div class="panel-body" style="font-size:12px;">This is a live, read-only view of who Active Directory itself currently reports as a member of this group — not something managed here. Adding or removing members for an AD group isn't available on this platform, since it would have no effect on the group's real, authorization-relevant membership.</div>
+    </div>
+
+    <div id="members-list"></div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="members-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  let tacacsGroups = [];
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  // Pre-rendered server-side via Jinja since these appear in
+  // client-built markup.
+  const ICON_USERS = '{{ icons.icon("users", 16) }}';
+  const ICON_USER = '{{ icons.icon("user", 16) }}';
+  const ICON_LIST = '{{ icons.icon("list-checks", 16) }}';
+
+  // Members live in two places: local users (TacacsUser.group_id) and,
+  // for an AD-backed group, Active Directory itself. The list endpoint
+  // only counts local users -- querying LDAP once per group would make
+  // this page slow and would fail outright whenever AD is unreachable.
+  // So AD counts are fetched AFTER the table renders, per group, and
+  // merged in. A group whose AD count has not arrived shows its local
+  // count plus "+AD", never a bare 0 that reads as "nobody is in this
+  // group" when three people are.
+  const adCounts = new Map();   // group id -> number | 'error'
+
+  function memberCellText(g) {
+    const local = g.member_count || 0;
+    if (!g.ad_group_name) return local + (local === 1 ? ' member' : ' members');
+    const ad = adCounts.get(g.id);
+    if (ad === undefined) return local + ' local +AD\u2026';
+    if (ad === 'error') return local + ' local (AD unreachable)';
+    return (local + ad) + ' members (' + local + ' local, ' + ad + ' AD)';
+  }
+
+  async function loadAdMemberCounts() {
+    // Sequential on purpose: a fleet of AD-backed groups should not
+    // open a burst of LDAP searches at once.
+    for (const g of tacacsGroups) {
+      if (!g.ad_group_name) continue;
+      try {
+        const res = await AAAPlatform.authedFetch(
+          '/api/ad-settings/group-members?group_name=' + encodeURIComponent(g.ad_group_name));
+        if (!res.ok) { adCounts.set(g.id, 'error'); }
+        else {
+          const data = await res.json();
+          // This endpoint deliberately distinguishes a failed search
+          // from a genuinely empty one (see AdSearchResult): `error`
+          // set means the count is unknown, NOT zero. Treating a bind
+          // failure as "0 members" is the exact bug that made this
+          // page misleading in the first place.
+          if (data.error) adCounts.set(g.id, 'error');
+          else adCounts.set(g.id, Array.isArray(data.results) ? data.results.length : 'error');
+        }
+      } catch (e) {
+        adCounts.set(g.id, 'error');
+      }
+      const cell = document.querySelector('[data-members-for="' + g.id + '"]');
+      if (cell) cell.textContent = memberCellText(g);
+      renderGroupKpis();
+    }
+  }
+
+  function renderGroupKpis() {
+    const members = tacacsGroups.reduce((sum, g) => {
+      const ad = adCounts.get(g.id);
+      return sum + (g.member_count || 0) + (typeof ad === 'number' ? ad : 0);
+    }, 0);
+    const inPolicy = tacacsGroups.filter(
+      (g) => (g.referenced_by_policy_names || []).length > 0).length;
+    document.getElementById('groups-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_USERS, label: 'Total Groups', value: tacacsGroups.length }),
+      AAAPlatform.kpiCard({ icon: ICON_USER, label: 'Total Memberships', value: members }),
+      AAAPlatform.kpiCard({ icon: ICON_LIST, label: 'Used By Policies', value: inPolicy,
+                            sub: (tacacsGroups.length - inPolicy) + ' unreferenced' }),
+    ].join('');
+  }
+
+  function renderTable() {
+    renderGroupKpis();
+    loadAdMemberCounts();
+    const wrap = document.getElementById('groups-table-wrap');
+    document.getElementById('group-count').textContent = tacacsGroups.length + (tacacsGroups.length === 1 ? ' group' : ' groups');
+
+    if (tacacsGroups.length === 0) {
+      wrap.innerHTML = `
+        <div class="empty-state">
+          <div class="empty-state-title">No TACACS+ groups</div>
+          <p class="empty-state-desc">NetOpsGuard doesn't have any groups configured yet. Groups are what Policies match against to decide access — add one to get started.</p>
+          <button type="button" class="btn-primary btn-small" id="empty-state-add-group-btn">+ Add group</button>
+        </div>
+      `;
+      document.getElementById('empty-state-add-group-btn').addEventListener('click', () => openModal(null));
+      return;
+    }
+
+    const rows = tacacsGroups.map(g => `
+      <tr data-group-row="${g.id}">
+        <td>${escapeHtml(g.name)}</td>
+        <td>${escapeHtml(g.description || '—')}</td>
+        <td>${g.referenced_by_policy_names.length ? g.referenced_by_policy_names.map(escapeHtml).join(', ') : '<span class="content-sub">none</span>'}</td>
+        <td class="cell-mono" data-members-for="${g.id}">${memberCellText(g)}</td>
+        <td class="cell-actions">
+          <button class="btn-secondary btn-small" data-members="${g.id}">Members</button>
+          <button class="btn-secondary btn-small" data-edit="${g.id}">Edit</button>
+          <button class="btn-danger btn-small" data-delete="${g.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th>Name</th><th>Description</th><th>Policies</th><th>Members</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.addEventListener('click', () => openModal(tacacsGroups.find(g => g.id === btn.dataset.edit)));
+    });
+    wrap.querySelectorAll('[data-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deleteGroup(btn.dataset.delete));
+    });
+    wrap.querySelectorAll('[data-members]').forEach(btn => {
+      btn.addEventListener('click', () => openMembersModal(tacacsGroups.find(g => g.id === btn.dataset.members)));
+    });
+    wrap.querySelectorAll('[data-group-row]').forEach(row => {
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const group = tacacsGroups.find(g => g.id === row.dataset.groupRow);
+        if (!group) return;
+        AAAPlatform.showContextMenu(e.clientX, e.clientY, [
+          { label: 'Members', onClick: () => openMembersModal(group) },
+          { label: 'Edit', onClick: () => openModal(group) },
+          'separator',
+          { label: 'Delete', onClick: () => deleteGroup(group.id), danger: true },
+        ]);
+      });
+    });
+  }
+
+  async function loadGroups() {
+    const res = await AAAPlatform.authedFetch('/api/tacacs-groups');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    tacacsGroups = await res.json();
+    renderTable();
+  }
+
+  function toggleGroupTypeFields() {
+    const isAd = document.getElementById('group-type').value === 'ad';
+    document.getElementById('group-ad-fields').hidden = !isAd;
+    document.getElementById('group-ad-linked-field').hidden = !isAd;
+
+    const hintPanel = document.getElementById('group-type-hint-panel');
+    const hint = document.getElementById('group-type-hint');
+    const nameHint = document.getElementById('group-name-hint');
+    if (isAd) {
+      hintPanel.style.borderColor = 'var(--red)';
+      hint.style.color = 'var(--red)';
+      hint.textContent = '⚠ For Active Directory groups, membership is determined ENTIRELY by real AD group membership — an AD user must actually belong to this exact group in Active Directory for a policy to permit them. Adding members with the Members button on the group list has no effect here.';
+      nameHint.textContent = 'Must exactly match what tac_plus-ng reports for AD users in this group — the AD group\'s CN with any configured prefix stripped. Search below and select a match rather than typing this by hand.';
+    } else {
+      hintPanel.style.borderColor = 'var(--line)';
+      hint.style.color = 'var(--text-dim)';
+      hint.textContent = 'Add members with the Members button after saving. This drives authorization for locally-authenticated users only — it has no effect on Active Directory users (use the Active Directory type instead for them).';
+      nameHint.textContent = 'Letters, digits, hyphens, underscores only — used directly as the tac_plus-ng group identifier.';
+    }
+  }
+  document.getElementById('group-type').addEventListener('change', toggleGroupTypeFields);
+
+  function openModal(group) {
+    document.getElementById('group-form-error').hidden = true;
+    document.getElementById('group-form').reset();
+    document.getElementById('group-ad-search-results').innerHTML = '';
+
+    if (group) {
+      document.getElementById('group-modal-title').textContent = 'Edit group';
+      document.getElementById('group-id').value = group.id;
+      document.getElementById('group-name').value = group.name;
+      document.getElementById('group-description').value = group.description || '';
+      document.getElementById('group-ad-name').value = group.ad_group_name || '';
+      document.getElementById('group-type').value = group.ad_group_name ? 'ad' : 'local';
+    } else {
+      document.getElementById('group-modal-title').textContent = 'Add group';
+      document.getElementById('group-id').value = '';
+      document.getElementById('group-type').value = 'local';
+    }
+    toggleGroupTypeFields();
+    document.getElementById('group-modal-backdrop').hidden = false;
+  }
+
+  function closeModal() {
+    document.getElementById('group-modal-backdrop').hidden = true;
+    if (groupAdSearchDebounceTimer) clearTimeout(groupAdSearchDebounceTimer);
+    groupAdSearchRequestId++; // invalidates any AD search response still in flight from this modal session
+  }
+
+  document.getElementById('add-group-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('group-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('group-modal-close-btn').addEventListener('click', closeModal);
+  document.getElementById('group-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'group-modal-backdrop') closeModal();
+  });
+
+  let cachedAdGroupPrefix = null;
+  async function getAdGroupPrefix() {
+    if (cachedAdGroupPrefix !== null) return cachedAdGroupPrefix;
+    const res = await AAAPlatform.authedFetch('/api/ad-settings');
+    cachedAdGroupPrefix = (res.ok ? (await res.json()).group_prefix : null) || '';
+    return cachedAdGroupPrefix;
+  }
+
+  const LOCAL_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+  let groupAdSearchRequestId = 0;
+  async function searchAdGroups() {
+    const query = document.getElementById('group-ad-search-input').value.trim();
+    const resultsEl = document.getElementById('group-ad-search-results');
+    if (query.length === 0) {
+      resultsEl.innerHTML = '';
+      return;
+    }
+    if (query.length < 2) {
+      resultsEl.innerHTML = '<div class="content-sub">Type at least 2 characters.</div>';
+      return;
+    }
+    resultsEl.innerHTML = '<div class="content-sub">Searching…</div>';
+    const requestId = ++groupAdSearchRequestId;
+    const res = await AAAPlatform.authedFetch(`/api/ad-settings/search-groups?query=${encodeURIComponent(query)}`);
+    if (requestId !== groupAdSearchRequestId) return; // a newer keystroke already started a later search; discard this stale response
+    if (!res.ok) {
+      resultsEl.innerHTML = '<div class="content-sub">Could not search AD — check the Active Directory settings page.</div>';
+      return;
+    }
+    const data = await res.json();
+    if (requestId !== groupAdSearchRequestId) return;
+    if (data.error) {
+      resultsEl.innerHTML = `<div class="content-sub" style="color:var(--red);">Search failed: ${escapeHtml(data.error)}</div>`;
+      return;
+    }
+    const results = data.results;
+    if (results.length === 0) {
+      resultsEl.innerHTML = '<div class="content-sub">No matches. If you expect this group to exist, it may live outside the configured search base — check the Active Directory settings page.</div>';
+      return;
+    }
+    resultsEl.innerHTML = results.map(r => `
+      <div class="version-row">
+        <span style="flex:1;">${escapeHtml(r.cn)}</span>
+        <button type="button" class="btn-secondary btn-small" data-pick-ad-group="${escapeHtml(r.cn)}">Use this</button>
+      </div>
+    `).join('');
+    resultsEl.querySelectorAll('[data-pick-ad-group]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const cn = btn.dataset.pickAdGroup;
+        document.getElementById('group-ad-name').value = cn;
+
+        // Suggest the LOCAL name as the prefix-stripped CN -- this is
+        // what tac_plus-ng actually reports for `member ==` matching
+        // (confirmed: "with AD_GROUP_PREFIX = GTC_ the TACACS+ group
+        // membership for 'CN=GTC_ad-admins' will be 'ad-admins'" --
+        // stripped, not the full CN). Only fills the Name field if
+        // it's currently empty, so a name the admin already typed
+        // deliberately is never overwritten; only fills it at all if
+        // the result is a valid tac_plus-ng identifier, since an AD
+        // group CN can contain spaces or characters this platform's
+        // own name validation doesn't allow.
+        const nameField = document.getElementById('group-name');
+        if (!nameField.value.trim()) {
+          const prefix = await getAdGroupPrefix();
+          let suggested = cn;
+          if (prefix && cn.toLowerCase().startsWith(prefix.toLowerCase())) {
+            suggested = cn.slice(prefix.length);
+          }
+          if (LOCAL_NAME_PATTERN.test(suggested)) {
+            nameField.value = suggested;
+          }
+        }
+
+        resultsEl.innerHTML = '';
+        document.getElementById('group-ad-search-input').value = '';
+      });
+    });
+  }
+
+  // Auto-search as the admin types, debounced -- same pattern as the
+  // Users page AD search, for the same reason: no separate button.
+  let groupAdSearchDebounceTimer = null;
+  document.getElementById('group-ad-search-input').addEventListener('input', () => {
+    if (groupAdSearchDebounceTimer) clearTimeout(groupAdSearchDebounceTimer);
+    groupAdSearchDebounceTimer = setTimeout(searchAdGroups, 400);
+  });
+
+  document.getElementById('group-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('group-form-error');
+    errorBox.hidden = true;
+
+    const id = document.getElementById('group-id').value;
+    const payload = {
+      name: document.getElementById('group-name').value,
+      description: document.getElementById('group-description').value || null,
+      ad_group_name: document.getElementById('group-ad-name').value.trim() || null,
+    };
+
+    const url = id ? `/api/tacacs-groups/${id}` : '/api/tacacs-groups';
+    const method = id ? 'PUT' : 'POST';
+
+    const res = await AAAPlatform.authedFetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not save group.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    closeModal();
+    AAAPlatform.toast(id ? 'Group updated.' : 'Group added.');
+    loadGroups();
+  });
+
+  async function deleteGroup(id) {
+    const group = tacacsGroups.find(g => g.id === id);
+    const memberNote = group && group.member_count > 0 ? ` Its ${group.member_count} member(s) will be ungrouped, not deleted.` : '';
+    if (!confirm(`Delete group "${group ? group.name : id}"?${memberNote}`)) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/tacacs-groups/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not delete group.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Group deleted.');
+    loadGroups();
+  }
+
+  // ---------- Members ----------
+  let currentMembersGroup = null;
+  let allUsersForMembers = [];
+
+  async function openMembersModal(group) {
+    if (!group) return;
+    currentMembersGroup = group;
+    document.getElementById('members-modal-title').textContent = `Members — ${group.name}`;
+    document.getElementById('members-add-note').hidden = true;
+    const isAd = !!group.ad_group_name;
+    document.getElementById('members-local-fields').hidden = isAd;
+    document.getElementById('members-ad-note').hidden = !isAd;
+    if (isAd) {
+      await refreshAdGroupMembers();
+    } else {
+      await refreshMembers();
+    }
+    document.getElementById('members-modal-backdrop').hidden = false;
+  }
+
+  async function refreshAdGroupMembers() {
+    const listEl = document.getElementById('members-list');
+    listEl.innerHTML = '<div class="content-sub">Looking up real AD membership…</div>';
+    const res = await AAAPlatform.authedFetch(`/api/ad-settings/group-members?group_name=${encodeURIComponent(currentMembersGroup.ad_group_name)}`);
+    if (!res.ok) {
+      listEl.innerHTML = '<div class="content-sub" style="color:var(--red);">Could not look this up — check the Active Directory settings page.</div>';
+      return;
+    }
+    const data = await res.json();
+    if (data.error) {
+      listEl.innerHTML = `<div class="content-sub" style="color:var(--red);">${escapeHtml(data.error)}</div>`;
+      return;
+    }
+    if (data.results.length === 0) {
+      listEl.innerHTML = '<div class="empty-state">Active Directory reports no members for this group right now.</div>';
+      return;
+    }
+    listEl.innerHTML = data.results.map(m => `
+      <div class="version-row">
+        <span style="flex:1;">${escapeHtml(m.sam_account_name)}${m.display_name ? ' <span class="content-sub">(' + escapeHtml(m.display_name) + ')</span>' : ''}</span>
+      </div>
+    `).join('');
+  }
+
+  async function refreshMembers() {
+    const listEl = document.getElementById('members-list');
+    listEl.innerHTML = '<div class="content-sub">Loading…</div>';
+
+    const [membersRes, usersRes] = await Promise.all([
+      AAAPlatform.authedFetch(`/api/tacacs-groups/${currentMembersGroup.id}/members`),
+      AAAPlatform.authedFetch('/api/tacacs-users'),
+    ]);
+
+    const members = membersRes.ok ? await membersRes.json() : [];
+    allUsersForMembers = usersRes.ok ? await usersRes.json() : [];
+
+    if (members.length === 0) {
+      listEl.innerHTML = '<div class="empty-state">No members yet.</div>';
+    } else {
+      listEl.innerHTML = members.map(m => `
+        <div class="version-row">
+          <span style="flex:1;">${escapeHtml(m.username)}${m.full_name ? ' <span class="content-sub">(' + escapeHtml(m.full_name) + ')</span>' : ''}${!m.enabled ? ' <span class="badge badge-off">Disabled</span>' : ''}</span>
+          <button class="btn-danger btn-small" data-remove-member="${m.id}">Remove</button>
+        </div>
+      `).join('');
+      listEl.querySelectorAll('[data-remove-member]').forEach(btn => {
+        btn.addEventListener('click', () => removeMember(btn.dataset.removeMember));
+      });
+    }
+
+    // Add-picker: every user NOT already in this group (a user already
+    // in this group has nothing to "add" -- they're already a member).
+    const memberIds = new Set(members.map(m => m.id));
+    const candidates = allUsersForMembers.filter(u => !memberIds.has(u.id));
+    const addSelect = document.getElementById('members-add-select');
+    addSelect.innerHTML = candidates.length
+      ? candidates.map(u => `<option value="${u.id}" data-current-group="${u.group_name || ''}">${escapeHtml(u.username)}${u.group_name ? ' (currently: ' + escapeHtml(u.group_name) + ')' : ''}</option>`).join('')
+      : '<option value="">— No other users —</option>';
+  }
+
+  async function addMember() {
+    const select = document.getElementById('members-add-select');
+    const userId = select.value;
+    if (!userId) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/tacacs-groups/${currentMembersGroup.id}/members`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: userId }),
+    });
+
+    if (!res.ok) {
+      AAAPlatform.toast('Could not add member.', 'error');
+      return;
+    }
+    const data = await res.json();
+    const note = document.getElementById('members-add-note');
+    if (data.reassigned_from) {
+      note.textContent = `Moved from "${data.reassigned_from}" — a user can only be in one group at a time.`;
+      note.hidden = false;
+    } else {
+      note.hidden = true;
+    }
+    AAAPlatform.toast('Member added.');
+    await refreshMembers();
+    loadGroups(); // member_count on the main table is now stale
+  }
+
+  async function removeMember(userId) {
+    if (!confirm('Remove this member from the group? Their account is not deleted, just ungrouped.')) return;
+    const res = await AAAPlatform.authedFetch(`/api/tacacs-groups/${currentMembersGroup.id}/members/${userId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not remove member.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Member removed.');
+    await refreshMembers();
+    loadGroups();
+  }
+
+  document.getElementById('members-add-btn').addEventListener('click', addMember);
+  document.getElementById('members-close-btn').addEventListener('click', () => {
+    document.getElementById('members-modal-backdrop').hidden = true;
+  });
+  document.getElementById('members-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'members-modal-backdrop') document.getElementById('members-modal-backdrop').hidden = true;
+  });
+
+  loadGroups();
+</script>
+{% endblock %}

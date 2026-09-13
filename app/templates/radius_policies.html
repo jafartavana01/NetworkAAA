@@ -1,0 +1,399 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}RADIUS Policies — NetOpsGuard{% endblock %}
+{% block breadcrumb %}RADIUS / Policies{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="dash-hero">
+    <div class="dash-hero-title">
+      <span class="dash-hero-icon">{{ icons.icon('shield', 26) }}</span>
+      <div>
+        <h1>RADIUS Policies</h1>
+        <p class="content-sub">Who may authenticate where, and which attributes come back. RADIUS has no per-command authorization — for command control, use TACACS+ policies.</p>
+      </div>
+    </div>
+    <div class="dash-hero-meta">
+      <button type="button" class="btn-primary btn-with-icon" id="new-policy-btn" style="width:auto;">{{ icons.icon('plus', 16) }}New Policy</button>
+    </div>
+  </div>
+
+  <div class="panel panel-wide" style="margin-bottom:20px;">
+    <div class="panel-body" style="font-size:12px;color:var(--text-dim);">
+      Policies are evaluated in priority order, lowest first, and the first match wins. Changes take effect once the configuration is compiled and applied from <a href="/tacacs/config">Configuration</a>.
+    </div>
+  </div>
+
+  <div class="status-card-grid" id="rp-kpis" style="margin-bottom:16px;"></div>
+  <div id="rp-wrap"><div class="empty-state">Loading…</div></div>
+</main>
+
+<div class="modal-backdrop" id="rp-modal-backdrop" hidden>
+  <div class="modal modal-lg">
+    <button type="button" class="modal-close-btn" id="rp-modal-close" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2 id="rp-modal-title">New RADIUS Policy</h2>
+    <form id="rp-form">
+      <input type="hidden" id="rp-id">
+
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Name</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('clipboard-list', 14) }}</span>
+            <input type="text" id="rp-name" required maxlength="64" placeholder="mikrotik_admins">
+          </div>
+        </label>
+        <label class="field">
+          <span class="field-label">Priority</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('list-checks', 14) }}</span>
+            <input type="number" id="rp-priority" min="1" max="10000" value="100">
+          </div>
+        </label>
+      </div>
+      <div class="field-hint" style="margin-top:-8px;margin-bottom:12px;">Letters, digits, hyphens and underscores only — the name is used directly as a profile identifier in the generated configuration.</div>
+
+      <label class="field">
+        <span class="field-label">Description</span>
+        <textarea id="rp-description" rows="2" placeholder="What this policy is for"></textarea>
+      </label>
+
+      <div class="form-section">
+        <div class="form-section-title">Who and where</div>
+        <div class="content-sub" style="margin-bottom:10px;">Leave a condition unset to match anything. All set conditions must match.</div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">User group</span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('users', 14) }}</span>
+              <select id="rp-group"><option value="">Any group</option></select>
+            </div>
+          </label>
+          <label class="field">
+            <span class="field-label">Service-Type</span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('folder', 14) }}</span>
+              <select id="rp-service-type"><option value="">Any</option></select>
+            </div>
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Device</span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+              <select id="rp-device"><option value="">Any device</option></select>
+            </div>
+          </label>
+          <label class="field">
+            <span class="field-label">Device group</span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('users', 14) }}</span>
+              <select id="rp-device-group"><option value="">Any device group</option></select>
+            </div>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Result</div>
+        <div class="field-row">
+          <label class="field">
+            <span class="field-label">Decision</span>
+            <div class="field-icon-wrap">
+              <span class="field-icon">{{ icons.icon('check', 14) }}</span>
+              <select id="rp-action">
+                <option value="permit">Permit — Access-Accept</option>
+                <option value="deny">Deny — Access-Reject</option>
+              </select>
+            </div>
+          </label>
+          <label class="toggle-field field" style="justify-content:flex-start;padding-top:22px;">
+            <span class="toggle-switch">
+              <input type="checkbox" id="rp-enabled" checked>
+              <span class="toggle-switch-slider"></span>
+            </span>
+            <span>Enabled</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="form-section" id="rp-attributes-section">
+        <div class="form-section-title">Attributes returned</div>
+        <div class="content-sub" style="margin-bottom:10px;">
+          Sent back on an Access-Accept. Names come from the dictionary tac_plus-ng loads — see <a href="/radius/attributes">Attributes</a>.
+        </div>
+        <div id="rp-attributes"></div>
+        <button type="button" class="btn-secondary btn-small" id="rp-add-attr" style="width:auto;margin-top:8px;">+ Add attribute</button>
+      </div>
+
+      <div class="form-section">
+        <div class="form-section-title">Generated configuration</div>
+        <div class="content-sub" style="margin-bottom:8px;">What this policy will contribute, so you can check it before applying.</div>
+        <div class="diff-view" id="rp-preview"></div>
+      </div>
+
+      <div id="rp-error" class="form-error" role="alert" hidden></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="rp-cancel">Cancel</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save Policy</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_LIST = '{{ icons.icon("clipboard-list", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const esc = AAAPlatform.escapeHtml;
+
+  let policies = [];
+  let groups = [];
+  let devices = [];
+  let deviceGroups = [];
+  let attributeNames = [];
+  let serviceTypes = [];
+
+  function renderKpis() {
+    const enabled = policies.filter((p) => p.enabled).length;
+    const permits = policies.filter((p) => p.action === 'permit' && p.enabled).length;
+    document.getElementById('rp-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_LIST, label: 'Policies', value: policies.length }),
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'Enabled', value: enabled, state: enabled ? 'is-signal' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_ALERT, label: 'Disabled', value: policies.length - enabled,
+                            state: (policies.length - enabled) ? 'is-amber' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'Granting Access', value: permits,
+                            sub: permits ? null : 'no enabled policy permits anything' }),
+    ].join('');
+  }
+
+  function conditionSummary(p) {
+    const parts = [];
+    if (p.condition_group_name) parts.push('group ' + esc(p.condition_group_name));
+    if (p.condition_device_name) parts.push('device ' + esc(p.condition_device_name));
+    if (p.condition_device_group_name) parts.push('device group ' + esc(p.condition_device_group_name));
+    if (p.condition_service_type) parts.push('Service-Type ' + esc(p.condition_service_type));
+    // "Any request" is said explicitly: a policy with no conditions
+    // matches everything, which is easy to create by accident and
+    // important to see at a glance.
+    return parts.length ? parts.join(' · ') : '<span style="color:var(--amber);">any RADIUS request</span>';
+  }
+
+  function render() {
+    const wrap = document.getElementById('rp-wrap');
+    if (!policies.length) {
+      wrap.innerHTML = '<div class="empty-state"><div class="empty-state-title">No RADIUS policies yet</div>' +
+        '<p class="empty-state-desc">Without one, an authenticated RADIUS user is accepted but receives no attributes — ' +
+        'so the device falls back to its own default privilege.</p></div>';
+      return;
+    }
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>Priority</th><th>Name</th><th>Applies to</th>' +
+      '<th>Decision</th><th>Attributes</th><th>Status</th><th></th></tr></thead><tbody>' +
+      policies.map((p) =>
+        '<tr><td class="cell-mono">' + p.priority + '</td>' +
+        '<td>' + esc(p.name) +
+        (p.description ? '<div class="content-sub">' + esc(p.description) + '</div>' : '') + '</td>' +
+        '<td class="content-sub">' + conditionSummary(p) + '</td>' +
+        '<td><span class="cdiff-type is-' + (p.action === 'permit' ? 'added' : 'removed') + '">' +
+        '<span class="cdiff-type-mark">' + (p.action === 'permit' ? '+' : '\u2212') + '</span>' +
+        (p.action === 'permit' ? 'Permit' : 'Deny') + '</span></td>' +
+        '<td class="content-sub">' + (p.attributes.length
+          ? esc(p.attributes.map((a) => a.attribute).join(', '))
+          : '<span style="color:var(--amber);">none</span>') + '</td>' +
+        '<td><span class="badge sec-sev-badge ' + (p.enabled ? 'is-signal' : '') + '">' +
+        (p.enabled ? 'Enabled' : 'Disabled') + '</span></td>' +
+        '<td class="cell-actions">' +
+        '<button type="button" class="btn-secondary btn-small" data-edit="' + p.id + '">Edit</button>' +
+        '<button type="button" class="btn-danger btn-small" data-delete="' + p.id + '">Delete</button>' +
+        '</td></tr>').join('') + '</tbody></table>';
+  }
+
+  // ---- attribute rows ----
+  function attrRow(attribute, value) {
+    const options = attributeNames.map((n) =>
+      '<option value="' + esc(n) + '"' + (n === attribute ? ' selected' : '') + '>' + esc(n) + '</option>').join('');
+    return '<div class="field-row rp-attr-row" style="margin-bottom:8px;">' +
+      '<label class="field" style="margin:0;">' +
+      '<div class="field-icon-wrap"><span class="field-icon">{{ icons.icon("list-checks", 14) }}</span>' +
+      (attributeNames.length
+        ? '<select class="rp-attr-name">' + options + '</select>'
+        : '<input type="text" class="rp-attr-name" value="' + esc(attribute || '') + '" placeholder="Vendor:Attribute">') +
+      '</div></label>' +
+      '<label class="field" style="margin:0;">' +
+      '<div class="field-icon-wrap"><span class="field-icon">{{ icons.icon("folder", 14) }}</span>' +
+      '<input type="text" class="rp-attr-value" value="' + esc(value || '') + '" placeholder="value"></div></label>' +
+      '<button type="button" class="btn-danger btn-small rp-attr-remove" style="width:auto;align-self:flex-end;">Remove</button>' +
+      '</div>';
+  }
+
+  function collectAttributes() {
+    return [...document.querySelectorAll('.rp-attr-row')].map((row) => ({
+      attribute: (row.querySelector('.rp-attr-name').value || '').trim(),
+      value: (row.querySelector('.rp-attr-value').value || '').trim(),
+    })).filter((a) => a.attribute && a.value);
+  }
+
+  function updatePreview() {
+    const name = document.getElementById('rp-name').value.trim() || 'unnamed';
+    const action = document.getElementById('rp-action').value;
+    const st = document.getElementById('rp-service-type').value;
+    const attrs = collectAttributes();
+    let indent = '            ';
+    const lines = ['profile rad_' + name + ' {', '    script {', '        if (aaa.protocol == radius) {'];
+    if (st) { lines.push('            if (radius[Service-Type] == ' + st + ') {'); indent = '                '; }
+    attrs.forEach((a) => lines.push(indent + 'set radius[' + a.attribute + '] = "' + a.value.replace(/"/g, '\\"') + '"'));
+    lines.push(indent + action);
+    if (st) lines.push('            }');
+    lines.push('        }', '    }', '}');
+    document.getElementById('rp-preview').textContent = lines.join('\n');
+  }
+
+  document.getElementById('rp-add-attr').addEventListener('click', () => {
+    document.getElementById('rp-attributes').insertAdjacentHTML('beforeend', attrRow('', ''));
+    updatePreview();
+  });
+  document.getElementById('rp-attributes').addEventListener('click', (e) => {
+    if (e.target.classList.contains('rp-attr-remove')) {
+      e.target.closest('.rp-attr-row').remove();
+      updatePreview();
+    }
+  });
+  document.getElementById('rp-attributes').addEventListener('input', updatePreview);
+  document.getElementById('rp-attributes').addEventListener('change', updatePreview);
+  ['rp-name', 'rp-action', 'rp-service-type'].forEach((id) => {
+    const el = document.getElementById(id);
+    el.addEventListener(el.tagName === 'SELECT' ? 'change' : 'input', updatePreview);
+  });
+
+  // ---- modal ----
+  function openModal(policy) {
+    document.getElementById('rp-error').hidden = true;
+    document.getElementById('rp-modal-title').textContent = policy ? 'Edit RADIUS Policy' : 'New RADIUS Policy';
+    document.getElementById('rp-id').value = policy ? policy.id : '';
+    document.getElementById('rp-name').value = policy ? policy.name : '';
+    document.getElementById('rp-priority').value = policy ? policy.priority : 100;
+    document.getElementById('rp-description').value = policy ? (policy.description || '') : '';
+    document.getElementById('rp-group').value = policy ? (policy.condition_group_id || '') : '';
+    document.getElementById('rp-device').value = policy ? (policy.condition_device_id || '') : '';
+    document.getElementById('rp-device-group').value = policy ? (policy.condition_device_group_id || '') : '';
+    document.getElementById('rp-service-type').value = policy ? (policy.condition_service_type || '') : '';
+    document.getElementById('rp-action').value = policy ? policy.action : 'permit';
+    document.getElementById('rp-enabled').checked = policy ? policy.enabled : true;
+    document.getElementById('rp-attributes').innerHTML =
+      policy && policy.attributes.length
+        ? policy.attributes.map((a) => attrRow(a.attribute, a.value)).join('')
+        : '';
+    updatePreview();
+    document.getElementById('rp-modal-backdrop').hidden = false;
+  }
+  const closeModal = () => { document.getElementById('rp-modal-backdrop').hidden = true; };
+  document.getElementById('new-policy-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('rp-cancel').addEventListener('click', closeModal);
+  document.getElementById('rp-modal-close').addEventListener('click', closeModal);
+  document.getElementById('rp-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'rp-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('rp-wrap').addEventListener('click', async (e) => {
+    const edit = e.target.closest('button[data-edit]');
+    if (edit) { openModal(policies.find((p) => p.id === edit.dataset.edit)); return; }
+    const del = e.target.closest('button[data-delete]');
+    if (!del) return;
+    const p = policies.find((x) => x.id === del.dataset.delete);
+    if (!p || !window.confirm('Delete the RADIUS policy "' + p.name + '"? Devices using it will fall back to their own defaults.')) return;
+    const res = await AAAPlatform.authedFetch('/api/radius/policies/' + p.id, { method: 'DELETE' });
+    if (!res.ok) { AAAPlatform.toast('Could not delete that policy.', 'error'); return; }
+    AAAPlatform.toast('Policy deleted — apply the configuration to take effect.');
+    load();
+  });
+
+  document.getElementById('rp-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const box = document.getElementById('rp-error');
+    box.hidden = true;
+    const id = document.getElementById('rp-id').value;
+    const payload = {
+      name: document.getElementById('rp-name').value.trim(),
+      description: document.getElementById('rp-description').value.trim() || null,
+      enabled: document.getElementById('rp-enabled').checked,
+      priority: Number(document.getElementById('rp-priority').value) || 100,
+      condition_group_id: document.getElementById('rp-group').value || null,
+      condition_device_id: document.getElementById('rp-device').value || null,
+      condition_device_group_id: document.getElementById('rp-device-group').value || null,
+      condition_service_type: document.getElementById('rp-service-type').value || null,
+      action: document.getElementById('rp-action').value,
+      attributes: collectAttributes(),
+    };
+    if (payload.action === 'permit' && !payload.attributes.length &&
+        !window.confirm('This policy permits access but returns no attributes, so the device will use its own default privilege. Save anyway?')) {
+      return;
+    }
+
+    const res = await AAAPlatform.authedFetch(
+      id ? '/api/radius/policies/' + id : '/api/radius/policies',
+      { method: id ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      box.textContent = res.status === 403
+        ? "Your role doesn't have permission to manage policies."
+        : ((b.detail && typeof b.detail === 'string') ? b.detail : 'Could not save the policy.');
+      box.hidden = false;
+      return;
+    }
+    closeModal();
+    AAAPlatform.toast('Policy saved — apply the configuration to take effect.');
+    load();
+  });
+
+  async function loadOptions() {
+    const fetchJson = async (url) => {
+      try { const r = await AAAPlatform.authedFetch(url); return r.ok ? await r.json() : []; }
+      catch (e) { return []; }
+    };
+    groups = await fetchJson('/api/tacacs-groups');
+    devices = await fetchJson('/api/devices');
+    deviceGroups = await fetchJson('/api/device-groups');
+    const dict = await fetchJson('/api/radius/attributes');
+
+    document.getElementById('rp-group').innerHTML = '<option value="">Any group</option>' +
+      groups.map((g) => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('');
+    document.getElementById('rp-device').innerHTML = '<option value="">Any device</option>' +
+      devices.map((d) => '<option value="' + d.id + '">' + esc(d.name) + '</option>').join('');
+    document.getElementById('rp-device-group').innerHTML = '<option value="">Any device group</option>' +
+      deviceGroups.map((g) => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('');
+
+    const attrs = (dict && dict.attributes) || [];
+    attributeNames = attrs.map((a) => a.qualified_name);
+    // Service-Type values come from the dictionary's own enumeration,
+    // so the dropdown can only offer values the daemon recognises.
+    const st = attrs.find((a) => a.name === 'Service-Type');
+    serviceTypes = st ? Object.keys(st.values || {}) : [];
+    document.getElementById('rp-service-type').innerHTML = '<option value="">Any</option>' +
+      serviceTypes.map((v) => '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('');
+  }
+
+  async function load() {
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/radius/policies'); } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      document.getElementById('rp-wrap').innerHTML =
+        '<div class="empty-state">' + (res && res.status === 403
+          ? "Your role doesn't have permission to view policies."
+          : 'Could not load RADIUS policies.') + '</div>';
+      document.getElementById('rp-kpis').innerHTML = '';
+      return;
+    }
+    policies = await res.json();
+    renderKpis();
+    render();
+  }
+
+  (async () => { await loadOptions(); await load(); })();
+})();
+</script>
+{% endblock %}

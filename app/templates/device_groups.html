@@ -1,0 +1,305 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Device Groups — NetOpsGuard{% endblock %}
+{% block breadcrumb %}TACACS+ / Device Groups{% endblock %}
+
+{% block view_content %}
+<main class="content">
+      <div class="content-head">
+        <h1>Device Groups</h1>
+        <p class="content-sub">Assign devices to a group on the Devices page. Deleting a group ungroups its members — it doesn't delete them.</p>
+      </div>
+
+      <div class="toolbar">
+        <span class="content-sub" id="device-group-count"></span>
+        <button class="btn-primary btn-small" id="add-device-group-btn" style="width:auto;">+ Add group</button>
+      </div>
+
+      <div id="device-groups-table-wrap">
+        <div class="empty-state">Loading groups…</div>
+      </div>
+</main>
+
+<div class="modal-backdrop" id="device-group-modal-backdrop" hidden>
+  <div class="modal">
+    <button type="button" class="modal-close-btn" id="device-group-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2 id="device-group-modal-title">Add group</h2>
+    <form id="device-group-form">
+      <input type="hidden" id="device-group-id">
+      <label class="field">
+        <span class="field-label">Name</span>
+        <div class="field-icon-wrap">
+          <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+          <input type="text" id="device-group-name" required pattern="[A-Za-z0-9][A-Za-z0-9_\-]{0,63}">
+        </div>
+      </label>
+      <div class="field-hint" style="margin-top:-10px;margin-bottom:14px;">Letters, digits, hyphens, underscores only — kept consistent with other identifiers, though this name isn't emitted into the tac_plus-ng config.</div>
+
+      <label class="field">
+        <span class="field-label">Description</span>
+        <input type="text" id="device-group-description">
+      </label>
+
+      <div id="device-group-form-error" class="form-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="device-group-cancel-btn">Cancel</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Save group</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="device-members-modal-backdrop" hidden>
+  <div class="modal modal-md" style="max-width: 560px">
+    <button type="button" class="modal-close-btn" id="device-members-modal-close-btn" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2 id="device-members-modal-title">Members</h2>
+    <p class="content-sub" style="margin-top:-8px;">Membership itself has no effect on the deployed configuration by itself — it only matters once a Policy condition or Device Access Grant actually references this group. Adding or removing a member here won't show up as a pending change to apply unless something does.</p>
+
+    <div class="field-row" style="align-items:flex-end;margin-bottom:16px;">
+      <label class="field">
+        <span class="field-label">Add a device</span>
+        <select id="device-members-add-select"></select>
+      </label>
+      <button type="button" class="btn-primary btn-small" id="device-members-add-btn" style="width:auto;margin-bottom:2px;">Add</button>
+    </div>
+    <div id="device-members-add-note" class="content-sub" style="margin:-10px 0 14px 0;" hidden></div>
+
+    <div id="device-members-list"></div>
+
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="device-members-close-btn">Close</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+  let deviceGroups = [];
+
+  function escapeHtml(s) {
+    const div = document.createElement('div');
+    div.textContent = s ?? '';
+    return div.innerHTML;
+  }
+
+  function renderTable() {
+    const wrap = document.getElementById('device-groups-table-wrap');
+    document.getElementById('device-group-count').textContent = deviceGroups.length + (deviceGroups.length === 1 ? ' group' : ' groups');
+
+    if (deviceGroups.length === 0) {
+      wrap.innerHTML = '<div class="empty-state">No groups yet. Add one to get started.</div>';
+      return;
+    }
+
+    const rows = deviceGroups.map(g => `
+      <tr>
+        <td>${escapeHtml(g.name)}</td>
+        <td>${escapeHtml(g.description || '—')}</td>
+        <td class="cell-mono">${g.member_count} ${g.member_count === 1 ? 'member' : 'members'}</td>
+        <td class="cell-actions">
+          <button class="btn-secondary btn-small" data-members="${g.id}">Members</button>
+          <button class="btn-secondary btn-small" data-edit="${g.id}">Edit</button>
+          <button class="btn-danger btn-small" data-delete="${g.id}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+
+    wrap.innerHTML = `
+      <table class="data-table">
+        <thead>
+          <tr><th>Name</th><th>Description</th><th>Members</th><th></th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    wrap.querySelectorAll('[data-edit]').forEach(btn => {
+      btn.addEventListener('click', () => openModal(deviceGroups.find(g => g.id === btn.dataset.edit)));
+    });
+    wrap.querySelectorAll('[data-delete]').forEach(btn => {
+      btn.addEventListener('click', () => deleteGroup(btn.dataset.delete));
+    });
+    wrap.querySelectorAll('[data-members]').forEach(btn => {
+      btn.addEventListener('click', () => openMembersModal(deviceGroups.find(g => g.id === btn.dataset.members)));
+    });
+  }
+
+  async function loadGroups() {
+    const res = await AAAPlatform.authedFetch('/api/device-groups');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    deviceGroups = await res.json();
+    renderTable();
+  }
+
+  function openModal(group) {
+    document.getElementById('device-group-form-error').hidden = true;
+    document.getElementById('device-group-form').reset();
+
+    if (group) {
+      document.getElementById('device-group-modal-title').textContent = 'Edit group';
+      document.getElementById('device-group-id').value = group.id;
+      document.getElementById('device-group-name').value = group.name;
+      document.getElementById('device-group-description').value = group.description || '';
+    } else {
+      document.getElementById('device-group-modal-title').textContent = 'Add group';
+      document.getElementById('device-group-id').value = '';
+    }
+    document.getElementById('device-group-modal-backdrop').hidden = false;
+  }
+
+  function closeModal() {
+    document.getElementById('device-group-modal-backdrop').hidden = true;
+  }
+
+  document.getElementById('add-device-group-btn').addEventListener('click', () => openModal(null));
+  document.getElementById('device-group-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('device-group-modal-close-btn').addEventListener('click', closeModal);
+  document.getElementById('device-group-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'device-group-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('device-group-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errorBox = document.getElementById('device-group-form-error');
+    errorBox.hidden = true;
+
+    const id = document.getElementById('device-group-id').value;
+    const payload = {
+      name: document.getElementById('device-group-name').value,
+      description: document.getElementById('device-group-description').value || null,
+    };
+
+    const url = id ? `/api/device-groups/${id}` : '/api/device-groups';
+    const method = id ? 'PUT' : 'POST';
+
+    const res = await AAAPlatform.authedFetch(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      errorBox.textContent = (body.detail && typeof body.detail === 'string') ? body.detail : 'Could not save group.';
+      errorBox.hidden = false;
+      return;
+    }
+
+    closeModal();
+    AAAPlatform.toast(id ? 'Group updated.' : 'Group added.');
+    loadGroups();
+  });
+
+  async function deleteGroup(id) {
+    const group = deviceGroups.find(g => g.id === id);
+    const memberNote = group && group.member_count > 0 ? ` Its ${group.member_count} member(s) will be ungrouped, not deleted.` : '';
+    if (!confirm(`Delete group "${group ? group.name : id}"?${memberNote}`)) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/device-groups/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not delete group.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Group deleted.');
+    loadGroups();
+  }
+
+  // ---------- Members ----------
+  let currentMembersGroup = null;
+  let allDevicesForMembers = [];
+
+  async function openMembersModal(group) {
+    if (!group) return;
+    currentMembersGroup = group;
+    document.getElementById('device-members-modal-title').textContent = `Members — ${group.name}`;
+    document.getElementById('device-members-add-note').hidden = true;
+    await refreshDeviceMembers();
+    document.getElementById('device-members-modal-backdrop').hidden = false;
+  }
+
+  async function refreshDeviceMembers() {
+    const listEl = document.getElementById('device-members-list');
+    listEl.innerHTML = '<div class="content-sub">Loading…</div>';
+
+    const [membersRes, devicesRes] = await Promise.all([
+      AAAPlatform.authedFetch(`/api/device-groups/${currentMembersGroup.id}/members`),
+      AAAPlatform.authedFetch('/api/devices'),
+    ]);
+
+    const members = membersRes.ok ? await membersRes.json() : [];
+    allDevicesForMembers = devicesRes.ok ? await devicesRes.json() : [];
+
+    if (members.length === 0) {
+      listEl.innerHTML = '<div class="empty-state">No members yet.</div>';
+    } else {
+      listEl.innerHTML = members.map(m => `
+        <div class="version-row">
+          <span style="flex:1;">${escapeHtml(m.name)}${m.ip_address ? ' <span class="content-sub cell-mono">(' + escapeHtml(m.ip_address) + ')</span>' : ''}${!m.enabled ? ' <span class="badge badge-off">Disabled</span>' : ''}</span>
+          <button class="btn-danger btn-small" data-remove-device-member="${m.id}">Remove</button>
+        </div>
+      `).join('');
+      listEl.querySelectorAll('[data-remove-device-member]').forEach(btn => {
+        btn.addEventListener('click', () => removeDeviceMember(btn.dataset.removeDeviceMember));
+      });
+    }
+
+    const memberIds = new Set(members.map(m => m.id));
+    const candidates = allDevicesForMembers.filter(d => !memberIds.has(d.id));
+    const addSelect = document.getElementById('device-members-add-select');
+    addSelect.innerHTML = candidates.length
+      ? candidates.map(d => `<option value="${d.id}">${escapeHtml(d.name)}${d.device_group_name ? ' (currently: ' + escapeHtml(d.device_group_name) + ')' : ''}</option>`).join('')
+      : '<option value="">— No other devices —</option>';
+  }
+
+  async function addDeviceMember() {
+    const select = document.getElementById('device-members-add-select');
+    const deviceId = select.value;
+    if (!deviceId) return;
+
+    const res = await AAAPlatform.authedFetch(`/api/device-groups/${currentMembersGroup.id}/members`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ device_id: deviceId }),
+    });
+
+    if (!res.ok) {
+      AAAPlatform.toast('Could not add member.', 'error');
+      return;
+    }
+    const data = await res.json();
+    const note = document.getElementById('device-members-add-note');
+    if (data.reassigned_from) {
+      note.textContent = `Moved from "${data.reassigned_from}" — a device can only be in one group at a time.`;
+      note.hidden = false;
+    } else {
+      note.hidden = true;
+    }
+    AAAPlatform.toast('Member added.');
+    await refreshDeviceMembers();
+    loadGroups();
+  }
+
+  async function removeDeviceMember(deviceId) {
+    if (!confirm('Remove this device from the group? The device itself is not deleted, just ungrouped.')) return;
+    const res = await AAAPlatform.authedFetch(`/api/device-groups/${currentMembersGroup.id}/members/${deviceId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      AAAPlatform.toast('Could not remove member.', 'error');
+      return;
+    }
+    AAAPlatform.toast('Member removed.');
+    await refreshDeviceMembers();
+    loadGroups();
+  }
+
+  document.getElementById('device-members-add-btn').addEventListener('click', addDeviceMember);
+  document.getElementById('device-members-close-btn').addEventListener('click', () => {
+    document.getElementById('device-members-modal-backdrop').hidden = true;
+  });
+  document.getElementById('device-members-modal-close-btn').addEventListener('click', () => {
+    document.getElementById('device-members-modal-backdrop').hidden = true;
+  });
+  document.getElementById('device-members-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'device-members-modal-backdrop') document.getElementById('device-members-modal-backdrop').hidden = true;
+  });
+
+  loadGroups();
+</script>
+{% endblock %}

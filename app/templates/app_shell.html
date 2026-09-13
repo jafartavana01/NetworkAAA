@@ -1,0 +1,456 @@
+{#
+  app_shell.html
+  ===============
+  The persistent chrome for the "single-window enterprise console":
+  sidebar + topbar render ONCE per real page load and never reload
+  again during a session -- app/static/js/spa.js swaps only
+  #view-root's content when navigating between views. Every
+  authenticated page extends this (instead of extending base.html
+  directly and re-declaring the shell markup itself, which is what
+  every page did before this file existed).
+
+  Child templates provide:
+    {% block breadcrumb %}...{% endblock %}     -- plain text, shown in the topbar
+    {% block view_content %}...{% endblock %}   -- everything spa.js swaps between views
+    {% block view_scripts %}...{% endblock %}   -- that view's own <script> logic
+
+  #view-root carries the breadcrumb as a data attribute
+  (data-breadcrumb) specifically so spa.js can read the NEXT view's
+  breadcrumb straight out of the fetched HTML without needing a
+  separate API call or a second templated block just for that.
+#}
+{% extends "base.html" %}
+{% block body_class %}app-body{% endblock %}
+
+{% block content %}
+{% set breadcrumb_text = self.breadcrumb() %}
+<div class="nav-progress"></div>
+<div class="app-shell">
+  <div class="sidebar-scrim"></div>
+  {% include "partials/sidebar.html" %}
+
+  <div class="app-main">
+    <header class="topbar">
+      <div class="breadcrumb">
+        <button type="button" class="mobile-nav-toggle" aria-label="Open navigation">☰</button>
+        <span id="breadcrumb-text">{{ breadcrumb_text }}</span>
+      </div>
+      <div class="topbar-right">
+        <button id="global-apply-config-btn" class="btn-primary btn-small" style="width:auto;" hidden>Apply Configuration</button>
+        <div class="bg-notif-widget" id="bg-notif-widget" hidden>
+          <button type="button" class="bg-notif-bell-btn" id="bg-notif-bell-btn" aria-label="Background operations">
+            <span class="bg-notif-bell-icon">⏳</span>
+            <span class="bg-notif-badge" id="bg-notif-badge">0</span>
+          </button>
+          <div class="bg-notif-panel" id="bg-notif-panel" hidden></div>
+        </div>
+        <span class="admin-name">{{ admin_username }}</span>
+        <button id="logout-btn" class="btn-ghost">Sign out</button>
+      </div>
+    </header>
+
+    <div id="view-root" data-breadcrumb="{{ breadcrumb_text }}">
+      {% block view_content %}{% endblock %}
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="global-apply-modal-backdrop" hidden>
+  <div class="modal modal-md" style="max-width: min(90vw, 900px); width: 90vw; max-height: 85vh">
+    <h2>Apply Configuration</h2>
+    <p class="content-sub" style="margin-top:-8px;">The changes below will be written to <span class="cell-mono">tac_plus-ng</span> and the daemon reloaded.</p>
+    <div id="global-apply-diff" class="cell-mono content-sub" style="white-space:pre-wrap;background:var(--bg-void);border:1px solid var(--line);border-radius:var(--radius);padding:12px;max-height:55vh;overflow-y:auto;margin-bottom:16px;"></div>
+    <div id="global-apply-error" class="form-error" role="alert" hidden></div>
+    <div class="modal-actions">
+      <button type="button" class="btn-ghost" id="global-apply-cancel-btn">Cancel</button>
+      <button type="button" class="btn-primary" style="width:auto;" id="global-apply-confirm-btn">Apply</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/spa.js"></script>
+<script>
+  // Shell-level status indicator (the sidebar's daemon-dot/label) --
+  // deliberately independent of whichever view is currently loaded,
+  // since the sidebar itself is persistent chrome now, not something
+  // that reloads per view. The Dashboard page's own script still does
+  // its own richer status panel; this is just the always-visible
+  // ambient indicator.
+  (function () {
+    const dot = document.getElementById('daemon-dot');
+    const label = document.getElementById('daemon-label');
+    if (!dot || !label) return;
+
+    function colorFor(state) {
+      if (state === 'active') return 'signal';
+      if (state === 'activating' || state === 'reloading') return 'amber';
+      return 'red';
+    }
+
+    async function poll() {
+      try {
+        const res = await AAAPlatform.authedFetch('/api/system/status');
+        if (!res.ok) return;
+        const data = await res.json();
+        const tac = (data.services && data.services['tac-plus-ng.service']) || {};
+        dot.className = 'dot dot-' + colorFor(tac.active_state);
+        label.textContent = 'tac_plus-ng — ' + (tac.active_state || 'unknown');
+      } catch (err) {
+        // A transient failure here shouldn't be loud -- the Dashboard's
+        // own panel is the authoritative place to see a real error.
+      }
+    }
+
+    poll();
+    setInterval(poll, 20000);
+  })();
+
+  // Global "Apply Configuration" affordance -- persistent shell chrome,
+  // independent of whichever view is loaded, same reasoning as the
+  // daemon-status poll above. Reuses the exact same
+  // GET /api/config/candidate (has_changes + diff) and
+  // POST /api/config/apply the Config page's own Apply button already
+  // uses -- this is a second entry point to the identical flow, not a
+  // separate one.
+  (function () {
+    const applyBtn = document.getElementById('global-apply-config-btn');
+    const modalBackdrop = document.getElementById('global-apply-modal-backdrop');
+    if (!applyBtn || !modalBackdrop) return;
+
+    const diffBox = document.getElementById('global-apply-diff');
+    const errorBox = document.getElementById('global-apply-error');
+    const confirmBtn = document.getElementById('global-apply-confirm-btn');
+    const cancelBtn = document.getElementById('global-apply-cancel-btn');
+
+    async function checkPending() {
+      try {
+        const res = await AAAPlatform.authedFetch('/api/config/candidate');
+        if (!res.ok) return;
+        const data = await res.json();
+        const hasUncompilable = data.uncompilable_policies && data.uncompilable_policies.length > 0;
+        if (data.has_changes) {
+          applyBtn.hidden = false;
+          applyBtn.textContent = 'Apply Configuration';
+          applyBtn.className = 'btn-primary btn-small';
+        } else if (hasUncompilable) {
+          // Nothing to apply (the excluded policy contributes zero
+          // bytes to the candidate), but something still needs the
+          // admin's attention -- a visible signal from ANY page,
+          // not only if they happen to navigate to Config, which is
+          // exactly the gap that made this kind of exclusion silent
+          // and confusing before.
+          applyBtn.hidden = false;
+          applyBtn.textContent = '⚠ Policy Excluded';
+          applyBtn.className = 'btn-secondary btn-small';
+        } else {
+          applyBtn.hidden = true;
+        }
+      } catch (err) {
+        // A transient failure here just leaves the button in its last
+        // known state -- the Config page itself is the authoritative
+        // place to see a real error.
+      }
+    }
+
+    async function openModal() {
+      errorBox.hidden = true;
+      diffBox.textContent = 'Loading…';
+      confirmBtn.disabled = false;
+      confirmBtn.hidden = false;
+      confirmBtn.textContent = 'Apply';
+      modalBackdrop.hidden = false;
+
+      const res = await AAAPlatform.authedFetch('/api/config/candidate');
+      if (!res.ok) {
+        diffBox.textContent = '';
+        errorBox.textContent = 'Could not load the pending changes.';
+        errorBox.hidden = false;
+        return;
+      }
+      const data = await res.json();
+      const hasUncompilable = data.uncompilable_policies && data.uncompilable_policies.length > 0;
+      if (!data.has_changes) {
+        if (hasUncompilable) {
+          const rows = data.uncompilable_policies.map(p => `${p.name}: ${p.reason}`).join('\n\n');
+          diffBox.textContent = `No pending changes to apply — but the following ${data.uncompilable_policies.length === 1 ? 'policy is' : 'policies are'} enabled and can't be compiled into the real configuration, so ${data.uncompilable_policies.length === 1 ? 'it contributes' : 'they contribute'} nothing to what's applied:\n\n${rows}`;
+        } else {
+          diffBox.textContent = 'No pending changes.';
+        }
+        confirmBtn.hidden = true;
+        applyBtn.hidden = !hasUncompilable;
+        return;
+      }
+      diffBox.textContent = data.diff;
+    }
+
+    applyBtn.addEventListener('click', openModal);
+    cancelBtn.addEventListener('click', () => { modalBackdrop.hidden = true; });
+    modalBackdrop.addEventListener('click', (e) => {
+      if (e.target.id === 'global-apply-modal-backdrop') modalBackdrop.hidden = true;
+    });
+
+    confirmBtn.addEventListener('click', async () => {
+      errorBox.hidden = true;
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Applying…';
+      const res = await AAAPlatform.authedFetch('/api/config/apply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const detail = body.detail;
+        const msg = (detail && typeof detail === 'object' && detail.message) ? detail.message
+          : (typeof detail === 'string') ? detail
+          : 'Apply failed.';
+        errorBox.textContent = msg;
+        errorBox.hidden = false;
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Apply';
+        return;
+      }
+      modalBackdrop.hidden = true;
+      applyBtn.hidden = true;
+      AAAPlatform.toast('Configuration applied.');
+    });
+
+    checkPending();
+    setInterval(checkPending, 20000);
+  })();
+
+  // ---------- sidebar: collapsible sections, search, Ctrl+K ----------
+  // Shell-level (runs once, not re-run per SPA view) -- the sidebar
+  // itself is persistent chrome, same reasoning as the two IIFEs
+  // above. Every navigable item is read straight from the sidebar's
+  // own rendered DOM (never a separately-maintained JS list), so
+  // Ctrl+K and search can never show a page the current admin doesn't
+  // actually have -- an item this admin lacks permission for was
+  // never rendered server-side in the first place (see
+  // partials/sidebar.html / app.modules.sidebar's own superadmin
+  // gating), so it's simply absent from the DOM this reads.
+  //
+  // Accordion, not independent per-section toggles: at most ONE
+  // section is ever open. No localStorage persistence across page
+  // loads is used here on purpose -- every fresh load (including
+  // login, which lands on Dashboard, itself outside every section)
+  // starts with every section collapsed; only navigating into a
+  // section's own page opens it, and only for that one page.
+  (function () {
+    const sections = Array.from(document.querySelectorAll('.nav-section'));
+    if (!sections.length) return; // pages outside the shell (login) have no sidebar at all
+
+    function setSectionCollapsed(section, collapsed) {
+      section.classList.toggle('is-collapsed', collapsed);
+      const toggle = section.querySelector('.nav-section-toggle');
+      if (toggle) toggle.setAttribute('aria-expanded', String(!collapsed));
+    }
+
+    // Closes every section except the one whose key matches openKey --
+    // pass null to collapse all of them (the "just landed on
+    // Dashboard, or manually closed the only open section" case).
+    function setOpenSection(openKey) {
+      sections.forEach((section) => {
+        setSectionCollapsed(section, section.dataset.sectionKey !== openKey);
+      });
+    }
+
+    function syncActiveSection() {
+      let activeKey = null;
+      sections.forEach((section) => {
+        const hasActive = !!section.querySelector('.nav-item.active');
+        section.classList.toggle('has-active', hasActive);
+        if (hasActive) activeKey = section.dataset.sectionKey;
+      });
+      // The section containing wherever navigation just landed opens,
+      // and only it -- accordion, not "also keep whatever was open
+      // before." Landing on Dashboard (activeKey stays null, since
+      // Dashboard isn't inside any section) collapses everything.
+      setOpenSection(activeKey);
+    }
+
+    sections.forEach((section) => {
+      const toggle = section.querySelector('.nav-section-toggle');
+      if (!toggle) return;
+      toggle.addEventListener('click', () => {
+        const key = section.dataset.sectionKey;
+        const alreadyOpen = !section.classList.contains('is-collapsed');
+        // Clicking the already-open section closes it (back to
+        // nothing open); clicking any other section opens just that
+        // one, closing whatever was open before -- standard accordion
+        // toggle semantics.
+        setOpenSection(alreadyOpen ? null : key);
+      });
+    });
+
+    document.addEventListener('spa:navigated', syncActiveSection);
+    syncActiveSection();
+
+    // ---- search (filters the already-rendered sidebar; no API call) ----
+    const searchInput = document.getElementById('nav-search-input');
+    if (searchInput) {
+      function applySearch(query) {
+        const q = query.trim().toLowerCase();
+        if (!q) {
+          sections.forEach((section) => {
+            section.removeAttribute('data-search-hidden');
+            section.querySelectorAll('.nav-item').forEach((el) => el.removeAttribute('data-search-hidden'));
+          });
+          syncActiveSection(); // restore normal accordion state once the query is cleared
+          return;
+        }
+        // Search is a deliberate exception to strict accordion --
+        // results can span several sections, and all of them need to
+        // be visible at once, not just whichever one the accordion
+        // currently has open.
+        sections.forEach((section) => {
+          let sectionHasMatch = false;
+          section.querySelectorAll('.nav-item').forEach((el) => {
+            const haystack = el.dataset.keywords || el.textContent.toLowerCase();
+            const matches = haystack.includes(q);
+            el.toggleAttribute('data-search-hidden', !matches);
+            if (matches) sectionHasMatch = true;
+          });
+          section.toggleAttribute('data-search-hidden', !sectionHasMatch);
+          if (sectionHasMatch) setSectionCollapsed(section, false); // force-open so matches are actually visible
+        });
+      }
+      searchInput.addEventListener('input', () => applySearch(searchInput.value));
+      searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { searchInput.value = ''; applySearch(''); searchInput.blur(); }
+      });
+    }
+
+    // ---- Ctrl+K command palette ----
+    const cmdkBackdrop = document.getElementById('cmdk-backdrop');
+    const cmdkInput = document.getElementById('cmdk-input');
+    const cmdkResults = document.getElementById('cmdk-results');
+    if (!cmdkBackdrop || !cmdkInput || !cmdkResults) return;
+
+    function collectItems() {
+      // Re-read the DOM each time rather than caching once -- the
+      // sidebar's own content never changes after initial render for
+      // a given admin, but reading fresh costs nothing measurable and
+      // avoids ever showing a stale list.
+      return sections.flatMap((section) => {
+        const sectionLabel = section.querySelector('.nav-section-toggle-label span')?.textContent || '';
+        return Array.from(section.querySelectorAll('.nav-item')).map((el) => ({
+          label: el.textContent.trim(),
+          path: el.getAttribute('href'),
+          section: sectionLabel,
+          keywords: el.dataset.keywords || '',
+        }));
+      });
+    }
+
+    let selectedIndex = 0;
+    let currentResults = [];
+
+    function renderResults(query) {
+      const q = query.trim().toLowerCase();
+      const items = collectItems();
+      const matches = q ? items.filter((i) => i.keywords.includes(q)) : items;
+      currentResults = matches;
+      selectedIndex = 0;
+
+      if (!matches.length) {
+        cmdkResults.innerHTML = '<div class="cmdk-empty">No matching pages.</div>';
+        return;
+      }
+
+      const bySection = new Map();
+      matches.forEach((item) => {
+        if (!bySection.has(item.section)) bySection.set(item.section, []);
+        bySection.get(item.section).push(item);
+      });
+
+      let html = '';
+      let flatIndex = 0;
+      bySection.forEach((sectionItems, sectionLabel) => {
+        html += `<div class="cmdk-section-label">${sectionLabel}</div>`;
+        sectionItems.forEach((item) => {
+          html += `<a class="cmdk-item ${flatIndex === 0 ? 'is-selected' : ''}" href="${item.path}" data-index="${flatIndex}">
+            <span class="cmdk-item-arrow">→</span>${item.label}
+          </a>`;
+          flatIndex += 1;
+        });
+      });
+      cmdkResults.innerHTML = html;
+    }
+
+    function updateSelection(delta) {
+      if (!currentResults.length) return;
+      selectedIndex = Math.max(0, Math.min(currentResults.length - 1, selectedIndex + delta));
+      cmdkResults.querySelectorAll('.cmdk-item').forEach((el, i) => {
+        el.classList.toggle('is-selected', i === selectedIndex);
+      });
+      const selectedEl = cmdkResults.querySelector('.cmdk-item.is-selected');
+      if (selectedEl) selectedEl.scrollIntoView({ block: 'nearest' });
+    }
+
+    function openPalette() {
+      cmdkBackdrop.hidden = false;
+      cmdkInput.value = '';
+      renderResults('');
+      cmdkInput.focus();
+    }
+    function closePalette() {
+      cmdkBackdrop.hidden = true;
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (cmdkBackdrop.hidden) openPalette(); else closePalette();
+      }
+    });
+    cmdkBackdrop.addEventListener('click', (e) => {
+      if (e.target === cmdkBackdrop) closePalette();
+    });
+    cmdkInput.addEventListener('input', () => renderResults(cmdkInput.value));
+    cmdkInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { closePalette(); return; }
+      if (e.key === 'ArrowDown') { e.preventDefault(); updateSelection(1); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); updateSelection(-1); return; }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const selected = currentResults[selectedIndex];
+        if (selected) {
+          closePalette();
+          // A real link click -- spa.js's own delegated click listener
+          // intercepts this exactly like any other sidebar link, so
+          // the SPA transition (not a full reload) happens naturally.
+          const link = cmdkResults.querySelector(`.cmdk-item[data-index="${selectedIndex}"]`);
+          if (link) link.click();
+        }
+      }
+    });
+  })();
+</script>
+<!--
+  view-scripts-container exists purely as a precise query target for
+  spa.js, which must re-execute ONLY a newly-fetched view's own script
+  (this block) on every navigation, and must NEVER re-run the two
+  shell-level scripts above (spa.js itself, and the daemon-status
+  poller) -- those run exactly once, at the real initial page load,
+  same as the sidebar/topbar they belong to. A <script> tag executes
+  normally regardless of being wrapped in a div, so this costs nothing
+  functionally; it just gives spa.js's `#view-scripts-container script`
+  selector something unambiguous to target instead of an easy-to-forget
+  exclude-list that a future shell-level script could slip past.
+-->
+<div id="view-scripts-container">
+{% block view_scripts %}{% endblock %}
+</div>
+
+<div class="modal-backdrop" id="unsaved-changes-modal-backdrop" hidden style="z-index: 10001;">
+  <div class="modal modal-md" style="min-width: 340px">
+    <h2>Unsaved changes</h2>
+    <p class="content-sub" style="margin-top:-8px;">This form has changes that haven't been saved. Discard them and close?</p>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="unsaved-changes-keep-editing-btn">Keep editing</button>
+      <button type="button" class="btn-danger" id="unsaved-changes-discard-btn">Discard and close</button>
+    </div>
+  </div>
+</div>
+{% endblock %}

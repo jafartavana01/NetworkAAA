@@ -1,0 +1,274 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Access Events — NetOpsGuard{% endblock %}
+{% block breadcrumb %}TACACS+ / Access Events{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="content-head">
+    <h1>Access Events</h1>
+    <p class="content-sub">Who logged in, who was refused, and where — filtered by user, device, device group and outcome.</p>
+    <p class="content-sub" id="source-note" style="margin-top:4px;"></p>
+  </div>
+
+  <div class="status-card-grid" id="ae-kpis" style="margin-bottom:16px;"></div>
+
+  <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+    <label class="field" style="min-width:150px;">
+      <span class="field-label">Event type</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('list-checks', 14) }}</span>
+        <select id="filter-kind">
+          <option value="authentication">Authentication (login success/fail)</option>
+          <option value="login">Session authorization</option>
+          <option value="command">Command decisions</option>
+          <option value="all">All authorization events</option>
+        </select>
+      </div>
+    </label>
+    <label class="field" style="min-width:150px;">
+      <span class="field-label">Outcome</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('check', 14) }}</span>
+        <select id="filter-outcome">
+          <option value="">All outcomes</option>
+          <option value="success">Success</option>
+          <option value="failure">Failure</option>
+          <option value="unknown">Unknown</option>
+        </select>
+      </div>
+    </label>
+    <label class="field" style="min-width:150px;">
+      <span class="field-label">User</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('user', 14) }}</span>
+        <input type="text" id="filter-user" placeholder="Username…">
+      </div>
+    </label>
+    <label class="field" style="min-width:150px;">
+      <span class="field-label">Device</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('server', 14) }}</span>
+        <input type="text" id="filter-device" placeholder="Device or IP…">
+      </div>
+    </label>
+    <label class="field" style="min-width:170px;">
+      <span class="field-label">Device group</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('users', 14) }}</span>
+        <select id="filter-group"><option value="">All groups</option></select>
+      </div>
+    </label>
+  </div>
+
+  <div class="toolbar" style="gap:12px;flex-wrap:wrap;">
+    <label class="field" style="min-width:190px;">
+      <span class="field-label">From</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('history', 14) }}</span>
+        <input type="datetime-local" id="filter-since">
+      </div>
+    </label>
+    <label class="field" style="min-width:190px;">
+      <span class="field-label">To</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('history', 14) }}</span>
+        <input type="datetime-local" id="filter-until">
+      </div>
+    </label>
+    <label class="field" style="min-width:200px;flex:1;">
+      <span class="field-label">Search</span>
+      <div class="field-icon-wrap">
+        <span class="field-icon">{{ icons.icon('search', 14) }}</span>
+        <input type="text" id="filter-search" placeholder="Any field…">
+      </div>
+    </label>
+    <div style="display:flex;gap:8px;align-self:flex-end;">
+      <button type="button" class="btn-primary btn-small" id="apply-btn" style="width:auto;">Apply</button>
+      <button type="button" class="btn-ghost btn-small" id="reset-btn" style="width:auto;">Reset</button>
+      <button type="button" class="btn-secondary btn-small" id="export-btn" style="width:auto;">Export CSV</button>
+    </div>
+  </div>
+
+  <div id="ae-wrap"><div class="empty-state">Loading…</div></div>
+  <div class="toolbar" style="margin-top:10px;">
+    <span class="content-sub" id="ae-page-info"></span>
+    <div style="display:flex;gap:8px;">
+      <button type="button" class="btn-ghost btn-small" id="ae-prev">Previous</button>
+      <button type="button" class="btn-ghost btn-small" id="ae-next">Next</button>
+    </div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_LIST = '{{ icons.icon("clipboard-list", 16) }}';
+  const ICON_CHECK = '{{ icons.icon("check", 16) }}';
+  const ICON_ALERT = '{{ icons.icon("alert-triangle", 16) }}';
+  const ICON_HELP = '{{ icons.icon("history", 16) }}';
+  const esc = AAAPlatform.escapeHtml;
+
+  const PAGE_SIZE = 50;
+  let rows = [];
+  let counts = {};
+  let page = 0;
+
+  const OUTCOME = {
+    success: { label: 'Success', cls: 'is-signal', mark: '\u2713' },
+    failure: { label: 'Failure', cls: 'is-red', mark: '\u2715' },
+    unknown: { label: 'Unknown', cls: 'is-amber', mark: '?' },
+  };
+
+  function buildQuery() {
+    const p = new URLSearchParams();
+    const add = (k, v) => { if (v) p.set(k, v); };
+    add('kind', document.getElementById('filter-kind').value);
+    add('outcome', document.getElementById('filter-outcome').value);
+    add('user', document.getElementById('filter-user').value.trim());
+    add('device', document.getElementById('filter-device').value.trim());
+    add('device_group_id', document.getElementById('filter-group').value);
+    add('search', document.getElementById('filter-search').value.trim());
+    add('since', document.getElementById('filter-since').value);
+    add('until', document.getElementById('filter-until').value);
+    p.set('limit', '2000');
+    return p.toString();
+  }
+
+  // Each event type comes from a DIFFERENT log answering a different
+  // question. Saying which, on screen, stops "permitted" being read as
+  // "logged in" -- they are not the same thing and can disagree.
+  const SOURCE_NOTE = {
+    authentication: 'From the access log: whether the credential check itself passed.',
+    login: 'From the authorization log: whether an authenticated session was allowed on the device.',
+    command: 'From the authorization log: the permit/deny decision for each command.',
+    all: 'From the authorization log: session and command decisions together.',
+  };
+
+  function render() {
+    const wrap = document.getElementById('ae-wrap');
+    const maxPage = Math.max(0, Math.ceil(rows.length / PAGE_SIZE) - 1);
+    if (page > maxPage) page = maxPage;
+    const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+    if (!rows.length) {
+      wrap.innerHTML = '<div class="empty-state"><div class="empty-state-title">No matching access events</div>' +
+        '<p class="empty-state-desc">Nothing in the current authorization log tail matches these filters. ' +
+        'Widen the time range, or clear a filter.</p></div>';
+      document.getElementById('ae-page-info').textContent = '';
+      return;
+    }
+
+    const kind = document.getElementById('filter-kind').value;
+    const showCommand = kind === 'command' || kind === 'all';
+    wrap.innerHTML =
+      '<table class="data-table"><thead><tr><th>Time</th><th>Outcome</th><th>User</th><th>Device</th>' +
+      '<th>Source IP</th>' + (showCommand ? '<th>Command</th>' : '') +
+      (kind === 'authentication' ? '<th>Message</th>' : '<th>Raw result</th>') + '</tr></thead><tbody>' +
+      slice.map((r) => {
+        const o = OUTCOME[r.outcome] || OUTCOME.unknown;
+        return '<tr><td class="content-sub">' +
+          (r.timestamp ? new Date(r.timestamp).toLocaleString() : '\u2014') + '</td>' +
+          // Marker and word, never colour alone.
+          '<td><span class="cdiff-type is-' + (r.outcome === 'success' ? 'added' : (r.outcome === 'failure' ? 'removed' : 'modified')) + '">' +
+          '<span class="cdiff-type-mark">' + o.mark + '</span>' + o.label + '</span></td>' +
+          '<td>' + esc(r.user || '\u2014') + '</td>' +
+          '<td class="cell-mono">' + esc(r.device || '\u2014') + '</td>' +
+          '<td class="cell-mono content-sub">' + esc(r.source_ip || '\u2014') + '</td>' +
+          (showCommand ? '<td class="cell-mono content-sub">' + esc(r.command || '\u2014') + '</td>' : '') +
+          // The raw field is shown so an operator can see what the
+          // classification was derived FROM, not just its verdict.
+          '<td class="cell-mono content-sub">' + esc(r.result || '\u2014') + '</td></tr>';
+      }).join('') + '</tbody></table>';
+
+    document.getElementById('ae-page-info').textContent =
+      'Showing ' + (page * PAGE_SIZE + 1) + '\u2013' + Math.min((page + 1) * PAGE_SIZE, rows.length) +
+      ' of ' + rows.length;
+    document.getElementById('ae-prev').disabled = page === 0;
+    document.getElementById('ae-next').disabled = page >= maxPage;
+  }
+
+  function renderKpis(data) {
+    document.getElementById('ae-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_LIST, label: 'Matching Events', value: data.matched,
+                            sub: 'of ' + data.total_in_log + ' in the log tail' }),
+      AAAPlatform.kpiCard({ icon: ICON_CHECK, label: 'Success', value: counts.success || 0, state: 'is-signal' }),
+      AAAPlatform.kpiCard({ icon: ICON_ALERT, label: 'Failure', value: counts.failure || 0,
+                            state: (counts.failure || 0) ? 'is-red' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_HELP, label: 'Unreadable', value: counts.unknown || 0,
+                            state: (counts.unknown || 0) ? 'is-amber' : '',
+                            sub: (counts.unknown || 0) ? 'no result recorded' : null }),
+    ].join('');
+  }
+
+  async function load() {
+    document.getElementById('ae-wrap').innerHTML = '<div class="empty-state">Loading…</div>';
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/tacacs-accounting/access-events?' + buildQuery()); }
+    catch (e) { res = null; }
+    if (!res || !res.ok) {
+      document.getElementById('ae-wrap').innerHTML =
+        '<div class="empty-state">Could not load access events.</div>';
+      document.getElementById('ae-kpis').innerHTML = '';
+      return;
+    }
+    const data = await res.json();
+    document.getElementById('source-note').textContent =
+      SOURCE_NOTE[document.getElementById('filter-kind').value] || '';
+    rows = data.rows;
+    counts = data.counts || {};
+    page = 0;
+    renderKpis(data);
+    render();
+  }
+
+  document.getElementById('apply-btn').addEventListener('click', load);
+  document.getElementById('filter-kind').addEventListener('change', load);
+  document.getElementById('filter-outcome').addEventListener('change', load);
+  document.getElementById('filter-group').addEventListener('change', load);
+  ['filter-user', 'filter-device', 'filter-search'].forEach((id) =>
+    document.getElementById(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') load(); }));
+
+  document.getElementById('reset-btn').addEventListener('click', () => {
+    ['filter-user', 'filter-device', 'filter-search', 'filter-since', 'filter-until'].forEach((id) =>
+      document.getElementById(id).value = '');
+    document.getElementById('filter-outcome').value = '';
+    document.getElementById('filter-group').value = '';
+    document.getElementById('filter-kind').value = 'authentication';
+    load();
+  });
+
+  document.getElementById('ae-prev').addEventListener('click', () => { if (page > 0) { page--; render(); } });
+  document.getElementById('ae-next').addEventListener('click', () => { page++; render(); });
+
+  document.getElementById('export-btn').addEventListener('click', () => {
+    if (!rows.length) { AAAPlatform.toast('There is nothing to export.', 'error'); return; }
+    // Exports the FILTERED set, so what you see is what you get.
+    const q = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const csv = ['Time,Outcome,User,Device,Source IP,Command,Raw Result']
+      .concat(rows.map((r) => [r.timestamp || '', r.outcome, r.user, r.device, r.source_ip, r.command, r.result].map(q).join(',')))
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'access-events.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+  });
+
+  async function loadGroups() {
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/device-groups'); } catch (e) { return; }
+    if (!res || !res.ok) return;
+    const groups = await res.json();
+    document.getElementById('filter-group').innerHTML =
+      '<option value="">All groups</option>' +
+      groups.map((g) => '<option value="' + g.id + '">' + esc(g.name) + '</option>').join('');
+  }
+
+  loadGroups();
+  load();
+})();
+</script>
+{% endblock %}

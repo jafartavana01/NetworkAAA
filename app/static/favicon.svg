@@ -1,0 +1,35 @@
+<!--
+  NetOpsGuard favicon.
+
+  Deliberately the same shape and palette as the in-app brand mark
+  (.brand-mark in app.css): a hexagon filled with the signal green
+  gradient. The colours are hard coded rather than referencing CSS
+  custom properties, because a favicon is loaded standalone by the
+  browser, outside any stylesheet, so a var() reference would resolve
+  to nothing and render an invisible icon.
+
+  Drawn at 32x32 with a shield glyph inside the hexagon: the bare mark
+  is not recognisable at tab size, and a security platform's icon
+  should read as one at 16px.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="NetOpsGuard">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#4fd1a5"/>
+      <stop offset="100%" stop-color="#245c48"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Hexagon: the same polygon as .brand-mark's clip-path, scaled to 32. -->
+  <polygon points="16,1 31,9 31,23 16,31 1,23 1,9" fill="url(#g)"/>
+
+  <!-- Shield, in the dark panel colour so it reads against the gradient
+       at small sizes rather than relying on a light stroke. -->
+  <path d="M16 8.5 L22 11 v4.6 c0 3.6 -2.4 6.4 -6 7.4 c-3.6 -1 -6 -3.8 -6 -7.4 V11 Z"
+        fill="#0d1117" opacity="0.82"/>
+  <!-- Check inside the shield. Stroked, not filled, so it survives
+       downscaling to 16px without the interior closing up. -->
+  <path d="M13.2 15.6 l2 2 3.6 -3.9"
+        fill="none" stroke="#4fd1a5" stroke-width="1.9"
+        stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

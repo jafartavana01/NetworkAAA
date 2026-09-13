@@ -1,0 +1,428 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}Dashboard — NetOpsGuard{% endblock %}
+{% block breadcrumb %}Dashboard{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="dash-hero">
+    <div class="dash-hero-title">
+      <span class="dash-hero-icon">{{ icons.icon('shield-check', 26) }}</span>
+      <div>
+        <h1>Network Overview</h1>
+        <p class="content-sub">Real-time health, AAA activity, configuration and security posture.</p>
+      </div>
+    </div>
+    <div class="dash-hero-meta">
+      <div class="content-sub" id="dash-updated">—</div>
+      <button type="button" class="btn-secondary btn-small btn-with-icon" id="dash-refresh-btn" style="width:auto;">{{ icons.icon('activity', 14) }}Refresh</button>
+    </div>
+  </div>
+
+  <!-- Hero KPI row -->
+  <div class="dash-kpi-row" id="dash-kpis"></div>
+
+  <!-- Activity + authorization -->
+  <section class="sec-grid sec-grid-trend">
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>AAA Activity — last 24 hours</div>
+      <div class="panel-body" style="height:230px;position:relative;" id="activity-chart-wrap">
+        <canvas id="activity-chart"></canvas>
+      </div>
+    </div>
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Authorization Results</div>
+      <div class="panel-body" style="height:200px;position:relative;">
+        <canvas id="results-chart"></canvas>
+        <div class="dash-donut-center">
+          <div class="dash-donut-value" id="results-total">—</div>
+          <div class="dash-donut-label">Total Requests</div>
+        </div>
+      </div>
+      <div class="panel-body" id="results-legend" style="padding-top:0;"></div>
+    </div>
+  </section>
+
+  <!-- Live sessions + service health -->
+  <section class="sec-grid sec-grid-risk">
+    <div class="panel panel-wide">
+      <div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;">
+        <span><span class="rail rail-signal"></span>Active in the Last 5 Minutes</span>
+        <a href="/tacacs/sessions" class="content-sub" style="text-decoration:none;">View all sessions →</a>
+      </div>
+      <div class="panel-body" id="recent-activity-body"><div class="empty-state">Loading…</div></div>
+    </div>
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Service Health</div>
+      <div class="panel-body" id="service-health-body"><div class="empty-state">Loading…</div></div>
+    </div>
+  </section>
+
+  <!-- Configuration posture (NCM) + quick actions -->
+  <section class="sec-grid sec-grid-risk">
+    <div class="panel panel-wide">
+      <div class="panel-head" style="display:flex;justify-content:space-between;align-items:center;">
+        <span><span class="rail rail-dim"></span>Configuration Posture</span>
+        <a href="/ncm/overview" class="content-sub" style="text-decoration:none;">Open NCM →</a>
+      </div>
+      <div class="panel-body" id="ncm-posture-body"><div class="empty-state">Loading…</div></div>
+    </div>
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Quick Actions</div>
+      <div class="panel-body dash-actions" id="quick-actions"></div>
+    </div>
+  </section>
+
+  <div class="content-head" style="margin-top:24px;">
+    <h2>System — Core Information</h2>
+    <p class="content-sub">Exact upstream commit, build profile, and enabled features recorded at install time.</p>
+  </div>
+  <div class="panel panel-wide">
+    <div class="panel-body mono" id="build-info-body"><div class="empty-state">Loading…</div></div>
+  </div>
+</main>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_SERVER = '{{ icons.icon("server", 18) }}';
+  const ICON_ACTIVITY = '{{ icons.icon("activity", 18) }}';
+  const ICON_USERS = '{{ icons.icon("users", 18) }}';
+  const ICON_SHIELD = '{{ icons.icon("shield-check", 18) }}';
+  const ICON_DB = '{{ icons.icon("database", 18) }}';
+  const ICON_PLUS = '{{ icons.icon("plus", 16) }}';
+  const ICON_SEARCH = '{{ icons.icon("search", 16) }}';
+  const ICON_TERMINAL = '{{ icons.icon("terminal", 16) }}';
+  const ICON_CLIPBOARD = '{{ icons.icon("clipboard-list", 16) }}';
+
+  const esc = AAAPlatform.escapeHtml;
+  const cssVar = AAAPlatform.cssVar;
+
+  function ensureChartJsLoaded() {
+    // On-demand load, NOT a <script src> tag: spa.js only re-executes
+    // inline scripts on navigation, so an external tag would work on a
+    // hard refresh and silently never fire when navigated to.
+    return new Promise((resolve, reject) => {
+      if (window.Chart) { resolve(); return; }
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js';
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('chart library unavailable'));
+      document.head.appendChild(s);
+    });
+  }
+
+  function heroCard({ icon, label, value, sub, state, href }) {
+    const inner =
+      '<div class="dash-kpi-head"><span class="dash-kpi-icon">' + icon + '</span>' +
+      '<span class="dash-kpi-label">' + esc(label) + '</span></div>' +
+      '<div class="dash-kpi-value">' + esc(value) + '</div>' +
+      '<div class="dash-kpi-sub">' + esc(sub || '') + '</div>';
+    return href
+      ? '<a href="' + href + '" class="dash-kpi ' + (state || '') + '">' + inner + '</a>'
+      : '<div class="dash-kpi ' + (state || '') + '">' + inner + '</div>';
+  }
+
+  // ---------------------------------------------------------------- health
+  async function loadHealth() {
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/tacacs-accounting/health?hours=24'); } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      document.getElementById('dash-kpis').innerHTML =
+        '<div class="empty-state">Could not load AAA activity.</div>';
+      return null;
+    }
+    return res.json();
+  }
+
+  async function loadActiveCount() {
+    try {
+      const res = await AAAPlatform.authedFetch('/api/tacacs-accounting/sessions?active_only=true&limit=2000');
+      if (!res.ok) return null;
+      const data = await res.json();
+      return Array.isArray(data.sessions) ? data.sessions.length : null;
+    } catch (e) { return null; }
+  }
+
+  async function loadNcm() {
+    // NCM may be unreachable for an admin without ncm:view -- that is a
+    // permission outcome, not an error, so the panel says so rather
+    // than showing a failure.
+    try {
+      const res = await AAAPlatform.authedFetch('/api/ncm/overview');
+      if (res.status === 403) return { forbidden: true };
+      if (!res.ok) return null;
+      return res.json();
+    } catch (e) { return null; }
+  }
+
+  function renderKpis(health, activeSessions, ncm) {
+    const authTotal = health ? health.permit_count + health.non_permit_count : 0;
+    const successRate = authTotal > 0 ? Math.round((health.permit_count / authTotal) * 1000) / 10 : null;
+    const cards = [
+      heroCard({ icon: ICON_SERVER, label: 'Devices Seen', value: health ? health.distinct_devices : '—',
+                 sub: 'in the current log tail', href: '/tacacs/devices' }),
+      heroCard({ icon: ICON_USERS, label: 'Users Seen', value: health ? health.distinct_users : '—',
+                 sub: 'in the current log tail', href: '/tacacs/users' }),
+      heroCard({ icon: ICON_ACTIVITY, label: 'Active Sessions', value: activeSessions != null ? activeSessions : '—',
+                 sub: 'right now', state: activeSessions ? 'is-signal' : '', href: '/tacacs/sessions' }),
+      heroCard({ icon: ICON_SHIELD, label: 'Authorization Success',
+                 value: successRate != null ? successRate + '%' : '—',
+                 sub: authTotal > 0 ? authTotal.toLocaleString() + ' requests' : 'no authorization records',
+                 state: successRate == null ? '' : (successRate >= 85 ? 'is-signal' : (successRate >= 60 ? 'is-amber' : 'is-red')),
+                 href: '/tacacs/aaa-health' }),
+    ];
+    if (ncm && !ncm.forbidden) {
+      cards.push(heroCard({
+        icon: ICON_DB, label: 'Config Backups', value: ncm.devices_with_recent_backup + ' / ' + ncm.total_devices,
+        sub: ncm.devices_never_backed_up + ' never backed up',
+        state: ncm.devices_with_failed_backup ? 'is-red'
+             : (ncm.devices_never_backed_up ? 'is-amber' : 'is-signal'),
+        href: '/ncm/overview',
+      }));
+    }
+    document.getElementById('dash-kpis').innerHTML = cards.join('');
+  }
+
+  async function renderActivityChart(health) {
+    const wrap = document.getElementById('activity-chart-wrap');
+    const points = (health && health.hourly_activity) || [];
+    if (!points.length) {
+      wrap.innerHTML = '<div class="empty-state">No accounting activity recorded in the last 24 hours.</div>';
+      return;
+    }
+    try { await ensureChartJsLoaded(); } catch (e) {
+      wrap.innerHTML = '<div class="empty-state">Could not load the charting library.</div>';
+      return;
+    }
+    const canvas = document.getElementById('activity-chart');
+    if (!canvas) return;
+    const existing = window.Chart.getChart(canvas);
+    if (existing) existing.destroy();
+    const signal = cssVar('--signal') || '#4fd1a5';
+    new window.Chart(canvas, {
+      type: 'line',
+      data: {
+        // The API returns {hour: <ISO timestamp>, count: n} -- verified
+        // against compute_hourly_activity, not assumed. Formatted to a
+        // local hour here so the axis is readable.
+        labels: points.map((p) => {
+          const d = new Date(p.hour);
+          return isNaN(d) ? String(p.hour) : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }),
+        datasets: [{
+          label: 'Events', data: points.map((p) => p.count || 0),
+          borderColor: signal, backgroundColor: 'rgba(79,209,165,0.14)',
+          fill: true, tension: 0.35, pointRadius: 0, borderWidth: 2,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: {
+          y: { beginAtZero: true, ticks: { color: cssVar('--text-dim') }, grid: { color: cssVar('--line-soft') } },
+          x: { ticks: { color: cssVar('--text-dim'), maxRotation: 0, autoSkip: true }, grid: { display: false } },
+        },
+        plugins: { legend: { display: false } },
+      },
+    });
+  }
+
+  async function renderResultsChart(health) {
+    const permit = health ? health.permit_count : 0;
+    const nonPermit = health ? health.non_permit_count : 0;
+    const total = permit + nonPermit;
+    document.getElementById('results-total').textContent = total > 0 ? total.toLocaleString() : '—';
+
+    const legend = document.getElementById('results-legend');
+    legend.innerHTML = total > 0
+      ? '<a href="/tacacs/accounting" class="sec-legend-row"><span class="sec-legend-dot" style="background:' +
+        (cssVar('--signal') || '#4fd1a5') + ';"></span><span class="sec-legend-label">Permit</span>' +
+        '<span class="sec-legend-count cell-mono">' + permit.toLocaleString() + '</span></a>' +
+        '<a href="/tacacs/accounting" class="sec-legend-row"><span class="sec-legend-dot" style="background:' +
+        (cssVar('--red') || '#e0615a') + ';"></span><span class="sec-legend-label">Non-permit</span>' +
+        '<span class="sec-legend-count cell-mono">' + nonPermit.toLocaleString() + '</span></a>'
+      // This chart reads the ACCOUNTING log, whose ${result} field is
+      // populated only on authorization events -- session start/stop
+      // records leave it empty. tac_plus-ng writes its actual
+      // permit/deny decisions to a SEPARATE authorization log, which
+      // this project serves as raw text rather than parsing (its exact
+      // file format was never independently confirmed -- see
+      // app/api/routes_tacacs_logs.py's own docstring). So an empty
+      // chart here is a real state, and the useful thing is to point
+      // at where those decisions actually are rather than leave the
+      // reader thinking nothing happened.
+      : '<div class="content-sub">No authorization results in the accounting log' +
+        (health && health.total_records_in_tail
+          ? ' \u2014 ' + health.total_records_in_tail.toLocaleString() +
+            ' records were read, but none carried a result field (session start/stop records don\u2019t carry one).'
+          : ' \u2014 no accounting records were read.') +
+        ' Permit/deny decisions go to a separate authorization log \u2014 see ' +
+        '<a href="/tacacs/diagnostics">Diagnostics</a> for its live tail, or ' +
+        '<a href="/tacacs/aaa-health">AAA Health</a> for the accounting breakdown.</div>';
+
+    try { await ensureChartJsLoaded(); } catch (e) { return; }
+    const canvas = document.getElementById('results-chart');
+    if (!canvas) return;
+    const existing = window.Chart.getChart(canvas);
+    if (existing) existing.destroy();
+    new window.Chart(canvas, {
+      type: 'doughnut',
+      data: {
+        // With no data this renders ONE neutral-grey segment labelled as
+        // such -- never a full green ring, which would read as "100%
+        // permit" when the truth is "nothing recorded".
+        labels: total > 0 ? ['Permit', 'Non-permit'] : ['No data yet'],
+        datasets: [{
+          data: total > 0 ? [permit, nonPermit] : [1],
+          backgroundColor: total > 0
+            ? [cssVar('--signal') || '#4fd1a5', cssVar('--red') || '#e0615a']
+            : [cssVar('--text-faint') || '#57616c'],
+          borderColor: 'transparent',
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '70%',
+        plugins: { legend: { display: false }, tooltip: { enabled: total > 0 } },
+      },
+    });
+  }
+
+  async function loadRecentActivity() {
+    const body = document.getElementById('recent-activity-body');
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/tacacs-accounting/recent-activity?minutes=5'); } catch (e) { res = null; }
+    if (!res || !res.ok) { body.innerHTML = '<div class="empty-state">Could not load recent activity.</div>'; return; }
+    const data = await res.json();
+    const rows = data.rows || [];
+    if (!rows.length) {
+      body.innerHTML = '<div class="empty-state">No AAA requests in the last ' + (data.minutes || 5) + ' minutes.</div>';
+      return;
+    }
+    body.innerHTML =
+      '<table class="data-table"><thead><tr><th>Device</th><th>User</th><th>Last Seen</th><th>Events</th></tr></thead><tbody>' +
+      rows.map((r) => {
+        // Field names verified against the recent-activity endpoint:
+        // device / user / last_seen (ISO) / event_count.
+        const seen = r.last_seen ? new Date(r.last_seen) : null;
+        const seenText = seen && !isNaN(seen) ? seen.toLocaleTimeString() : '—';
+        return '<tr><td class="cell-mono">' + esc(r.device) + '</td>' +
+          '<td>' + esc(r.user) + '</td>' +
+          '<td class="content-sub">' + seenText + '</td>' +
+          '<td class="cell-mono">' + (r.event_count != null ? r.event_count : '—') + '</td></tr>';
+      }).join('') +
+      '</tbody></table>';
+  }
+
+  async function loadServiceHealth() {
+    const body = document.getElementById('service-health-body');
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/system/status'); } catch (e) { res = null; }
+    if (!res || !res.ok) { body.innerHTML = '<div class="empty-state">Could not reach the management API.</div>'; return; }
+    const data = await res.json();
+    const services = data.services || {};
+    const entries = Object.entries(services);
+    // Verified against /api/system/status: `database` is a plain string
+    // ("connected" or "error: ..."), and each service carries
+    // `active_state` (systemd's own value), not a boolean.
+    const dbOk = data.database === 'connected';
+
+    body.innerHTML =
+      '<div class="dash-health">' +
+      entries.map(([name, info]) => {
+        const active = info && info.active_state === 'active';
+        const stateText = info && info.error ? 'unavailable' : ((info && info.active_state) || 'unknown');
+        return '<div class="dash-health-row">' +
+          '<span class="dash-health-dot ' + (active ? 'is-signal' : 'is-red') + '"></span>' +
+          '<span class="dash-health-name">' + esc(name) + '</span>' +
+          '<span class="dash-health-state ' + (active ? 'is-signal' : 'is-red') + '">' +
+          esc(stateText) + '</span></div>';
+      }).join('') +
+      '<div class="dash-health-row">' +
+      '<span class="dash-health-dot ' + (dbOk ? 'is-signal' : 'is-red') + '"></span>' +
+      '<span class="dash-health-name">database</span>' +
+      '<span class="dash-health-state ' + (dbOk ? 'is-signal' : 'is-red') + '">' +
+      (dbOk ? 'connected' : 'unavailable') + '</span></div>' +
+      '</div>';
+
+    renderBuildInfo(data.build_info, data.os);
+  }
+
+  function renderBuildInfo(buildInfo, os) {
+    const body = document.getElementById('build-info-body');
+    const info = buildInfo || {};
+    const rows = Object.entries(info);
+    if (os) rows.push(['operating system', os]);
+    if (!rows.length) {
+      body.innerHTML = '<div class="empty-state">No build information recorded.</div>';
+      return;
+    }
+    body.innerHTML = rows.map(([k, v]) =>
+      '<div class="readout"><span class="readout-k">' + esc(k.replace(/_/g, ' ')) + '</span>' +
+      '<span class="readout-v">' + esc(v == null || v === '' ? '—' : v) + '</span></div>').join('');
+  }
+
+  function renderNcmPosture(ncm) {
+    const body = document.getElementById('ncm-posture-body');
+    if (!ncm) { body.innerHTML = '<div class="empty-state">Could not load configuration posture.</div>'; return; }
+    if (ncm.forbidden) {
+      body.innerHTML = '<div class="empty-state">Your role doesn\u2019t have permission to view Configuration Management.</div>';
+      return;
+    }
+    if (!ncm.total_devices) {
+      body.innerHTML = '<div class="empty-state">No devices are being managed yet.</div>';
+      return;
+    }
+    const pct = (n) => Math.round((n / ncm.total_devices) * 100);
+    body.innerHTML =
+      AAAPlatform.barRow('Backed up recently', pct(ncm.devices_with_recent_backup),
+        ncm.devices_with_recent_backup + '/' + ncm.total_devices, cssVar('--signal')) +
+      AAAPlatform.barRow('Never backed up', pct(ncm.devices_never_backed_up),
+        String(ncm.devices_never_backed_up), cssVar('--amber')) +
+      AAAPlatform.barRow('Last backup failed', pct(ncm.devices_with_failed_backup),
+        String(ncm.devices_with_failed_backup), cssVar('--red')) +
+      '<div class="content-sub" style="margin-top:10px;">' +
+      ncm.total_configurations + ' stored versions · ' + ncm.configurations_changed_recently +
+      ' changed in the last 48 hours</div>' +
+      (ncm.recent_changes.length
+        ? '<div style="margin-top:12px;">' + ncm.recent_changes.slice(0, 4).map((c) =>
+            '<div class="readout"><span class="readout-k">' + esc(c.device_name) + '</span>' +
+            '<span class="readout-v cell-mono">#' + c.version_number + ' · ' + esc(c.source) + '</span></div>').join('') +
+          '</div>'
+        : '');
+  }
+
+  function renderQuickActions() {
+    // Only real destinations -- every one of these routes exists.
+    const action = (icon, title, sub, href) =>
+      '<a href="' + href + '" class="dash-action">' +
+      '<span class="dash-action-icon">' + icon + '</span>' +
+      '<span><span class="dash-action-title">' + esc(title) + '</span>' +
+      '<span class="dash-action-sub">' + esc(sub) + '</span></span></a>';
+    document.getElementById('quick-actions').innerHTML = [
+      action(ICON_PLUS, 'Add Device', 'Register a new network device', '/tacacs/devices'),
+      action(ICON_SHIELD, 'Run Security Audit', 'Check device security posture', '/security/overview'),
+      action(ICON_DB, 'Backup Configurations', 'Archive device configurations', '/ncm/overview'),
+      action(ICON_TERMINAL, 'Run Command', 'Execute commands on devices', '/network-ops/jobs'),
+      action(ICON_SEARCH, 'Scan Network', 'Discover and provision devices', '/tacacs/devices'),
+      action(ICON_CLIPBOARD, 'Manage Policies', 'Authorization policies', '/tacacs/policies'),
+    ].join('');
+  }
+
+  async function loadAll() {
+    document.getElementById('dash-updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
+    const [health, activeSessions, ncm] = await Promise.all([loadHealth(), loadActiveCount(), loadNcm()]);
+    renderKpis(health, activeSessions, ncm);
+    renderNcmPosture(ncm);
+    renderQuickActions();
+    await renderActivityChart(health);
+    await renderResultsChart(health);
+    loadRecentActivity();
+    loadServiceHealth();
+  }
+
+  document.getElementById('dash-refresh-btn').addEventListener('click', loadAll);
+  loadAll();
+})();
+</script>
+{% endblock %}

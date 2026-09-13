@@ -1,0 +1,358 @@
+{% extends "app_shell.html" %}
+{% import "partials/icons.html" as icons %}
+{% block title %}License — NetOpsGuard{% endblock %}
+{% block breadcrumb %}System / License{% endblock %}
+
+{% block view_content %}
+<main class="content">
+  <div class="dash-hero">
+    <div class="dash-hero-title">
+      <span class="dash-hero-icon">{{ icons.icon('shield', 26) }}</span>
+      <div>
+        <h1>License &amp; Subscription</h1>
+        <p class="content-sub">Your edition, what it includes, and how much of it is in use.</p>
+      </div>
+    </div>
+    <div class="dash-hero-meta">
+      <button type="button" class="btn-secondary btn-with-icon" id="request-btn" style="width:auto;">{{ icons.icon('database', 16) }}Generate Request</button>
+      <button type="button" class="btn-primary btn-with-icon" id="import-btn" style="width:auto;">{{ icons.icon('plus', 16) }}Import License</button>
+    </div>
+  </div>
+
+  <div id="lic-banner"></div>
+  <div class="status-card-grid" id="lic-kpis" style="margin-bottom:16px;"></div>
+
+  <section class="sec-grid sec-grid-risk">
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>License</div>
+      <div class="panel-body" id="lic-detail"><div class="empty-state">Loading…</div></div>
+    </div>
+    <div class="panel panel-wide">
+      <div class="panel-head"><span class="rail rail-dim"></span>Included features</div>
+      <div class="panel-body" id="lic-features"></div>
+    </div>
+  </section>
+
+  <div class="content-head" style="margin-top:24px;"><h2>Editions</h2>
+    <p class="content-sub">What each edition includes. Contact sales to move up a tier.</p>
+  </div>
+  <div id="lic-editions"></div>
+</main>
+
+<div class="modal-backdrop" id="req-modal-backdrop" hidden>
+  <div class="modal modal-md">
+    <button type="button" class="modal-close-btn" id="req-modal-close" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2>Generate License Request</h2>
+    <p class="content-sub" style="margin-bottom:14px;">
+      Creates a file identifying this server, which your vendor uses to issue a license tied to it. The file contains hashes only — no hardware identifiers, addresses or disk details are disclosed.
+    </p>
+    <form id="req-form">
+      <div class="field-row">
+        <label class="field">
+          <span class="field-label">Your email</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('user', 14) }}</span>
+            <input type="email" id="req-contact" placeholder="ops@example.com">
+          </div>
+        </label>
+        <label class="field">
+          <span class="field-label">Reference (optional)</span>
+          <div class="field-icon-wrap">
+            <span class="field-icon">{{ icons.icon('clipboard-list', 14) }}</span>
+            <input type="text" id="req-note" placeholder="Site or order number" maxlength="200">
+          </div>
+        </label>
+      </div>
+      <div id="req-warning" class="form-error" role="alert" hidden></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="req-cancel">Cancel</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Download Request</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="lic-modal-backdrop" hidden>
+  <div class="modal modal-md">
+    <button type="button" class="modal-close-btn" id="lic-modal-close" aria-label="Close">{{ icons.icon('x', 18) }}</button>
+    <h2>Import License</h2>
+    <form id="lic-form">
+      <label class="field">
+        <span class="field-label">License file contents</span>
+        <textarea id="lic-text" rows="6" required spellcheck="false"
+          style="font-family:var(--font-mono);font-size:11px;"
+          placeholder="Paste the contents of your .license file"></textarea>
+      </label>
+      <div class="field-hint" style="margin-top:-8px;">
+        The signature is checked before anything is stored, so an invalid file cannot replace a working license. No internet connection is needed — licenses verify entirely offline.
+      </div>
+      <div id="lic-error" class="form-error" role="alert" hidden></div>
+      <div class="modal-actions">
+        <button type="button" class="btn-ghost" id="lic-cancel">Cancel</button>
+        <button type="submit" class="btn-primary btn-with-icon" style="width:auto;">{{ icons.icon('check', 16) }}Verify &amp; Import</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block view_scripts %}
+<script>
+(() => {
+  const ICON_SHIELD = '{{ icons.icon("shield", 16) }}';
+  const ICON_SERVER = '{{ icons.icon("server", 16) }}';
+  const ICON_USERS = '{{ icons.icon("users", 16) }}';
+  const ICON_HISTORY = '{{ icons.icon("history", 16) }}';
+  const esc = AAAPlatform.escapeHtml;
+
+  let state = null;
+
+  function limitText(used, limit) {
+    return limit === null ? used + ' / unlimited' : used + ' / ' + limit;
+  }
+
+  function render(d) {
+    state = d;
+
+    // --- banners: only shown when there is something to act on.
+    const banners = [];
+    if (d.problem) {
+      banners.push('<div class="panel panel-wide" style="margin-bottom:12px;border-color:var(--red);">' +
+        '<div class="panel-body" style="font-size:12.5px;color:var(--red);">' +
+        'The installed license is not usable: ' + esc(d.problem) +
+        ' The platform is running as ' + esc(d.edition_name) + '. Existing data is untouched.' +
+        '</div></div>');
+    }
+    if (d.development_key) {
+      banners.push('<div class="panel panel-wide" style="margin-bottom:12px;border-color:var(--amber);">' +
+        '<div class="panel-body" style="font-size:12.5px;color:var(--amber);">' +
+        'This license was signed with the development key. It is valid on this build but not on a production release.' +
+        '</div></div>');
+    }
+    if (d.at_device_limit && d.device_limit_message) {
+      banners.push('<div class="panel panel-wide" style="margin-bottom:12px;border-color:var(--amber);">' +
+        '<div class="panel-body" style="font-size:12.5px;color:var(--amber);">' +
+        esc(d.device_limit_message) + '</div></div>');
+    }
+    // A single-administrator installation cannot use any workflow that
+    // requires a second person. Stated here rather than left to be
+    // discovered at the moment someone tries to approve their own
+    // change and is refused.
+    if (!d.licensed) {
+      banners.push('<div class="panel panel-wide" style="margin-bottom:12px;">' +
+        '<div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">' +
+        '<strong>Need more devices?</strong> Use <strong>Generate Request</strong> above and send the ' +
+        'downloaded file to your vendor \u2014 it contains hashes only, no hardware identifiers. ' +
+        'This machine\'s id is <span class="cell-mono">' + esc(d.machine_short_id) + '</span>.' +
+        '</div></div>');
+    }
+    if (d.admin_limit === 1) {
+      banners.push('<div class="panel panel-wide" style="margin-bottom:12px;">' +
+        '<div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">' +
+        '<strong>One administrator.</strong> Configuration Management is fully available ' +
+        '\u2014 backup, archive, diff, drift detection and baselines all work. ' +
+        'Change Control deliberately refuses self-approval, so its propose \u2192 approve \u2192 deploy ' +
+        'workflow needs a second administrator. That follows from the administrator limit, ' +
+        'not from a separate restriction.' +
+        '</div></div>');
+    }
+    if (d.grandfathered_device_count > (d.device_limit || 0)) {
+      banners.push('<div class="panel panel-wide" style="margin-bottom:12px;">' +
+        '<div class="panel-body" style="font-size:12.5px;color:var(--text-dim);">' +
+        'This installation had ' + d.grandfathered_device_count + ' devices before the current limit applied. ' +
+        'They keep working and nothing has been removed — only adding new devices is blocked.' +
+        '</div></div>');
+    }
+    document.getElementById('lic-banner').innerHTML = banners.join('');
+
+    // --- KPIs
+    const devicesOver = d.device_limit !== null && d.device_count >= d.device_limit;
+    const adminsOver = d.admin_limit !== null && d.admin_count >= d.admin_limit;
+    document.getElementById('lic-kpis').innerHTML = [
+      AAAPlatform.kpiCard({ icon: ICON_SHIELD, label: 'Edition', value: d.edition_name,
+                            state: d.licensed ? 'is-signal' : '',
+                            sub: d.licensed ? 'licensed' : 'free forever' }),
+      AAAPlatform.kpiCard({ icon: ICON_SERVER, label: 'Devices',
+                            value: limitText(d.device_count, d.device_limit),
+                            state: devicesOver ? 'is-amber' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_USERS, label: 'Administrators',
+                            value: limitText(d.admin_count, d.admin_limit),
+                            state: adminsOver ? 'is-amber' : '' }),
+      AAAPlatform.kpiCard({ icon: ICON_HISTORY, label: 'Expires',
+                            value: d.expires_at ? new Date(d.expires_at).toLocaleDateString() : 'Never',
+                            state: (d.days_remaining !== null && d.days_remaining < 30) ? 'is-amber' : '',
+                            sub: d.days_remaining !== null ? d.days_remaining + ' days remaining' : null }),
+    ].join('');
+
+    // --- detail
+    const row = (k, v) => '<div class="readout"><span class="readout-k">' + k +
+      '</span><span class="readout-v">' + v + '</span></div>';
+    document.getElementById('lic-detail').innerHTML =
+      row('edition', esc(d.edition_name)) +
+      row('status', d.licensed ? 'Licensed' : 'Community (no license installed)') +
+      (d.customer ? row('licensed to', esc(d.customer)) : '') +
+      (d.license_id ? row('license id', '<span class="cell-mono">' + esc(d.license_id) + '</span>') : '') +
+      (d.fingerprint ? row('fingerprint', '<span class="cell-mono">' + esc(d.fingerprint) + '</span>') : '') +
+      // Always shown, licensed or not: this is the value a customer
+      // quotes when requesting a licence, so it must be findable
+      // before they have one.
+      row('machine id', '<span class="cell-mono">' + esc(d.machine_short_id) + '</span>') +
+      row('licence type', d.machine_bound
+        ? 'Bound to this machine'
+        : (d.licensed ? 'Portable (any machine)' : '\u2014')) +
+      row('devices', limitText(d.device_count, d.device_limit)) +
+      row('administrators', limitText(d.admin_count, d.admin_limit)) +
+      '<p class="content-sub" style="margin-top:10px;">' + esc(d.edition_description) + '</p>' +
+      (d.licensed
+        ? '<button type="button" class="btn-danger btn-small" id="remove-btn" style="width:auto;margin-top:10px;">Remove license</button>'
+        : '');
+
+    // --- features: every feature listed, included or not, so the
+    // difference between editions is visible rather than implied.
+    document.getElementById('lic-features').innerHTML =
+      d.features.map((f) =>
+        '<div class="bar-row" style="align-items:flex-start;">' +
+        '<span class="cdiff-type is-' + (f.included ? 'added' : 'removed') + '" style="min-width:92px;">' +
+        '<span class="cdiff-type-mark">' + (f.included ? '\u2713' : '\u2715') + '</span>' +
+        (f.included ? 'Included' : 'Not in plan') + '</span>' +
+        '<span style="flex:1;"><span style="color:var(--text-primary);font-size:13px;">' + esc(f.name) + '</span>' +
+        '<div class="content-sub">' + esc(f.description) + '</div></span></div>').join('');
+
+    // --- editions
+    document.getElementById('lic-editions').innerHTML =
+      '<table class="data-table"><thead><tr><th>Edition</th><th>Devices</th><th>Admins</th><th>Includes</th><th></th></tr></thead><tbody>' +
+      d.editions_available.map((e) =>
+        '<tr><td>' + esc(e.name) +
+        '<div class="content-sub">' + esc(e.description) + '</div></td>' +
+        '<td class="cell-mono">' + (e.device_limit === null ? 'unlimited' : e.device_limit) + '</td>' +
+        '<td class="cell-mono">' + (e.admin_limit === null ? 'unlimited' : e.admin_limit) + '</td>' +
+        '<td class="content-sub">' + esc(e.features.length + ' features') + '</td>' +
+        '<td>' + (e.current ? '<span class="badge sec-sev-badge is-signal">current</span>' : '') + '</td></tr>').join('') +
+      '</tbody></table>';
+
+    const removeBtn = document.getElementById('remove-btn');
+    if (removeBtn) removeBtn.addEventListener('click', removeLicense);
+  }
+
+  async function removeLicense() {
+    if (!window.confirm(
+      'Remove the license and return to Community?\n\n' +
+      'Devices, policies and history are untouched. If this installation has more devices than ' +
+      'Community allows, they keep working but no new ones can be added.')) return;
+    const res = await AAAPlatform.authedFetch('/api/license/remove', { method: 'POST' });
+    if (!res.ok) { AAAPlatform.toast('Could not remove the license.', 'error'); return; }
+    render(await res.json());
+    AAAPlatform.toast('License removed. Running as Community.');
+  }
+
+  // ---- licence request ----
+  const closeReqModal = () => { document.getElementById('req-modal-backdrop').hidden = true; };
+  document.getElementById('request-btn').addEventListener('click', () => {
+    document.getElementById('req-warning').hidden = true;
+    document.getElementById('req-modal-backdrop').hidden = false;
+  });
+  document.getElementById('req-cancel').addEventListener('click', closeReqModal);
+  document.getElementById('req-modal-close').addEventListener('click', closeReqModal);
+  document.getElementById('req-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'req-modal-backdrop') closeReqModal();
+  });
+
+  document.getElementById('req-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const warn = document.getElementById('req-warning');
+    warn.hidden = true;
+
+    const params = new URLSearchParams({
+      contact: document.getElementById('req-contact').value.trim(),
+      note: document.getElementById('req-note').value.trim(),
+    });
+
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/license/request?' + params.toString()); }
+    catch (err) { res = null; }
+    if (!res || !res.ok) {
+      warn.textContent = 'Could not generate the request file.';
+      warn.hidden = false;
+      return;
+    }
+
+    // The service account cannot read the DMI UUID, so a request made
+    // here may carry fewer components than one made with sudo. Warn
+    // BEFORE the file is sent to a vendor, not after the licence fails.
+    const components = parseInt(res.headers.get('X-Components-Available') || '0', 10);
+    const text = await res.text();
+
+    const blob = new Blob([text], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'netopsguard-' + (state ? state.machine_short_id : 'request') + '.request';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+
+    if (components < 2) {
+      warn.innerHTML = 'Downloaded, but only ' + components + ' identifying detail could be read here. ' +
+        'A machine-bound license needs at least two. Run ' +
+        '<span class="cell-mono">sudo python3 collect_fingerprint.py</span> on the server instead, ' +
+        'so the system UUID is included.';
+      warn.hidden = false;
+      return;
+    }
+
+    closeReqModal();
+    AAAPlatform.toast('Request downloaded — send it to your vendor.');
+  });
+
+  document.getElementById('import-btn').addEventListener('click', () => {
+    document.getElementById('lic-error').hidden = true;
+    document.getElementById('lic-text').value = '';
+    document.getElementById('lic-modal-backdrop').hidden = false;
+  });
+  const closeModal = () => { document.getElementById('lic-modal-backdrop').hidden = true; };
+  document.getElementById('lic-cancel').addEventListener('click', closeModal);
+  document.getElementById('lic-modal-close').addEventListener('click', closeModal);
+  document.getElementById('lic-modal-backdrop').addEventListener('click', (e) => {
+    if (e.target.id === 'lic-modal-backdrop') closeModal();
+  });
+
+  document.getElementById('lic-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const box = document.getElementById('lic-error');
+    box.hidden = true;
+    const res = await AAAPlatform.authedFetch('/api/license/import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ license_text: document.getElementById('lic-text').value.trim() }),
+    });
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      // The API's own reason is shown: it explains WHICH check failed
+      // (signature, product, format, expiry), which is what an operator
+      // needs to know what to do next.
+      box.textContent = (b.detail && typeof b.detail === 'string') ? b.detail : 'The license could not be imported.';
+      box.hidden = false;
+      return;
+    }
+    closeModal();
+    const data = await res.json();
+    render(data);
+    AAAPlatform.toast('License imported — now running as ' + data.edition_name + '.');
+  });
+
+  async function load() {
+    let res;
+    try { res = await AAAPlatform.authedFetch('/api/license'); } catch (e) { res = null; }
+    if (!res || !res.ok) {
+      document.getElementById('lic-detail').innerHTML =
+        '<div class="empty-state">' + (res && res.status === 403
+          ? 'License administration is restricted to superadministrators.'
+          : 'Could not load license status.') + '</div>';
+      return;
+    }
+    render(await res.json());
+  }
+
+  load();
+})();
+</script>
+{% endblock %}
